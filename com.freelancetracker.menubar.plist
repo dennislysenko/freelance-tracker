@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.freelancetracker.menubar</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/dennis/dev/freelance-workflow/venv/bin/python</string>
+        <string>/Users/dennis/dev/freelance-workflow/menubar_app.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/dennis/Library/Logs/freelancetracker-error.log</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/dennis/Library/Logs/freelancetracker-output.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/dennis/dev/freelance-workflow</string>
+</dict>
+</plist>
