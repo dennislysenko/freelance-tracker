@@ -2,6 +2,27 @@
 
 Quick reference for AI agents working on this project.
 
+## CRITICAL: API Call Minimization
+
+**Toggl API has rate limits. Minimizing API calls is CRITICAL.**
+
+Current API usage per operation:
+- **Refresh Now**: 0-2 calls (0 if cached, 1-2 if stale)
+  - Projects: 1 call (cached for 24h)
+  - Time entries: 1 call (cached for 30min)
+- **Refresh Projects**: 1 call (forces project refresh)
+
+**When adding new features:**
+1. ALWAYS check if data can be cached
+2. UPDATE the API call counts in menu items
+3. UPDATE this documentation with new call patterns
+4. Use the audit log to verify call counts: `~/Library/Logs/toggl-api-audit.log`
+
+**Cache TTLs:**
+- Projects: 24 hours (`cache_ttl_projects`)
+- Today's entries: 30 minutes (`cache_ttl_today`)
+- Historical entries: Permanent (immutable)
+
 ## Common Commands
 
 ### Service Management

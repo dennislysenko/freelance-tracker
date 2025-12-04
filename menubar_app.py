@@ -2,8 +2,12 @@
 """Freelance Tracker - Menu Bar App"""
 
 import rumps
+import subprocess
+import os
 from datetime import datetime
-from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings
+from pathlib import Path
+from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings, is_rate_limited, force_refresh_entries
+from preferences import load_preferences
 
 
 class FreelanceTrackerApp(rumps.App):
@@ -16,9 +20,56 @@ class FreelanceTrackerApp(rumps.App):
         self.last_update = None
         self.update_display()
 
+    def calculate_api_calls(self, force_refresh=False):
+        """
+        Calculate how many API calls will be made.
+
+        Args:
+            force_refresh: If True, calculate for manual refresh (always fetches entries, never projects)
+                          If False, calculate for startup (uses cache if fresh for both)
+        """
+        from preferences import CACHE_DIR, load_preferences
+
+        calls = 0
+        now = datetime.now().timestamp()
+
+        # Check projects cache (only for startup, never for manual refresh)
+        if not force_refresh:
+            projects_cache = CACHE_DIR / "projects.json"
+            if projects_cache.exists():
+                prefs = load_preferences()
+                cache_ttl = prefs.get('cache_ttl_projects', 86400)
+                cache_age = now - projects_cache.stat().st_mtime
+                if cache_age >= cache_ttl:
+                    calls += 1
+            else:
+                calls += 1
+
+        # Check today's entries cache
+        if force_refresh:
+            # Manual refresh: always fetch entries
+            calls += 1
+        else:
+            # Startup: only fetch if cache is stale
+            today = datetime.now().date()
+            today_cache = CACHE_DIR / f"daily_{today.isoformat()}.json"
+            if today_cache.exists():
+                prefs = load_preferences()
+                cache_ttl = prefs.get('cache_ttl_today', 1800)
+                cache_age = now - today_cache.stat().st_mtime
+                if cache_age >= cache_ttl:
+                    calls += 1
+            else:
+                calls += 1
+
+        return calls
+
     def update_display(self):
         """Update the menu bar and dropdown with current data."""
         try:
+            # Calculate expected API calls for next manual refresh
+            next_refresh_calls = self.calculate_api_calls(force_refresh=True)
+
             # Get real data from Toggl
             daily = get_daily_earnings()
             weekly = get_weekly_earnings()
@@ -45,13 +96,57 @@ class FreelanceTrackerApp(rumps.App):
             else:
                 menu_items.append("  No billable time logged today")
 
-            # Add weekly/monthly summaries
+            # Add weekly summary
             menu_items.extend([
                 rumps.separator,
                 f"📊 This Week: ${weekly['total']:.2f}",
-                f"📊 This Month: ${monthly['total']:.2f}",
                 rumps.separator,
             ])
+
+            # Add monthly summary with breakdown
+            menu_items.append(f"📊 THIS MONTH - ${monthly['total']:.2f}")
+            menu_items.append(rumps.separator)
+
+            # Load preferences for targets
+            prefs = load_preferences()
+            project_targets = prefs.get('project_targets', {})
+
+            # Show monthly projects (only with non-zero billable hours)
+            if monthly['projects']:
+                menu_items.append("   Monthly Hours by Project:")
+                for project in monthly['projects']:
+                    if project['hours'] > 0:
+                        target = project_targets.get(project['name'])
+                        if target:
+                            percentage = (project['hours'] / target) * 100
+                            menu_items.append(
+                                f"     {project['name']}: {project['hours']:.1f}h / {target}h ({percentage:.0f}%)"
+                            )
+                        else:
+                            menu_items.append(
+                                f"     {project['name']}: {project['hours']:.1f}h (${project['earnings']:.0f})"
+                            )
+                menu_items.append(rumps.separator)
+
+            # Add month projection
+            projection = monthly.get('projection', {})
+            if projection and projection.get('worked_days', 0) > 0:
+                projected = projection['projected_earnings']
+                worked = projection['worked_days']
+                workable = projection['workable_days']
+                vacation = projection['vacation_days']
+                daily_avg = projection['daily_average']
+
+                menu_items.append(f"📈 Month Projection: ${projected:.0f}")
+                menu_items.append(f"   Worked {worked}/{workable} workable days")
+                menu_items.append(f"   ({vacation} vacation days excluded)")
+                menu_items.append(f"   Daily average: ${daily_avg:.0f}")
+                menu_items.append(rumps.separator)
+
+            # Add rate limit warning if applicable
+            if is_rate_limited():
+                menu_items.append("⚠️  Rate Limited (using cached data)")
+                menu_items.append(rumps.separator)
 
             # Add last update time
             if self.last_update:
@@ -65,7 +160,10 @@ class FreelanceTrackerApp(rumps.App):
                 self.menu.add(item)
 
             # Add action buttons
-            self.menu.add(rumps.MenuItem("⟳ Refresh Now", callback=self.refresh))
+            self.menu.add(rumps.MenuItem(f"🔄 Refresh Now ({next_refresh_calls} API calls)", callback=self.refresh))
+            self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
+            self.menu.add(rumps.separator)
+            self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -82,7 +180,11 @@ class FreelanceTrackerApp(rumps.App):
                 self.menu.add(f"Last successful update: {time_str}")
                 self.menu.add(rumps.separator)
 
-            self.menu.add(rumps.MenuItem("⟳ Retry", callback=self.refresh))
+            retry_calls = self.calculate_api_calls(force_refresh=True)
+            self.menu.add(rumps.MenuItem(f"🔄 Retry ({retry_calls} API calls)", callback=self.refresh))
+            self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
+            self.menu.add(rumps.separator)
+            self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -92,14 +194,18 @@ class FreelanceTrackerApp(rumps.App):
         print(f"Auto-refreshing at {datetime.now().strftime('%I:%M %p')}")
         self.update_display()
 
-    @rumps.clicked("⟳ Refresh Now")
     def refresh(self, _):
-        """Manual refresh."""
+        """Manual hard refresh - always fetches fresh entries."""
         rumps.notification(
             title="Freelance Tracker",
             subtitle="",
             message="Refreshing earnings data..."
         )
+
+        # Force refresh time entries (bypasses cache)
+        force_refresh_entries()
+
+        # Update display with refreshed data
         self.update_display()
 
         # Show completion notification
@@ -108,6 +214,61 @@ class FreelanceTrackerApp(rumps.App):
                 title="Freelance Tracker",
                 subtitle="",
                 message=f"Updated at {self.last_update.strftime('%I:%M %p')}"
+            )
+
+    @rumps.clicked("🔄 Refresh Projects (1 API call)")
+    def refresh_projects(self, _):
+        """Force refresh projects from Toggl API."""
+        from toggl_data import get_projects
+        cache_file = Path.home() / "Library" / "Caches" / "TogglMenuBar" / "projects.json"
+
+        # Delete the cache to force refresh
+        if cache_file.exists():
+            cache_file.unlink()
+
+        rumps.notification(
+            title="Freelance Tracker",
+            subtitle="",
+            message="Refreshing projects..."
+        )
+
+        try:
+            # This will fetch fresh data
+            get_projects()
+            rumps.notification(
+                title="Freelance Tracker",
+                subtitle="",
+                message="Projects refreshed successfully"
+            )
+        except Exception as e:
+            rumps.notification(
+                title="Freelance Tracker",
+                subtitle="Error",
+                message=f"Failed to refresh projects: {str(e)}"
+            )
+
+    @rumps.clicked("📋 View API Audit Log")
+    def view_audit_log(self, _):
+        """Open the API audit log in a new terminal window."""
+        log_path = Path.home() / "Library" / "Logs" / "toggl-api-audit.log"
+
+        # Command to view the log with tail -f (live updates)
+        terminal_command = f"tail -f {log_path}"
+
+        applescript = f'''
+        tell application "Terminal"
+            activate
+            do script "{terminal_command}"
+        end tell
+        '''
+
+        try:
+            subprocess.run(["osascript", "-e", applescript], check=True)
+        except subprocess.CalledProcessError as e:
+            rumps.notification(
+                title="Freelance Tracker",
+                subtitle="Error",
+                message=f"Failed to open audit log: {str(e)}"
             )
 
 
