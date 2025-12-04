@@ -126,20 +126,59 @@ Click to see:
 │   Client C: $25 (0.25h)             │
 │                                     │
 │ 📊 This Week: $1,200.00             │
-│ 📊 This Month: $4,800.00            │
+│ ─────────────────────────────────── │
+│ 📊 THIS MONTH - $4,800.00           │
+│ ─────────────────────────────────── │
+│    Monthly Hours by Project:        │
+│      Client A: 45.2h / 80h (57%)    │
+│      Client B: 32.0h / 40h (80%)    │
+│      Client C: 8.5h ($425)          │
+│ ─────────────────────────────────── │
+│ 📈 Month Projection: $4,800         │
+│    Worked 8/16 workable days        │
+│    (4 vacation days excluded)       │
+│    Daily average: $600              │
 │ ─────────────────────────────────── │
 │ 🕐 Last updated: 04:30 PM           │
 │ ─────────────────────────────────── │
-│ ⟳ Refresh Now                       │
+│ ⟳ Refresh Now (1 API call)          │
+│ 🔄 Refresh Projects (1 API call)    │
+│ ─────────────────────────────────── │
+│ 📋 View API Audit Log               │
+│ ─────────────────────────────────── │
 │ Quit                                │
 └─────────────────────────────────────┘
 ```
+
+### Month Projection
+
+The app automatically calculates your projected monthly earnings based on:
+- **Worked days**: Days with billable time entries this month
+- **Workable days**: Business days minus vacation/PTO days (default: 4 days)
+- **Daily average**: Current earnings ÷ worked days
+- **Projection**: Daily average × workable days
+
+Example: If you earned $1,000 in 4 worked days, with 20 business days and 4 vacation days (16 workable days), your projection is $4,000.
+
+To adjust vacation days, edit preferences:
+```json
+{
+  "vacation_days_per_month": 4  // Change this to your typical PTO days
+}
+```
+
+### Reordering Menu Bar Icons
+
+To position the 💰 icon in your preferred spot:
+
+Hold `Cmd` and drag the icon left or right in the menu bar.
 
 ## Files
 
 ```
 freelance-workflow/
-├── menubar_app.py              # Main app
+├── menubar_app.py              # Main menu bar app
+├── stress_storage.py           # SQLite database layer
 ├── toggl_data.py               # Toggl API integration
 ├── toggl_earnings.py           # CLI version
 ├── preferences.py              # Settings management
@@ -168,7 +207,8 @@ Following macOS conventions:
 
 ```
 ~/Library/Application Support/TogglMenuBar/
-└── preferences.json            # User settings
+├── preferences.json            # User settings
+└── freelance_tracker.db        # SQLite database (stress events, time entries)
 
 ~/Library/Caches/TogglMenuBar/
 └── *.json                      # Cached API data
@@ -227,11 +267,30 @@ Edit `~/Library/Application Support/TogglMenuBar/preferences.json`:
   "show_hours": true,
   "menu_bar_format": "💰 ${total:.0f}",
   "cache_ttl_projects": 86400,    // 24 hours
-  "cache_ttl_today": 1800         // 30 minutes
+  "cache_ttl_today": 1800,        // 30 minutes
+  "project_targets": {            // Optional monthly hour targets
+    "Client A": 80,               // Target 80 hours/month
+    "Weather Optics": 30          // Target 30 hours/month
+  },
+  "vacation_days_per_month": 4    // PTO/vacation days to exclude from projection
 }
 ```
 
 After editing, restart: `./restart_service.sh`
+
+### Project Targets
+
+Set monthly hour targets for each project to track progress:
+
+1. Edit preferences: `nano ~/Library/Application\ Support/TogglMenuBar/preferences.json`
+2. Add `project_targets` with your project names and target hours
+3. Restart: `./restart_service.sh`
+
+The menu will now show progress like:
+```
+Client A: 45.2h / 80h (57%)
+Weather Optics: 22.5h / 30h (75%)
+```
 
 ## CLI Version
 
@@ -296,7 +355,7 @@ launchctl list | grep freelancetracker
 
 ## Credits
 
-- Built with [rumps](https://github.com/jaredks/rumps)
+- Menu bar app built with [rumps](https://github.com/jaredks/rumps)
 - Uses [Toggl Track API v9](https://engineering.toggl.com/docs/)
 
 ---

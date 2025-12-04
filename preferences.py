@@ -24,6 +24,8 @@ DEFAULT_PREFERENCES = {
     "auto_start": True,
     "cache_ttl_projects": 86400,  # 24 hours
     "cache_ttl_today": 1800,  # 30 minutes
+    "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
+    "vacation_days_per_month": 4,  # Vacation/PTO days to exclude from projection
 }
 
 
