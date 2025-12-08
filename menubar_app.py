@@ -87,14 +87,20 @@ class FreelanceTrackerApp(rumps.App):
                 rumps.separator,
             ]
 
-            # Add projects
-            if daily['projects']:
-                for project in daily['projects']:
-                    menu_items.append(
-                        f"  {project['name']}: ${project['earnings']:.0f} ({project['hours']:.1f}h)"
-                    )
+            # Add projects (show all - billable and non-billable)
+            all_daily_projects = daily.get('all_projects', daily.get('projects', []))
+            if all_daily_projects:
+                for project in all_daily_projects:
+                    if project.get('billable', True):
+                        menu_items.append(
+                            f"  {project['name']}: ${project['earnings']:.0f} ({project['hours']:.1f}h)"
+                        )
+                    else:  # Non-billable
+                        menu_items.append(
+                            f"  {project['name']}: {project['hours']:.1f}h"
+                        )
             else:
-                menu_items.append("  No billable time logged today")
+                menu_items.append("  No time logged today")
 
             # Add weekly summary
             menu_items.extend([
@@ -111,22 +117,38 @@ class FreelanceTrackerApp(rumps.App):
             prefs = load_preferences()
             project_targets = prefs.get('project_targets', {})
 
-            # Show monthly projects (only with non-zero billable hours)
-            if monthly['projects']:
-                menu_items.append("   Monthly Hours by Project:")
-                for project in monthly['projects']:
-                    if project['hours'] > 0:
-                        target = project_targets.get(project['name'])
-                        if target:
-                            percentage = (project['hours'] / target) * 100
-                            menu_items.append(
-                                f"     {project['name']}: {project['hours']:.1f}h / {target}h ({percentage:.0f}%)"
-                            )
-                        else:
-                            menu_items.append(
-                                f"     {project['name']}: {project['hours']:.1f}h (${project['earnings']:.0f})"
-                            )
-                menu_items.append(rumps.separator)
+            # Show monthly projects (billable + non-billable with targets)
+            all_monthly_projects = monthly.get('all_projects', monthly.get('projects', []))
+            if all_monthly_projects:
+                # Filter: All billable OR non-billable with targets
+                projects_to_display = []
+
+                for project in all_monthly_projects:
+                    is_billable = project.get('billable', True)
+                    has_target = project['name'] in project_targets
+
+                    if is_billable or has_target:
+                        projects_to_display.append(project)
+
+                if projects_to_display:
+                    menu_items.append("   Monthly Hours by Project:")
+                    for project in projects_to_display:
+                        if project['hours'] > 0:
+                            target = project_targets.get(project['name'])
+                            is_billable = project.get('billable', True)
+
+                            if target:
+                                # Show target progress
+                                percentage = (project['hours'] / target) * 100
+                                menu_items.append(
+                                    f"     {project['name']}: {project['hours']:.1f}h / {target}h ({percentage:.0f}%)"
+                                )
+                            elif is_billable:
+                                # Billable without target - show earnings
+                                menu_items.append(
+                                    f"     {project['name']}: {project['hours']:.1f}h (${project['earnings']:.0f})"
+                                )
+                    menu_items.append(rumps.separator)
 
             # Add month projection
             projection = monthly.get('projection', {})
