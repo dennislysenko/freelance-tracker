@@ -281,32 +281,49 @@ def calculate_period_earnings(period):
     # Calculate earnings
     total_earnings = 0
     total_hours = 0
-    projects_list = []
+    billable_projects_list = []
+    all_projects_list = []
 
     for project_id, data in project_data.items():
         project_info = projects_map.get(project_id, {})
         hours = data["duration"] / 3600
         total_hours += hours
 
+        is_billable = project_info.get("billable") and project_info.get("rate")
+
+        # Base entry for all projects
+        project_entry = {
+            "name": project_info.get("name", "Unknown Project"),
+            "hours": hours,
+            "billable": is_billable
+        }
+
+        # Add to all_projects list
+        all_projects_list.append(project_entry)
+
         # Only count billable projects with rates
-        if project_info.get("billable") and project_info.get("rate"):
+        if is_billable:
             earnings = hours * project_info["rate"]
             total_earnings += earnings
 
-            projects_list.append({
-                "name": project_info.get("name", "Unknown Project"),
-                "earnings": earnings,
-                "hours": hours,
-                "rate": project_info["rate"]
-            })
+            # Add earnings info to the project entry
+            project_entry["earnings"] = earnings
+            project_entry["rate"] = project_info["rate"]
 
-    # Sort projects by earnings (highest first)
-    projects_list.sort(key=lambda x: x["earnings"], reverse=True)
+            # Add to billable projects list
+            billable_projects_list.append(project_entry)
+
+    # Sort projects by earnings (highest first) for billable
+    billable_projects_list.sort(key=lambda x: x["earnings"], reverse=True)
+
+    # Sort all projects by hours (highest first)
+    all_projects_list.sort(key=lambda x: x["hours"], reverse=True)
 
     return {
         "total": total_earnings,
         "hours": total_hours,
-        "projects": projects_list
+        "projects": billable_projects_list,
+        "all_projects": all_projects_list
     }
 
 
