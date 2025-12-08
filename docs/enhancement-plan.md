@@ -1,8 +1,16 @@
 # Implementation Plan: Freelance Tracker Enhancements
 
 **Date:** 2025-12-05
-**Status:** Planning
-**Priority:** High (Dock Icon Fix is Critical)
+**Status:** In Progress
+**Priority:** High
+
+## ✅ COMPLETED: Phase 1 - Dock Icon Fix (2025-12-08)
+
+**Solution Used:** AppKit NSBundle LSUIElement (Solution 1)
+- Added 5 lines to `menubar_app.py:12-17`
+- Sets `LSUIElement = '1'` in bundle info dictionary at module load time
+- Successfully hides Python dock icon while preserving menu bar functionality
+- No py2app bundling required!
 
 ## Executive Summary
 
@@ -28,153 +36,6 @@ This plan addresses four critical requirements for the Freelance Tracker macOS m
 - No LSUIElement setting
 - Python script executed directly (not bundled as .app)
 - Manual restart required after preference changes
-
----
-
-## 1. CRITICAL: Remove Python Dock Icon
-
-### Problem Analysis
-Previous attempts failed because the script runs directly via Python interpreter without proper app bundle configuration. The LaunchAgent plist has `ProcessType: Interactive` but no LSUIElement setting, and rumps doesn't automatically suppress the dock icon when running as a raw Python script.
-
-### Solution 1: AppKit LSUIElement (Recommended First Try)
-**Approach:** Set LSUIElement programmatically at runtime using AppKit
-
-**Pros:**
-- Minimal changes (3-5 lines of code)
-- No build process required
-- Works with existing LaunchAgent setup
-- Fastest to implement and test
-- Can be reverted instantly
-
-**Cons:**
-- May not work reliably across macOS versions
-- Depends on PyObjC being available
-- Previous attempts may have tried this
-
-**Implementation:**
-```python
-# Add to menubar_app.py BEFORE creating FreelanceTrackerApp
-import rumps
-from AppKit import NSBundle
-
-# Hide dock icon
-bundle = NSBundle.mainBundle()
-info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-info['LSUIElement'] = '1'
-
-class FreelanceTrackerApp(rumps.App):
-    # ... existing code
-```
-
-**Verification:**
-1. User restarts service: `./restart_service.sh`
-2. User checks dock visually (MANUAL - cannot be automated)
-3. User confirms menu bar icon still works
-
----
-
-### Solution 2: py2app Bundling (Backup Solution)
-**Approach:** Bundle as proper .app with Info.plist containing LSUIElement
-
-**Pros:**
-- Most reliable, standard macOS approach
-- Proper app bundle structure
-- Can set LSUIElement in Info.plist permanently
-- Works 100% when configured correctly
-
-**Cons:**
-- Requires build step (adds complexity)
-- Need to modify LaunchAgent plist to point to .app
-- Need to update all management scripts
-- Longer implementation time
-- More moving parts (higher risk of new issues)
-
-**Implementation:**
-
-Create `/Users/dennis/dev/freelance-workflow/setup.py`:
-```python
-from setuptools import setup
-
-APP = ['menubar_app.py']
-DATA_FILES = []
-OPTIONS = {
-    'argv_emulation': False,
-    'plist': {
-        'LSUIElement': True,
-        'CFBundleName': 'Freelance Tracker',
-        'CFBundleDisplayName': 'Freelance Tracker',
-        'CFBundleIdentifier': 'com.freelancetracker.menubar',
-        'CFBundleVersion': '1.0.0',
-        'NSRequiresAquaSystemAppearance': False,
-    },
-    'packages': ['rumps', 'requests', 'dotenv'],
-    'includes': ['toggl_data', 'preferences', 'api_audit'],
-}
-
-setup(
-    name='FreelanceTracker',
-    app=APP,
-    data_files=DATA_FILES,
-    options={'py2app': OPTIONS},
-    setup_requires=['py2app'],
-)
-```
-
-Build script `/Users/dennis/dev/freelance-workflow/build_app.sh`:
-```bash
-#!/bin/bash
-source venv/bin/activate
-python setup.py py2app
-```
-
-Update LaunchAgent plist:
-```xml
-<key>ProgramArguments</key>
-<array>
-    <string>/Users/dennis/dev/freelance-workflow/dist/FreelanceTracker.app/Contents/MacOS/FreelanceTracker</string>
-</array>
-```
-
-**Verification:**
-Same as Solution 1 but also verify .app bundle structure
-
----
-
-### Solution 3: LaunchAgent ProcessType Adjustment (Low Confidence)
-**Approach:** Change ProcessType in plist
-
-**Pros:**
-- Zero code changes
-- Quick to test
-
-**Cons:**
-- ProcessType="Background" may break GUI features
-- ProcessType doesn't directly control dock icon
-- Unlikely to work based on research
-
-**Implementation:**
-Change in `com.freelancetracker.menubar.plist`:
-```xml
-<key>ProcessType</key>
-<string>Background</string>
-```
-
-**Verification:**
-Same as Solution 1
-
----
-
-### Recommended Approach Order
-
-1. **Try Solution 1 first** (AppKit LSUIElement) - 30 minutes
-   - If fails: Document exact failure mode
-   - Check if PyObjC is available
-
-2. **If Solution 1 fails, implement Solution 2** (py2app) - 2-3 hours
-   - More robust, industry standard
-   - Worth the extra complexity for reliability
-
-3. **Skip Solution 3** unless specifically requested
 
 ---
 
@@ -734,35 +595,7 @@ jobs:
 
 ---
 
-## 5. Implementation Order
-
-### Phase 1: Dock Icon Fix (Priority: CRITICAL)
-**Estimated Time: 30 minutes - 3 hours**
-
-1. Implement Solution 1 (AppKit LSUIElement) - 30 min
-   - Add LSUIElement code to menubar_app.py
-   - Test with `./restart_service.sh`
-   - User manually verifies dock icon hidden
-   - If successful: DONE
-   - If fails: Proceed to step 2
-
-2. If Solution 1 fails: Implement Solution 2 (py2app) - 2-3 hours
-   - Create setup.py
-   - Create build_app.sh
-   - Update LaunchAgent plist
-   - Update all management scripts
-   - Build and test
-   - User manually verifies
-
-3. Document exact configuration used
-   - Update README.md with setup steps
-   - Note any platform-specific issues
-
-**Human Verification Required:** Dock icon visibility (cannot be checked remotely)
-
----
-
-### Phase 2: Preferences UI (Priority: HIGH)
+## 2. NEXT: Preferences UI (Priority: HIGH)
 **Estimated Time: 2-3 hours**
 
 1. Add validation function to preferences.py - 45 min
@@ -795,7 +628,7 @@ jobs:
 
 ---
 
-### Phase 3: Testing Infrastructure (Priority: MEDIUM)
+## 3. Testing Infrastructure (Priority: MEDIUM)
 **Estimated Time: 3-4 hours**
 
 1. Set up test structure - 30 min
@@ -831,7 +664,7 @@ jobs:
 
 ---
 
-### Phase 4: Documentation & Polish (Priority: LOW)
+## 4. Documentation & Polish (Priority: LOW)
 **Estimated Time: 1-2 hours**
 
 1. Update README.md - 30 min
@@ -855,16 +688,7 @@ jobs:
 
 ---
 
-## 6. Risk Analysis & Mitigation
-
-### Risk 1: Dock Icon Fix Fails Again
-**Probability:** Medium
-**Impact:** High
-**Mitigation:**
-- Try both solutions in sequence
-- If both fail, research platform-specific macOS 14+ issues
-- Consider asking user to provide macOS version details
-- Last resort: Accept dock icon, focus on other improvements
+## 5. Risk Analysis & Mitigation
 
 ### Risk 2: Auto-Restart Causes Service Loop
 **Probability:** Low
@@ -904,11 +728,11 @@ jobs:
 
 ---
 
-## 7. Success Criteria
+## 6. Success Criteria
 
 ### Must Have (Blocking Launch)
-- [ ] Python dock icon is hidden (verified visually by user)
-- [ ] Menu bar icon still appears and works
+- [x] Python dock icon is hidden (verified visually by user) ✅
+- [x] Menu bar icon still appears and works ✅
 - [ ] "Edit Preferences" menu item works
 - [ ] Preferences open in text editor
 - [ ] Invalid JSON shows error notification
@@ -930,7 +754,7 @@ jobs:
 
 ---
 
-## 8. Critical Files for Implementation
+## 7. Critical Files for Implementation
 
 Here are the key files that will be modified or created:
 
@@ -954,14 +778,12 @@ Here are the key files that will be modified or created:
 
 ---
 
-## 9. Next Steps
+## 8. Next Steps
 
-1. **Review this plan** and approve approach
-2. **Start Phase 1**: Implement dock icon fix (Solution 1 first)
-3. **Manual verification**: User checks dock icon visibility
-4. **Continue to Phase 2**: Implement preferences UI
-5. **Test thoroughly**: Run automated tests + manual checklist
-6. **Deploy**: Restart service with all changes
+1. ~~**Phase 1**: Implement dock icon fix~~ ✅ **COMPLETED**
+2. **Phase 2**: Implement preferences UI (next priority)
+3. **Phase 3**: Add testing infrastructure
+4. **Phase 4**: Update documentation
 
 ---
 
