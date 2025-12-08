@@ -9,6 +9,13 @@ from pathlib import Path
 from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings, is_rate_limited, force_refresh_entries
 from preferences import load_preferences
 
+# Hide dock icon - must be set before app creation
+from AppKit import NSBundle
+bundle = NSBundle.mainBundle()
+info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+if info:
+    info['LSUIElement'] = '1'
+
 
 class FreelanceTrackerApp(rumps.App):
     def __init__(self):
