@@ -2,6 +2,22 @@
 
 Quick reference for AI agents working on this project.
 
+## CRITICAL: Source of Truth
+
+**Before making any feature changes, READ `docs/SOT.md` first.**
+
+This is the master features & benefits document. When you:
+- Add a new feature
+- Modify existing functionality
+- Change user-facing behavior
+
+You MUST:
+1. Read `docs/SOT.md` to understand current feature set
+2. Update `docs/SOT.md` to reflect your changes
+3. Update README.md with user-facing changes
+4. Implement the feature
+5. Update API call counts (see below) if relevant
+
 ## CRITICAL: API Call Minimization
 
 **Toggl API has rate limits. Minimizing API calls is CRITICAL.**
