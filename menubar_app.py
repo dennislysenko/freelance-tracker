@@ -18,6 +18,21 @@ if info:
     info['LSUIElement'] = '1'
 
 
+def create_progress_bar(percent, width=12):
+    """Create a Unicode block-based progress bar.
+
+    Args:
+        percent: Progress percentage (0-100)
+        width: Width of the bar in characters (default: 12)
+
+    Returns:
+        String like "[████████░░░░]"
+    """
+    filled = min(int(width * percent / 100), width)
+    bar = '█' * filled + '░' * (width - filled)
+    return f"[{bar}]"
+
+
 class FreelanceTrackerApp(rumps.App):
     def __init__(self):
         super(FreelanceTrackerApp, self).__init__(
@@ -147,10 +162,14 @@ class FreelanceTrackerApp(rumps.App):
                             is_billable = project.get('billable', True)
 
                             if target:
-                                # Show target progress
+                                # Show target progress with visual bar on new line
                                 percentage = (project['hours'] / target) * 100
+                                progress_bar = create_progress_bar(percentage)
                                 menu_items.append(
                                     f"     {project['name']}: {project['hours']:.1f}h / {target}h ({percentage:.0f}%)"
+                                )
+                                menu_items.append(
+                                    f"       {progress_bar}"
                                 )
                             elif is_billable:
                                 # Billable without target - show earnings
