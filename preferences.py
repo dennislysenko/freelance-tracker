@@ -12,20 +12,12 @@ PREFERENCES_FILE = APP_SUPPORT_DIR / "preferences.json"
 APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Default preferences
+# Default preferences (only fields actually used in the app)
 DEFAULT_PREFERENCES = {
-    "refresh_interval": 1800,  # 30 minutes in seconds
-    "show_notifications": True,
-    "daily_goal": 400,
-    "weekly_goal": 2000,
-    "monthly_goal": 8000,
-    "show_hours": True,
-    "menu_bar_format": "💰 ${total:.0f}",  # Can be customized
-    "auto_start": True,
     "cache_ttl_projects": 86400,  # 24 hours
     "cache_ttl_today": 1800,  # 30 minutes
-    "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
     "vacation_days_per_month": 4,  # Vacation/PTO days to exclude from projection
+    "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
 }
 
 
@@ -70,6 +62,83 @@ def reset_preferences():
     save_preferences(DEFAULT_PREFERENCES)
 
 
+def validate_preferences(prefs):
+    """
+    Validate preferences structure and types.
+
+    Args:
+        prefs: Dictionary containing preferences to validate
+
+    Returns:
+        List of error messages (empty list if valid)
+    """
+    errors = []
+
+    # Required fields with (type, validator_function, error_message)
+    # validator_function is None if only type checking is needed
+    required_fields = {
+        'cache_ttl_projects': (int, lambda x: x > 0, "must be a positive integer"),
+        'cache_ttl_today': (int, lambda x: x > 0, "must be a positive integer"),
+        'vacation_days_per_month': (int, lambda x: 0 <= x <= 31, "must be between 0 and 31"),
+    }
+
+    # Check required fields
+    for field, (expected_type, validator, error_msg) in required_fields.items():
+        # Check if field exists
+        if field not in prefs:
+            errors.append(f"Missing required field: '{field}'")
+            continue
+
+        value = prefs[field]
+
+        # Type checking
+        if not isinstance(value, expected_type):
+            errors.append(
+                f"'{field}': expected {expected_type.__name__}, got {type(value).__name__}"
+            )
+            continue
+
+        # Custom validation
+        if validator is not None:
+            try:
+                if not validator(value):
+                    errors.append(f"'{field}': {error_msg} (got {value})")
+            except Exception as e:
+                errors.append(f"'{field}': validation error - {str(e)}")
+
+    # Optional field: project_targets
+    if 'project_targets' in prefs:
+        project_targets = prefs['project_targets']
+
+        # Type check - must be a dict
+        if not isinstance(project_targets, dict):
+            errors.append("'project_targets': must be an object/dictionary")
+        else:
+            # Validate each project target entry
+            for project_name, hours in project_targets.items():
+                # Project name must be string
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'project_targets': key '{project_name}' must be a string"
+                    )
+                    continue
+
+                # Hours must be a number (int or float)
+                if not isinstance(hours, (int, float)):
+                    errors.append(
+                        f"'project_targets.{project_name}': must be a number, got {type(hours).__name__}"
+                    )
+                    continue
+
+                # Hours must be non-negative
+                if hours < 0:
+                    errors.append(
+                        f"'project_targets.{project_name}': must be non-negative (got {hours})"
+                    )
+
+    return errors
+
+
 # Export paths for use by other modules
 __all__ = [
     'APP_SUPPORT_DIR',
@@ -80,4 +149,5 @@ __all__ = [
     'get_preference',
     'set_preference',
     'reset_preferences',
+    'validate_preferences',
 ]
