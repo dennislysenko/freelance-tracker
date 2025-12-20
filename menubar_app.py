@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings, is_rate_limited, force_refresh_entries
 from preferences import load_preferences
+from preferences_window import PreferencesWindowController
 
 # Hide dock icon - must be set before app creation
 from AppKit import NSBundle
@@ -25,6 +26,7 @@ class FreelanceTrackerApp(rumps.App):
             quit_button=None  # We'll add our own
         )
         self.last_update = None
+        self.prefs_controller = PreferencesWindowController()
         self.update_display()
 
     def calculate_api_calls(self, force_refresh=False):
@@ -193,6 +195,7 @@ class FreelanceTrackerApp(rumps.App):
             self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
+            self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -214,6 +217,7 @@ class FreelanceTrackerApp(rumps.App):
             self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
+            self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -299,6 +303,10 @@ class FreelanceTrackerApp(rumps.App):
                 subtitle="Error",
                 message=f"Failed to open audit log: {str(e)}"
             )
+
+    def edit_preferences(self, _):
+        """Open native preferences window."""
+        self.prefs_controller.show_window()
 
 
 if __name__ == "__main__":
