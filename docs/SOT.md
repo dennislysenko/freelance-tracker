@@ -40,8 +40,9 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 ### Project Hour Targets
 - Set monthly hour targets for any project
 - Supports billable and non-billable projects
-- Progress tracking with percentages
-- Example: "Client A: 45.2h / 80h (57%)"
+- Visual progress bars with Unicode blocks on separate line
+- Progress tracking with percentages inline with hours
+- Example: "Client A: 45.2h / 80h (57%)" followed by "[██████░░░░░░]" on next line
 - Non-billable projects only appear in monthly view if target is configured
 
 ### Smart Caching
