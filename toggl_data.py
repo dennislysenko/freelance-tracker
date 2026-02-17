@@ -264,10 +264,37 @@ def get_entries_with_cache(period):
     return all_entries
 
 
+def get_effective_project_rate(project_info, retainer_hourly_rates):
+    """
+    Resolve the hourly rate used for earnings calculations.
+
+    Priority:
+    1) Toggl billable + Toggl project rate
+    2) Local retainer hourly override from preferences
+    """
+    toggl_rate = project_info.get("rate")
+    toggl_billable = project_info.get("billable")
+
+    if toggl_billable and toggl_rate:
+        return toggl_rate, "toggl"
+
+    project_name = project_info.get("name")
+    if not project_name:
+        return None, None
+
+    retainer_rate = retainer_hourly_rates.get(project_name)
+    if isinstance(retainer_rate, (int, float)) and retainer_rate > 0:
+        return retainer_rate, "retainer"
+
+    return None, None
+
+
 def calculate_period_earnings(period):
     """Calculate earnings for a given period and return in menu bar format."""
     entries = get_entries_with_cache(period)
     projects_map = get_projects()
+    prefs = load_preferences()
+    retainer_hourly_rates = prefs.get('retainer_hourly_rates', {})
 
     # Group entries by project
     project_data = defaultdict(lambda: {"duration": 0, "entries": []})
@@ -289,26 +316,28 @@ def calculate_period_earnings(period):
         hours = data["duration"] / 3600
         total_hours += hours
 
-        is_billable = project_info.get("billable") and project_info.get("rate")
+        effective_rate, rate_source = get_effective_project_rate(project_info, retainer_hourly_rates)
+        has_earnings = effective_rate is not None
 
         # Base entry for all projects
         project_entry = {
             "name": project_info.get("name", "Unknown Project"),
             "hours": hours,
-            "billable": is_billable
+            "billable": has_earnings
         }
 
         # Add to all_projects list
         all_projects_list.append(project_entry)
 
-        # Only count billable projects with rates
-        if is_billable:
-            earnings = hours * project_info["rate"]
+        # Only count projects with an effective rate
+        if has_earnings:
+            earnings = hours * effective_rate
             total_earnings += earnings
 
             # Add earnings info to the project entry
             project_entry["earnings"] = earnings
-            project_entry["rate"] = project_info["rate"]
+            project_entry["rate"] = effective_rate
+            project_entry["rate_source"] = rate_source
 
             # Add to billable projects list
             billable_projects_list.append(project_entry)
@@ -388,11 +417,13 @@ def calculate_business_days(year, month):
 
 def get_worked_days_this_month():
     """
-    Calculate the number of days this month with billable time entries.
-    Returns a set of dates (YYYY-MM-DD) with billable work.
+    Calculate the number of days this month with earnings-contributing time entries.
+    Returns a set of dates (YYYY-MM-DD) where work had an effective rate.
     """
     entries = get_entries_with_cache("monthly")
     projects_map = get_projects()
+    prefs = load_preferences()
+    retainer_hourly_rates = prefs.get('retainer_hourly_rates', {})
 
     worked_days = set()
 
@@ -400,8 +431,9 @@ def get_worked_days_this_month():
         project_id = str(entry.get("project_id"))
         if project_id and project_id != "None":
             project_info = projects_map.get(project_id, {})
-            # Only count billable entries
-            if project_info.get("billable") and project_info.get("rate"):
+            effective_rate, _ = get_effective_project_rate(project_info, retainer_hourly_rates)
+            # Count entries that contribute to earnings
+            if effective_rate is not None:
                 # Parse the entry start time to get the date
                 start_time = entry.get("start")
                 if start_time:
@@ -437,7 +469,7 @@ def calculate_monthly_projection():
     # Calculate workable days (business days minus vacation)
     workable_days = total_business_days - vacation_days
 
-    # Get worked days (days with billable time)
+    # Get worked days (days with earnings-contributing time)
     worked_days = get_worked_days_this_month()
     worked_days_count = len(worked_days)
 
