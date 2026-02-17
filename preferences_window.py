@@ -21,6 +21,8 @@ class PreferencesWindowController:
     """
 
     _instance = None
+    PROJECT_TARGET_ROWS = 5
+    RETAINER_RATE_ROWS = 5
 
     def __new__(cls):
         if cls._instance is None:
@@ -77,9 +79,10 @@ class PreferencesWindowController:
         # Create tab view
         tab_view = NSTabView.alloc().initWithFrame_(NSMakeRect(20, 60, 560, 400))
 
-        # Create 2 tabs
+        # Create tabs
         self._create_caching_tab(tab_view)
         self._create_work_planning_tab(tab_view)
+        self._create_retainer_rates_tab(tab_view)
 
         content_view.addSubview_(tab_view)
 
@@ -159,11 +162,11 @@ class PreferencesWindowController:
         view.addSubview_(label)
         y -= 30
 
-        # 5 project target rows
+        # Project target rows
         project_targets = self.current_prefs.get('project_targets', {})
         projects_list = list(project_targets.items())
 
-        for i in range(5):
+        for i in range(self.PROJECT_TARGET_ROWS):
             name = projects_list[i][0] if i < len(projects_list) else ""
             hours = projects_list[i][1] if i < len(projects_list) else 0
 
@@ -183,6 +186,65 @@ class PreferencesWindowController:
             hours_field.setFormatter_(formatter)
             view.addSubview_(hours_field)
             self.widgets[f'project_hours_{i}'] = hours_field
+
+            y -= 35
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def _create_retainer_rates_tab(self, tab_view):
+        """Tab: Retainer Rates."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("retainer_rates")
+        tab.setLabel_("Retainer Rates")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
+
+        y = 320
+
+        # Retainer rates header
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 20))
+        label.setStringValue_("Retainer Hourly Rates (project name -> $/hour):")
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        label.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(label)
+        y -= 22
+
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        help_text.setStringValue_("Used when Toggl project has no billable hourly rate.")
+        help_text.setBezeled_(False)
+        help_text.setDrawsBackground_(False)
+        help_text.setEditable_(False)
+        help_text.setFont_(NSFont.systemFontOfSize_(11))
+        view.addSubview_(help_text)
+        y -= 34
+
+        retainer_hourly_rates = self.current_prefs.get('retainer_hourly_rates', {})
+        retainers_list = list(retainer_hourly_rates.items())
+
+        for i in range(self.RETAINER_RATE_ROWS):
+            name = retainers_list[i][0] if i < len(retainers_list) else ""
+            rate = retainers_list[i][1] if i < len(retainers_list) else 0
+
+            # Project name field
+            name_field = NSTextField.alloc().initWithFrame_(NSMakeRect(40, y, 280, 25))
+            name_field.setStringValue_(name)
+            name_field.setPlaceholderString_(f"Retainer project {i+1} name")
+            view.addSubview_(name_field)
+            self.widgets[f'retainer_name_{i}'] = name_field
+
+            # Hourly rate field
+            rate_field = NSTextField.alloc().initWithFrame_(NSMakeRect(330, y, 100, 25))
+            rate_field.setDoubleValue_(float(rate) if name else 0.0)
+            rate_field.setPlaceholderString_("$/hour")
+            formatter = NSNumberFormatter.alloc().init()
+            formatter.setMinimum_(0)
+            formatter.setAllowsFloats_(True)
+            formatter.setMinimumFractionDigits_(0)
+            formatter.setMaximumFractionDigits_(2)
+            rate_field.setFormatter_(formatter)
+            view.addSubview_(rate_field)
+            self.widgets[f'retainer_rate_{i}'] = rate_field
 
             y -= 35
 
@@ -251,11 +313,11 @@ class PreferencesWindowController:
         # Load vacation days
         self.widgets['vacation_days'].setIntValue_(self.current_prefs['vacation_days_per_month'])
 
-        # Load project targets into 5 name/hours field pairs
+        # Load project targets into name/hours field pairs
         project_targets = self.current_prefs.get('project_targets', {})
         projects_list = list(project_targets.items())
 
-        for i in range(5):
+        for i in range(self.PROJECT_TARGET_ROWS):
             if i < len(projects_list):
                 name, hours = projects_list[i]
                 self.widgets[f'project_name_{i}'].setStringValue_(name)
@@ -264,22 +326,46 @@ class PreferencesWindowController:
                 self.widgets[f'project_name_{i}'].setStringValue_("")
                 self.widgets[f'project_hours_{i}'].setIntValue_(0)
 
+        # Load retainer rates into name/rate field pairs
+        retainer_hourly_rates = self.current_prefs.get('retainer_hourly_rates', {})
+        retainers_list = list(retainer_hourly_rates.items())
+
+        for i in range(self.RETAINER_RATE_ROWS):
+            if i < len(retainers_list):
+                name, rate = retainers_list[i]
+                self.widgets[f'retainer_name_{i}'].setStringValue_(name)
+                self.widgets[f'retainer_rate_{i}'].setDoubleValue_(float(rate))
+            else:
+                self.widgets[f'retainer_name_{i}'].setStringValue_("")
+                self.widgets[f'retainer_rate_{i}'].setDoubleValue_(0.0)
+
     def handleSave_(self, sender):
         """Save button clicked."""
         # Build project_targets dict from 5 name/hours field pairs
         project_targets = {}
-        for i in range(5):
+        for i in range(self.PROJECT_TARGET_ROWS):
             name = self.widgets[f'project_name_{i}'].stringValue().strip()
             hours = self.widgets[f'project_hours_{i}'].intValue()
             if name:  # Only add if name is not empty
                 project_targets[name] = hours
 
-        new_prefs = {
+        # Build retainer_hourly_rates dict from name/rate field pairs
+        retainer_hourly_rates = {}
+        for i in range(self.RETAINER_RATE_ROWS):
+            name = self.widgets[f'retainer_name_{i}'].stringValue().strip()
+            rate = self.widgets[f'retainer_rate_{i}'].doubleValue()
+            if name:  # Only add if name is not empty
+                retainer_hourly_rates[name] = rate
+
+        # Preserve settings not currently editable in the UI
+        new_prefs = self.current_prefs.copy()
+        new_prefs.update({
             'cache_ttl_projects': self.widgets['cache_ttl_projects'].intValue(),
             'cache_ttl_today': self.widgets['cache_ttl_today'].intValue(),
             'vacation_days_per_month': self.widgets['vacation_days'].intValue(),
-            'project_targets': project_targets
-        }
+            'project_targets': project_targets,
+            'retainer_hourly_rates': retainer_hourly_rates
+        })
 
         # Validate using existing function
         errors = validate_preferences(new_prefs)
@@ -330,12 +416,20 @@ class PreferencesWindowController:
 
         response = alert.runModal()
         if response == NSAlertFirstButtonReturn:
+            # Keep in-memory state aligned with defaults for fields not shown in UI.
+            self.current_prefs = DEFAULT_PREFERENCES.copy()
+
             # Load defaults into widgets
             self.widgets['cache_ttl_projects'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_projects'])
             self.widgets['cache_ttl_today'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_today'])
             self.widgets['vacation_days'].setIntValue_(DEFAULT_PREFERENCES['vacation_days_per_month'])
 
             # Clear all project target fields
-            for i in range(5):
+            for i in range(self.PROJECT_TARGET_ROWS):
                 self.widgets[f'project_name_{i}'].setStringValue_("")
                 self.widgets[f'project_hours_{i}'].setIntValue_(0)
+
+            # Clear all retainer rate fields
+            for i in range(self.RETAINER_RATE_ROWS):
+                self.widgets[f'retainer_name_{i}'].setStringValue_("")
+                self.widgets[f'retainer_rate_{i}'].setDoubleValue_(0.0)

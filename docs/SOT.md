@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2025-12-08
+**Last Updated:** 2026-02-17
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -24,7 +24,7 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Today's total earnings and hours
 - Per-project breakdown
 - Billable projects show earnings and hours
-- Non-billable projects show hours only
+- Non-billable projects show hours only unless a retainer hourly override is configured
 
 ### Weekly & Monthly Summaries
 - Current week total
@@ -45,6 +45,21 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Example: "Client A: 45.2h / 80h (57%)" followed by "[██████░░░░░░]" on next line
 - Non-billable projects only appear in monthly view if target is configured
 
+### Retainer Hourly Overrides
+- It is assumed that retainer projects are not configured with an hourly rate in Toggl
+- Configure `retainer_hourly_rates` in preferences to assign an hourly value to retainer/non-billable projects
+- Retainer projects with overrides contribute to daily, weekly, and monthly dollar totals
+- Retainer projects with overrides are treated as earning work for monthly projection worked-day calculations
+- Native Preferences window includes a `Retainer Rates` tab for editing overrides
+- No additional Toggl API calls required (local preference only)
+
+### Retainer Domain Rules (For Upcoming Features)
+- Business model goal: retainers are fixed monthly invoice amounts, not purely hours × rate
+- Expected future behavior: monthly over/under delivery hours can roll forward between months (carryover balance)
+- Current implementation: retainer projects are represented as hourly-value earnings via `retainer_hourly_rates` in the app
+- It is assumed that retainer projects are not configured with an hourly rate in Toggl
+- Status: this section documents business rules for future implementation; carryover logic is not yet implemented in app totals
+
 ### Smart Caching
 - Minimizes API calls to respect Toggl rate limits
 - Historical data cached permanently
@@ -64,6 +79,7 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Customizable goals and targets
 - Vacation day settings
 - Cache TTL controls
+- Retainer hourly overrides by project name
 
 ### Monitoring & Logging
 - API audit log for transparency

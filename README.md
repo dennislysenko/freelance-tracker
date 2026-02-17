@@ -7,6 +7,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 💰 **Live earnings display** in menu bar
 - 🔄 **Auto-refresh** every 30 minutes
 - 📊 **Weekly and monthly summaries**
+- 💼 **Retainer project dollar tracking** via optional hourly overrides
 - 🕐 **Last update timestamp**
 - 💾 **Smart caching** to minimize API calls
 - 🚀 **Runs as system service** (auto-starts on login)
@@ -153,7 +154,7 @@ Click to see:
 ### Month Projection
 
 The app automatically calculates your projected monthly earnings based on:
-- **Worked days**: Days with billable time entries this month
+- **Worked days**: Days with earnings-contributing time entries this month (Toggl billable rates or configured retainer overrides)
 - **Workable days**: Business days minus vacation/PTO days (default: 4 days)
 - **Daily average**: Current earnings ÷ worked days
 - **Projection**: Daily average × workable days
@@ -272,6 +273,10 @@ Edit `~/Library/Application Support/TogglMenuBar/preferences.json`:
     "Client A": 80,               // Target 80 hours/month
     "Weather Optics": 30          // Target 30 hours/month
   },
+  "retainer_hourly_rates": {      // Optional $/hr overrides for retainers/non-billable projects
+    "Client A Retainer": 150,     // Used when Toggl project has no billable rate
+    "Ops Retainer": 95
+  },
   "vacation_days_per_month": 4    // PTO/vacation days to exclude from projection
 }
 ```
@@ -291,6 +296,27 @@ The menu will now show progress like:
 Client A: 45.2h / 80h (57%)
 Weather Optics: 22.5h / 30h (75%)
 ```
+
+### Retainer Dollar Tracking
+
+If a retainer project in Toggl has no billable hourly rate, add it to `retainer_hourly_rates`:
+
+1. Edit preferences: `nano ~/Library/Application\ Support/TogglMenuBar/preferences.json`
+2. Add the exact Toggl project name under `retainer_hourly_rates` with your effective hourly value
+3. Restart: `./restart_service.sh`
+
+Example:
+```json
+{
+  "retainer_hourly_rates": {
+    "Acme Retainer": 150
+  }
+}
+```
+
+After this, time logged to that project contributes to menu bar dollar totals and projection calculations.
+
+You can manage these rates in the app via `⚙️ Edit Preferences` → `Retainer Rates`.
 
 ## CLI Version
 

@@ -18,6 +18,7 @@ DEFAULT_PREFERENCES = {
     "cache_ttl_today": 1800,  # 30 minutes
     "vacation_days_per_month": 4,  # Vacation/PTO days to exclude from projection
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
+    "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
 }
 
 
@@ -134,6 +135,36 @@ def validate_preferences(prefs):
                 if hours < 0:
                     errors.append(
                         f"'project_targets.{project_name}': must be non-negative (got {hours})"
+                    )
+
+    # Optional field: retainer_hourly_rates
+    if 'retainer_hourly_rates' in prefs:
+        retainer_hourly_rates = prefs['retainer_hourly_rates']
+
+        # Type check - must be a dict
+        if not isinstance(retainer_hourly_rates, dict):
+            errors.append("'retainer_hourly_rates': must be an object/dictionary")
+        else:
+            # Validate each retainer rate entry
+            for project_name, rate in retainer_hourly_rates.items():
+                # Project name must be string
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'retainer_hourly_rates': key '{project_name}' must be a string"
+                    )
+                    continue
+
+                # Rate must be a number (int or float)
+                if not isinstance(rate, (int, float)):
+                    errors.append(
+                        f"'retainer_hourly_rates.{project_name}': must be a number, got {type(rate).__name__}"
+                    )
+                    continue
+
+                # Rate must be positive
+                if rate <= 0:
+                    errors.append(
+                        f"'retainer_hourly_rates.{project_name}': must be greater than 0 (got {rate})"
                     )
 
     return errors

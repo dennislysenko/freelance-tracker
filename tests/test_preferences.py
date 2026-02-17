@@ -17,6 +17,7 @@ class TestPreferencesValidation:
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['vacation_days_per_month'] = 8
         prefs['project_targets'] = {"TestProject": 40}
+        prefs['retainer_hourly_rates'] = {"Retainer Client": 150}
 
         errors = validate_preferences(prefs)
         assert errors == []
@@ -135,6 +136,51 @@ class TestPreferencesValidation:
 
         errors = validate_preferences(prefs)
         assert errors == []
+
+    def test_retainer_hourly_rates_valid(self):
+        """Valid retainer_hourly_rates should pass."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['retainer_hourly_rates'] = {
+            "Client A Retainer": 150,
+            "Client B Retainer": 95.5,
+        }
+
+        errors = validate_preferences(prefs)
+        assert errors == []
+
+    def test_retainer_hourly_rates_wrong_type(self):
+        """retainer_hourly_rates as non-dict should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['retainer_hourly_rates'] = ["Client A", 150]
+
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "'retainer_hourly_rates'" in errors[0]
+        assert "must be an object" in errors[0]
+
+    def test_retainer_hourly_rates_invalid_rate_type(self):
+        """Non-numeric retainer rates should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['retainer_hourly_rates'] = {
+            "Client A Retainer": "150"
+        }
+
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "retainer_hourly_rates.Client A Retainer" in errors[0]
+        assert "must be a number" in errors[0]
+
+    def test_retainer_hourly_rates_non_positive(self):
+        """Zero or negative retainer rates should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['retainer_hourly_rates'] = {
+            "Client A Retainer": 0
+        }
+
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "retainer_hourly_rates.Client A Retainer" in errors[0]
+        assert "must be greater than 0" in errors[0]
 
     def test_all_required_fields_present(self):
         """Verify all 3 required fields are checked."""

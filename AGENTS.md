@@ -39,6 +39,22 @@ Current API usage per operation:
 - Today's entries: 30 minutes (`cache_ttl_today`)
 - Historical entries: Permanent (immutable)
 
+## CRITICAL: Preferences UX & Delivery
+
+When introducing or changing any user-facing preference:
+
+1. Add/update the key in `preferences.py` defaults and validation
+2. Expose it in the native preferences UI (`preferences_window.py`) unless explicitly internal-only
+3. Ensure load/save/reset flows preserve the value
+4. Update `docs/SOT.md` and `README.md` with user-facing behavior
+
+When delivering completed feature work to the user:
+
+1. Run relevant tests/checks
+2. Restart the app service: `./restart_service.sh`
+3. Verify runtime status: `./status_service.sh`
+4. Report restart/status outcome in the handoff message
+
 ## Common Commands
 
 ### Service Management
@@ -72,7 +88,8 @@ rm -rf ~/Library/Caches/TogglMenuBar/*    # Clear cache
 1. Make code changes
 2. Test: `source venv/bin/activate && python menubar_app.py`
 3. Restart: `./restart_service.sh`
-4. Check: `./logs.sh`
+4. Verify: `./status_service.sh`
+5. Check: `./logs.sh`
 
 ## Key Files
 
