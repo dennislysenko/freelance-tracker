@@ -10,6 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from preferences import CACHE_DIR, load_preferences
 from api_audit import log_api_request, is_currently_rate_limited
+from carryover import get_balance, set_balance, get_previous_month_str
 
 load_dotenv()
 
@@ -264,14 +265,21 @@ def get_entries_with_cache(period):
     return all_entries
 
 
-def get_effective_project_rate(project_info, retainer_hourly_rates):
+def get_effective_project_rate(project_info, retainer_hourly_rates, projects_config=None):
     """
-    Resolve the hourly rate used for earnings calculations.
+    Resolve the effective rate source for a project.
 
     Priority:
-    1) Toggl billable + Toggl project rate
-    2) Local retainer hourly override from preferences
+    1) Toggl billable + Toggl project rate → (rate, "toggl")
+    2) projects_config: hourly_with_cap → (hourly_rate, "hourly_with_cap")
+    3) projects_config: fixed_monthly required/soft → (monthly/target, "fixed_monthly")
+    4) projects_config: fixed_monthly none → (None, "fixed_monthly_flat")
+    5) Legacy retainer_hourly_rates → (rate, "retainer")
+    6) No rate → (None, None)
     """
+    if projects_config is None:
+        projects_config = {}
+
     toggl_rate = project_info.get("rate")
     toggl_billable = project_info.get("billable")
 
@@ -281,6 +289,23 @@ def get_effective_project_rate(project_info, retainer_hourly_rates):
     project_name = project_info.get("name")
     if not project_name:
         return None, None
+
+    proj_def = projects_config.get(project_name)
+    if proj_def:
+        billing_type = proj_def.get('billing_type')
+        if billing_type == 'hourly_with_cap':
+            hourly_rate = proj_def.get('hourly_rate')
+            if hourly_rate and hourly_rate > 0:
+                return hourly_rate, "hourly_with_cap"
+        elif billing_type == 'fixed_monthly':
+            monthly_amount = proj_def.get('monthly_amount', 0)
+            hour_tracking = proj_def.get('hour_tracking', 'none')
+            if hour_tracking in ('required', 'soft'):
+                target_hours = proj_def.get('target_hours', 0)
+                if target_hours > 0:
+                    return monthly_amount / target_hours, "fixed_monthly"
+            else:
+                return None, "fixed_monthly_flat"
 
     retainer_rate = retainer_hourly_rates.get(project_name)
     if isinstance(retainer_rate, (int, float)) and retainer_rate > 0:
@@ -295,6 +320,12 @@ def calculate_period_earnings(period):
     projects_map = get_projects()
     prefs = load_preferences()
     retainer_hourly_rates = prefs.get('retainer_hourly_rates', {})
+    projects_config = prefs.get('projects', {})
+
+    now = datetime.now()
+    today = now.date()
+    biz_days_this_month = calculate_business_days(today.year, today.month)
+    prev_month_str, _ = get_previous_month_str()
 
     # Group entries by project
     project_data = defaultdict(lambda: {"duration": 0, "entries": []})
@@ -307,49 +338,71 @@ def calculate_period_earnings(period):
 
     # Calculate earnings
     total_earnings = 0
+    fixed_earnings = 0
     total_hours = 0
     billable_projects_list = []
     all_projects_list = []
 
     for project_id, data in project_data.items():
         project_info = projects_map.get(project_id, {})
+        project_name = project_info.get("name", "Unknown Project")
         hours = data["duration"] / 3600
         total_hours += hours
 
-        effective_rate, rate_source = get_effective_project_rate(project_info, retainer_hourly_rates)
-        has_earnings = effective_rate is not None
+        effective_rate, rate_source = get_effective_project_rate(
+            project_info, retainer_hourly_rates, projects_config
+        )
+        has_earnings = effective_rate is not None or rate_source == "fixed_monthly_flat"
 
-        # Base entry for all projects
         project_entry = {
-            "name": project_info.get("name", "Unknown Project"),
+            "name": project_name,
             "hours": hours,
             "billable": has_earnings
         }
 
-        # Add to all_projects list
         all_projects_list.append(project_entry)
 
-        # Only count projects with an effective rate
         if has_earnings:
-            earnings = hours * effective_rate
-            total_earnings += earnings
+            proj_def = projects_config.get(project_name, {})
 
-            # Add earnings info to the project entry
+            if rate_source == "fixed_monthly_flat":
+                monthly_amount = proj_def.get('monthly_amount', 0)
+                if period == 'monthly':
+                    earnings = monthly_amount
+                else:
+                    days_active = len(set(
+                        datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+                        for e in data['entries'] if e.get('start')
+                    ))
+                    earnings = (monthly_amount / biz_days_this_month * days_active
+                                if biz_days_this_month > 0 else 0)
+                fixed_earnings += earnings
+
+            elif rate_source == "fixed_monthly":
+                earnings = hours * effective_rate
+                fixed_earnings += earnings
+
+            elif rate_source == "hourly_with_cap" and period == "monthly":
+                prev_carryover = get_balance(project_name, prev_month_str)
+                # Positive carryover = over-delivered last month → reduces this month's cap
+                effective_cap = max(0, proj_def.get('cap_hours', 0) - max(0, prev_carryover))
+                earnings = min(hours, effective_cap) * effective_rate
+
+            else:
+                earnings = hours * effective_rate
+
+            total_earnings += earnings
             project_entry["earnings"] = earnings
             project_entry["rate"] = effective_rate
             project_entry["rate_source"] = rate_source
-
-            # Add to billable projects list
             billable_projects_list.append(project_entry)
 
-    # Sort projects by earnings (highest first) for billable
     billable_projects_list.sort(key=lambda x: x["earnings"], reverse=True)
-
-    # Sort all projects by hours (highest first)
     all_projects_list.sort(key=lambda x: x["hours"], reverse=True)
 
     return {
         "total": total_earnings,
+        "fixed_earnings": fixed_earnings,
         "hours": total_hours,
         "projects": billable_projects_list,
         "all_projects": all_projects_list
@@ -389,8 +442,81 @@ def get_weekly_earnings():
     return calculate_period_earnings("weekly")
 
 
+def _try_calculate_last_month_carryover(projects_config):
+    """
+    Attempt to auto-calculate and store last month's carryover balances from cached entries.
+    Silently skips projects where cached data is unavailable.
+    """
+    today = datetime.now().date()
+    prev_month_str, _ = get_previous_month_str(today)
+    year, month = map(int, prev_month_str.split('-'))
+    last_day = calendar.monthrange(year, month)[1]
+
+    prev_start = datetime(year, month, 1).date()
+    prev_end = datetime(year, month, last_day).date()
+
+    for project_name, defn in projects_config.items():
+        billing_type = defn.get('billing_type')
+        hour_tracking = defn.get('hour_tracking')
+
+        needs_carryover = (
+            (billing_type == 'fixed_monthly' and hour_tracking == 'required') or
+            billing_type == 'hourly_with_cap'
+        )
+        if not needs_carryover:
+            continue
+
+        # Skip if already calculated
+        if get_balance(project_name, prev_month_str) != 0.0:
+            continue
+
+        # Try to load last month's entries from historical cache
+        h_start = datetime.combine(prev_start, datetime.min.time()).astimezone()
+        h_end = datetime.combine(prev_end, datetime.max.time()).astimezone()
+        cache_key = f"monthly_{prev_start.isoformat()}_to_{prev_end.isoformat()}"
+        cached_entries = get_cached_entries(cache_key, h_start, h_end)
+        if cached_entries is None:
+            continue  # No cache available, skip silently
+
+        projects_map = get_projects()
+        total_hours = sum(
+            e["duration"] / 3600
+            for e in cached_entries
+            if projects_map.get(str(e.get("project_id")), {}).get("name") == project_name
+               and e.get("duration", 0) > 0
+        )
+
+        if billing_type == 'hourly_with_cap':
+            cap_hours = defn.get('cap_hours', 0)
+            # Only positive overflow carries (under-cap = no carryover for this type)
+            balance = max(0.0, total_hours - cap_hours)
+        else:
+            # fixed_monthly/required: both over and under carry
+            # Prior month's effective target also needs its own carryover applied
+            prior_carryover = get_balance(project_name, _month_before(prev_month_str))
+            effective_target = defn.get('target_hours', 0) - prior_carryover
+            balance = total_hours - effective_target
+
+        set_balance(project_name, prev_month_str, balance)
+
+
+def _month_before(year_month_str):
+    """Return YYYY-MM string for the month before the given one."""
+    year, month = map(int, year_month_str.split('-'))
+    if month == 1:
+        return f"{year - 1}-12"
+    return f"{year}-{month - 1:02d}"
+
+
 def get_monthly_earnings():
     """Fetch this month's earnings with detailed breakdown and projection."""
+    prefs = load_preferences()
+    projects_config = prefs.get('projects', {})
+
+    # Try to auto-calculate last month's carryover if not yet stored
+    if projects_config:
+        _try_calculate_last_month_carryover(projects_config)
+
     data = calculate_period_earnings("monthly")
 
     # Add monthly projection
@@ -424,6 +550,7 @@ def get_worked_days_this_month():
     projects_map = get_projects()
     prefs = load_preferences()
     retainer_hourly_rates = prefs.get('retainer_hourly_rates', {})
+    projects_config = prefs.get('projects', {})
 
     worked_days = set()
 
@@ -431,9 +558,11 @@ def get_worked_days_this_month():
         project_id = str(entry.get("project_id"))
         if project_id and project_id != "None":
             project_info = projects_map.get(project_id, {})
-            effective_rate, _ = get_effective_project_rate(project_info, retainer_hourly_rates)
+            effective_rate, rate_source = get_effective_project_rate(
+                project_info, retainer_hourly_rates, projects_config
+            )
             # Count entries that contribute to earnings
-            if effective_rate is not None:
+            if effective_rate is not None or rate_source == "fixed_monthly_flat":
                 # Parse the entry start time to get the date
                 start_time = entry.get("start")
                 if start_time:
@@ -446,45 +575,60 @@ def get_worked_days_this_month():
 
 def calculate_monthly_projection():
     """
-    Calculate monthly earnings projection based on worked days vs workable days.
-    Formula: (current_earnings / worked_days) * workable_days
-    Workable days = business_days - vacation_days
-    """
-    from preferences import load_preferences
+    Calculate monthly earnings projection.
 
+    fixed_monthly projects are treated as guaranteed income (full monthly_amount).
+    Only hourly/hourly_with_cap earnings are extrapolated by pace.
+
+    Formula: fixed_monthly_total + (variable_earnings / worked_days) * workable_days
+    """
     now = datetime.now()
     today = now.date()
 
-    # Get current month's earnings
-    monthly_data = calculate_period_earnings("monthly")
-    current_earnings = monthly_data["total"]
-
-    # Calculate business days in this month
-    total_business_days = calculate_business_days(today.year, today.month)
-
-    # Get vacation days preference
     prefs = load_preferences()
+    projects_config = prefs.get('projects', {})
     vacation_days = prefs.get('vacation_days_per_month', 4)
 
-    # Calculate workable days (business days minus vacation)
+    # Get current month's earnings (includes fixed_earnings breakdown)
+    monthly_data = calculate_period_earnings("monthly")
+    current_total = monthly_data["total"]
+    fixed_earnings_so_far = monthly_data.get("fixed_earnings", 0)
+
+    # Guaranteed monthly income = sum of all fixed_monthly project amounts
+    fixed_monthly_total = sum(
+        defn['monthly_amount']
+        for defn in projects_config.values()
+        if defn.get('billing_type') == 'fixed_monthly'
+    )
+
+    # Variable earnings so far this month (hourly + hourly_with_cap)
+    variable_earnings = current_total - fixed_earnings_so_far
+
+    # Business days and workable days
+    total_business_days = calculate_business_days(today.year, today.month)
     workable_days = total_business_days - vacation_days
 
-    # Get worked days (days with earnings-contributing time)
+    # Worked days (days with any earnings-contributing entries)
     worked_days = get_worked_days_this_month()
     worked_days_count = len(worked_days)
 
-    # Calculate projection
+    # Project variable earnings by pace, add guaranteed fixed income
     if worked_days_count > 0:
-        daily_average = current_earnings / worked_days_count
-        projection = daily_average * workable_days
+        daily_variable_avg = variable_earnings / worked_days_count
+        projected_variable = daily_variable_avg * workable_days
     else:
-        projection = 0
+        daily_variable_avg = 0
+        projected_variable = 0
+
+    projected_total = fixed_monthly_total + projected_variable
 
     return {
-        "projected_earnings": projection,
+        "projected_earnings": projected_total,
+        "fixed_monthly_total": fixed_monthly_total,
+        "projected_variable": projected_variable,
         "worked_days": worked_days_count,
         "total_business_days": total_business_days,
         "workable_days": workable_days,
         "vacation_days": vacation_days,
-        "daily_average": daily_average if worked_days_count > 0 else 0
+        "daily_average": daily_variable_avg
     }

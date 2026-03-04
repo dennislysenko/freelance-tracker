@@ -6,7 +6,8 @@ from AppKit import (
     NSMakeRect, NSPanel, NSBackingStoreBuffered, NSView, NSFont, NSScreen,
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable, NSSwitchButton, NSOnState, NSOffState,
-    NSNumberFormatter, NSAlertFirstButtonReturn, NSTabView, NSTabViewItem
+    NSNumberFormatter, NSAlertFirstButtonReturn, NSTabView, NSTabViewItem,
+    NSPopUpButton
 )
 from preferences import (
     load_preferences, save_preferences, validate_preferences, DEFAULT_PREFERENCES
@@ -23,6 +24,16 @@ class PreferencesWindowController:
     _instance = None
     PROJECT_TARGET_ROWS = 5
     RETAINER_RATE_ROWS = 5
+    PROJECT_DEFINITION_ROWS = 8
+
+    # Maps UI type label → (billing_type, hour_tracking)
+    BILLING_TYPE_OPTIONS = [
+        ("hourly",          "hourly",          None),
+        ("hourly w/ cap",   "hourly_with_cap",  None),
+        ("fixed/required",  "fixed_monthly",    "required"),
+        ("fixed/soft",      "fixed_monthly",    "soft"),
+        ("fixed/none",      "fixed_monthly",    "none"),
+    ]
 
     def __new__(cls):
         if cls._instance is None:
@@ -82,7 +93,7 @@ class PreferencesWindowController:
         # Create tabs
         self._create_caching_tab(tab_view)
         self._create_work_planning_tab(tab_view)
-        self._create_retainer_rates_tab(tab_view)
+        self._create_projects_tab(tab_view)
 
         content_view.addSubview_(tab_view)
 
@@ -192,64 +203,144 @@ class PreferencesWindowController:
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
 
-    def _create_retainer_rates_tab(self, tab_view):
-        """Tab: Retainer Rates."""
-        tab = NSTabViewItem.alloc().initWithIdentifier_("retainer_rates")
-        tab.setLabel_("Retainer Rates")
+    def _create_projects_tab(self, tab_view):
+        """Tab: Projects — billing type definitions per project."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("projects")
+        tab.setLabel_("Projects")
         view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
 
-        y = 320
+        y = 340
 
-        # Retainer rates header
-        label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 20))
-        label.setStringValue_("Retainer Hourly Rates (project name -> $/hour):")
-        label.setBezeled_(False)
-        label.setDrawsBackground_(False)
-        label.setEditable_(False)
-        label.setFont_(NSFont.boldSystemFontOfSize_(12))
-        view.addSubview_(label)
-        y -= 22
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(10, y, 540, 20))
+        header.setStringValue_("Project Billing Definitions (overrides Toggl rate):")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(header)
+        y -= 18
 
-        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
-        help_text.setStringValue_("Used when Toggl project has no billable hourly rate.")
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(10, y, 540, 16))
+        help_text.setStringValue_(
+            "fixed/required: hours required monthly, over/under carries forward  |  "
+            "fixed/soft: display target only  |  fixed/none: freeform"
+        )
         help_text.setBezeled_(False)
         help_text.setDrawsBackground_(False)
         help_text.setEditable_(False)
-        help_text.setFont_(NSFont.systemFontOfSize_(11))
+        help_text.setFont_(NSFont.systemFontOfSize_(9))
         view.addSubview_(help_text)
-        y -= 34
+        y -= 20
 
-        retainer_hourly_rates = self.current_prefs.get('retainer_hourly_rates', {})
-        retainers_list = list(retainer_hourly_rates.items())
+        # Column headers
+        col_headers = [
+            (10,  155, "Project Name"),
+            (170, 105, "Type"),
+            (280, 65,  "Monthly $"),
+            (350, 55,  "Target h"),
+            (410, 55,  "Cap h"),
+            (470, 65,  "Rate $/h"),
+        ]
+        for cx, cw, ct in col_headers:
+            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(cx, y, cw, 16))
+            lbl.setStringValue_(ct)
+            lbl.setBezeled_(False)
+            lbl.setDrawsBackground_(False)
+            lbl.setEditable_(False)
+            lbl.setFont_(NSFont.boldSystemFontOfSize_(10))
+            view.addSubview_(lbl)
+        y -= 22
 
-        for i in range(self.RETAINER_RATE_ROWS):
-            name = retainers_list[i][0] if i < len(retainers_list) else ""
-            rate = retainers_list[i][1] if i < len(retainers_list) else 0
+        projects_config = self.current_prefs.get('projects', {})
+        proj_list = list(projects_config.items())
 
-            # Project name field
-            name_field = NSTextField.alloc().initWithFrame_(NSMakeRect(40, y, 280, 25))
-            name_field.setStringValue_(name)
-            name_field.setPlaceholderString_(f"Retainer project {i+1} name")
-            view.addSubview_(name_field)
-            self.widgets[f'retainer_name_{i}'] = name_field
+        # Number formatter helper
+        def make_formatter(allow_floats=True):
+            f = NSNumberFormatter.alloc().init()
+            f.setMinimum_(0)
+            f.setAllowsFloats_(allow_floats)
+            if allow_floats:
+                f.setMinimumFractionDigits_(0)
+                f.setMaximumFractionDigits_(2)
+            return f
 
-            # Hourly rate field
-            rate_field = NSTextField.alloc().initWithFrame_(NSMakeRect(330, y, 100, 25))
-            rate_field.setDoubleValue_(float(rate) if name else 0.0)
-            rate_field.setPlaceholderString_("$/hour")
-            formatter = NSNumberFormatter.alloc().init()
-            formatter.setMinimum_(0)
-            formatter.setAllowsFloats_(True)
-            formatter.setMinimumFractionDigits_(0)
-            formatter.setMaximumFractionDigits_(2)
-            rate_field.setFormatter_(formatter)
-            view.addSubview_(rate_field)
-            self.widgets[f'retainer_rate_{i}'] = rate_field
+        type_labels = [opt[0] for opt in self.BILLING_TYPE_OPTIONS]
 
-            y -= 35
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            defn = proj_list[i][1] if i < len(proj_list) else {}
+            proj_name = proj_list[i][0] if i < len(proj_list) else ""
+
+            # Name
+            name_f = NSTextField.alloc().initWithFrame_(NSMakeRect(10, y, 155, 22))
+            name_f.setStringValue_(proj_name)
+            name_f.setPlaceholderString_(f"Project {i+1}")
+            view.addSubview_(name_f)
+            self.widgets[f'pd_name_{i}'] = name_f
+
+            # Type dropdown
+            popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(170, y, 105, 22), False
+            )
+            for lbl in type_labels:
+                popup.addItemWithTitle_(lbl)
+            # Select the right type from existing config
+            selected_label = self._defn_to_type_label(defn)
+            popup.selectItemWithTitle_(selected_label)
+            view.addSubview_(popup)
+            self.widgets[f'pd_type_{i}'] = popup
+
+            # Monthly $
+            monthly_f = NSTextField.alloc().initWithFrame_(NSMakeRect(280, y, 65, 22))
+            monthly_f.setDoubleValue_(float(defn.get('monthly_amount', 0)))
+            monthly_f.setPlaceholderString_("0")
+            monthly_f.setFormatter_(make_formatter())
+            view.addSubview_(monthly_f)
+            self.widgets[f'pd_monthly_{i}'] = monthly_f
+
+            # Target hours
+            target_f = NSTextField.alloc().initWithFrame_(NSMakeRect(350, y, 55, 22))
+            target_f.setDoubleValue_(float(defn.get('target_hours', 0)))
+            target_f.setPlaceholderString_("0")
+            target_f.setFormatter_(make_formatter())
+            view.addSubview_(target_f)
+            self.widgets[f'pd_target_{i}'] = target_f
+
+            # Cap hours
+            cap_f = NSTextField.alloc().initWithFrame_(NSMakeRect(410, y, 55, 22))
+            cap_f.setDoubleValue_(float(defn.get('cap_hours', 0)))
+            cap_f.setPlaceholderString_("0")
+            cap_f.setFormatter_(make_formatter())
+            view.addSubview_(cap_f)
+            self.widgets[f'pd_cap_{i}'] = cap_f
+
+            # Hourly rate
+            rate_f = NSTextField.alloc().initWithFrame_(NSMakeRect(470, y, 65, 22))
+            rate_f.setDoubleValue_(float(defn.get('hourly_rate', 0)))
+            rate_f.setPlaceholderString_("0")
+            rate_f.setFormatter_(make_formatter())
+            view.addSubview_(rate_f)
+            self.widgets[f'pd_rate_{i}'] = rate_f
+
+            y -= 30
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
+
+    def _defn_to_type_label(self, defn):
+        """Convert a project definition dict to its UI type label string."""
+        billing_type = defn.get('billing_type', 'hourly')
+        hour_tracking = defn.get('hour_tracking')
+        for label, bt, ht in self.BILLING_TYPE_OPTIONS:
+            if bt == billing_type and ht == hour_tracking:
+                return label
+        return "hourly"
+
+    def _type_label_to_defn_fields(self, label):
+        """Convert a UI type label to (billing_type, hour_tracking) tuple."""
+        for lbl, bt, ht in self.BILLING_TYPE_OPTIONS:
+            if lbl == label:
+                return bt, ht
+        return "hourly", None
 
     def _create_number_field(self, parent, label_text, x, y, default_value, min_value=None):
         """Helper: create labeled number field."""
@@ -326,18 +417,26 @@ class PreferencesWindowController:
                 self.widgets[f'project_name_{i}'].setStringValue_("")
                 self.widgets[f'project_hours_{i}'].setIntValue_(0)
 
-        # Load retainer rates into name/rate field pairs
-        retainer_hourly_rates = self.current_prefs.get('retainer_hourly_rates', {})
-        retainers_list = list(retainer_hourly_rates.items())
+        # Load project definitions
+        projects_config = self.current_prefs.get('projects', {})
+        proj_list = list(projects_config.items())
 
-        for i in range(self.RETAINER_RATE_ROWS):
-            if i < len(retainers_list):
-                name, rate = retainers_list[i]
-                self.widgets[f'retainer_name_{i}'].setStringValue_(name)
-                self.widgets[f'retainer_rate_{i}'].setDoubleValue_(float(rate))
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            if i < len(proj_list):
+                name, defn = proj_list[i]
+                self.widgets[f'pd_name_{i}'].setStringValue_(name)
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_(self._defn_to_type_label(defn))
+                self.widgets[f'pd_monthly_{i}'].setDoubleValue_(float(defn.get('monthly_amount', 0)))
+                self.widgets[f'pd_target_{i}'].setDoubleValue_(float(defn.get('target_hours', 0)))
+                self.widgets[f'pd_cap_{i}'].setDoubleValue_(float(defn.get('cap_hours', 0)))
+                self.widgets[f'pd_rate_{i}'].setDoubleValue_(float(defn.get('hourly_rate', 0)))
             else:
-                self.widgets[f'retainer_name_{i}'].setStringValue_("")
-                self.widgets[f'retainer_rate_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_name_{i}'].setStringValue_("")
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("hourly")
+                self.widgets[f'pd_monthly_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_target_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_cap_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_rate_{i}'].setDoubleValue_(0.0)
 
     def handleSave_(self, sender):
         """Save button clicked."""
@@ -349,13 +448,25 @@ class PreferencesWindowController:
             if name:  # Only add if name is not empty
                 project_targets[name] = hours
 
-        # Build retainer_hourly_rates dict from name/rate field pairs
-        retainer_hourly_rates = {}
-        for i in range(self.RETAINER_RATE_ROWS):
-            name = self.widgets[f'retainer_name_{i}'].stringValue().strip()
-            rate = self.widgets[f'retainer_rate_{i}'].doubleValue()
-            if name:  # Only add if name is not empty
-                retainer_hourly_rates[name] = rate
+        # Build projects dict from project definition rows
+        projects_config = {}
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            name = self.widgets[f'pd_name_{i}'].stringValue().strip()
+            if not name:
+                continue
+            type_label = self.widgets[f'pd_type_{i}'].titleOfSelectedItem()
+            billing_type, hour_tracking = self._type_label_to_defn_fields(type_label)
+            defn = {'billing_type': billing_type}
+            if billing_type == 'hourly_with_cap':
+                defn['hourly_rate'] = self.widgets[f'pd_rate_{i}'].doubleValue()
+                defn['cap_hours'] = self.widgets[f'pd_cap_{i}'].doubleValue()
+            elif billing_type == 'fixed_monthly':
+                defn['monthly_amount'] = self.widgets[f'pd_monthly_{i}'].doubleValue()
+                defn['hour_tracking'] = hour_tracking
+                if hour_tracking in ('required', 'soft'):
+                    defn['target_hours'] = self.widgets[f'pd_target_{i}'].doubleValue()
+            # billing_type == 'hourly': no extra fields needed
+            projects_config[name] = defn
 
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
@@ -364,7 +475,7 @@ class PreferencesWindowController:
             'cache_ttl_today': self.widgets['cache_ttl_today'].intValue(),
             'vacation_days_per_month': self.widgets['vacation_days'].intValue(),
             'project_targets': project_targets,
-            'retainer_hourly_rates': retainer_hourly_rates
+            'projects': projects_config,
         })
 
         # Validate using existing function
@@ -429,7 +540,11 @@ class PreferencesWindowController:
                 self.widgets[f'project_name_{i}'].setStringValue_("")
                 self.widgets[f'project_hours_{i}'].setIntValue_(0)
 
-            # Clear all retainer rate fields
-            for i in range(self.RETAINER_RATE_ROWS):
-                self.widgets[f'retainer_name_{i}'].setStringValue_("")
-                self.widgets[f'retainer_rate_{i}'].setDoubleValue_(0.0)
+            # Clear all project definition fields
+            for i in range(self.PROJECT_DEFINITION_ROWS):
+                self.widgets[f'pd_name_{i}'].setStringValue_("")
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("hourly")
+                self.widgets[f'pd_monthly_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_target_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_cap_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_rate_{i}'].setDoubleValue_(0.0)
