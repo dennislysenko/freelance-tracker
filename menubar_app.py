@@ -9,6 +9,7 @@ from pathlib import Path
 from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings, is_rate_limited, force_refresh_entries
 from preferences import load_preferences
 from preferences_window import PreferencesWindowController
+from carryover import get_previous_month_balance
 
 # Hide dock icon - must be set before app creation
 from AppKit import NSBundle
@@ -137,44 +138,67 @@ class FreelanceTrackerApp(rumps.App):
             menu_items.append(f"📊 THIS MONTH - ${monthly['total']:.2f}")
             menu_items.append(rumps.separator)
 
-            # Load preferences for targets
+            # Load preferences for targets and project definitions
             prefs = load_preferences()
             project_targets = prefs.get('project_targets', {})
+            projects_config = prefs.get('projects', {})
 
             # Show monthly projects (billable + non-billable with targets)
             all_monthly_projects = monthly.get('all_projects', monthly.get('projects', []))
             if all_monthly_projects:
-                # Filter: All billable OR non-billable with targets
                 projects_to_display = []
 
                 for project in all_monthly_projects:
                     is_billable = project.get('billable', True)
                     has_target = project['name'] in project_targets
+                    has_def = project['name'] in projects_config
 
-                    if is_billable or has_target:
+                    if is_billable or has_target or has_def:
                         projects_to_display.append(project)
 
                 if projects_to_display:
                     menu_items.append("   Monthly Hours by Project:")
                     for project in projects_to_display:
                         if project['hours'] > 0:
-                            target = project_targets.get(project['name'])
+                            name = project['name']
                             is_billable = project.get('billable', True)
+                            proj_def = projects_config.get(name, {})
+                            billing_type = proj_def.get('billing_type')
+                            hour_tracking = proj_def.get('hour_tracking')
+
+                            # Determine if this project has a carryover-adjusted target
+                            carryover_balance = 0.0
+                            if (billing_type == 'fixed_monthly' and hour_tracking == 'required') or \
+                               billing_type == 'hourly_with_cap':
+                                carryover_balance, prev_month_label = get_previous_month_balance(name)
+
+                            # Determine target denominator
+                            target = project_targets.get(name)
+                            if not target and billing_type == 'fixed_monthly' and \
+                               hour_tracking in ('required', 'soft'):
+                                target = proj_def.get('target_hours')
+                            elif not target and billing_type == 'hourly_with_cap':
+                                target = proj_def.get('cap_hours')
 
                             if target:
-                                # Show target progress with visual bar on new line
-                                percentage = (project['hours'] / target) * 100
+                                # Adjust for carryover: positive = over-delivered (reduces target),
+                                # negative = under-delivered (increases target)
+                                effective_target = target - carryover_balance
+                                effective_target = max(0.1, effective_target)  # avoid division by zero
+                                percentage = (project['hours'] / effective_target) * 100
                                 progress_bar = create_progress_bar(percentage)
                                 menu_items.append(
-                                    f"     {project['name']}: {project['hours']:.1f}h / {target}h ({percentage:.0f}%)"
+                                    f"     {name}: {project['hours']:.1f}h / {effective_target:.1f}h ({percentage:.0f}%)"
                                 )
-                                menu_items.append(
-                                    f"       {progress_bar}"
-                                )
+                                menu_items.append(f"       {progress_bar}")
+                                if carryover_balance != 0.0:
+                                    sign = "+" if carryover_balance > 0 else ""
+                                    menu_items.append(
+                                        f"       ↳ {sign}{carryover_balance:.1f}h carryover from {prev_month_label}"
+                                    )
                             elif is_billable:
-                                # Billable without target - show earnings
                                 menu_items.append(
-                                    f"     {project['name']}: {project['hours']:.1f}h (${project['earnings']:.0f})"
+                                    f"     {name}: {project['hours']:.1f}h (${project['earnings']:.0f})"
                                 )
                     menu_items.append(rumps.separator)
 
@@ -186,11 +210,16 @@ class FreelanceTrackerApp(rumps.App):
                 workable = projection['workable_days']
                 vacation = projection['vacation_days']
                 daily_avg = projection['daily_average']
+                fixed_total = projection.get('fixed_monthly_total', 0)
+                projected_variable = projection.get('projected_variable', 0)
 
                 menu_items.append(f"📈 Month Projection: ${projected:.0f}")
+                if fixed_total > 0:
+                    menu_items.append(f"   ${fixed_total:.0f} fixed + ${projected_variable:.0f} projected hourly")
                 menu_items.append(f"   Worked {worked}/{workable} workable days")
                 menu_items.append(f"   ({vacation} vacation days excluded)")
-                menu_items.append(f"   Daily average: ${daily_avg:.0f}")
+                if daily_avg > 0:
+                    menu_items.append(f"   Hourly daily average: ${daily_avg:.0f}")
                 menu_items.append(rumps.separator)
 
             # Add rate limit warning if applicable

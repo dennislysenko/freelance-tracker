@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-02-17
+**Last Updated:** 2026-03-04
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -24,7 +24,7 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Today's total earnings and hours
 - Per-project breakdown
 - Billable projects show earnings and hours
-- Non-billable projects show hours only unless a retainer hourly override is configured
+- Projects with a defined `billing_type` contribute earnings even if not billable in Toggl
 
 ### Weekly & Monthly Summaries
 - Current week total
@@ -35,30 +35,91 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Intelligent forecast based on current performance
 - Accounts for business days vs worked days
 - Configurable vacation/PTO days
-- Formula: (earnings ÷ worked days) × workable days
+- Formula for hourly projects: `(earnings ÷ worked days) × workable days`
+- `fixed_monthly` projects are always treated as guaranteed income — only `hourly` and `hourly_with_cap` earnings are extrapolated by pace: `fixed_monthly_total + project((variable earnings) by pace)`
 
-### Project Hour Targets
-- Set monthly hour targets for any project
-- Supports billable and non-billable projects
+### Project Definitions
+
+Every project can have an optional definition in the `projects` preference key. Projects without a definition default to `billing_type: hourly` using the rate from Toggl.
+
+#### Billing Types
+
+**`hourly`** (default)
+- Standard Toggl hourly rate
+- No cap, no carryover
+- Projection: extrapolated by pace
+
+**`hourly_with_cap`**
+- Billed at hourly rate up to a monthly cap (hours × rate)
+- Under cap: bill actual hours worked (no penalty)
+- Over cap: overflow hours carry forward as a credit to next month, reducing available cap
+- Projection: `min(pace_projected_hours, cap_hours) × rate`
+- Carryover displayed in monthly progress bar
+
+**`fixed_monthly`**
+- Guaranteed monthly amount regardless of hours worked
+- Three hour-tracking modes:
+  - `hour_tracking: required` — expected hours per month; over/under rolls forward as carryover balance
+  - `hour_tracking: soft` — display-only target; effective hourly rate = `monthly_amount / target_hours`; no carryover
+  - `hour_tracking: none` — freeform; no hour tracking
+- Effective hourly rate for daily/weekly display: `monthly_amount / target_hours` (required/soft), or `monthly_amount / working_days` per day (none)
+- These projects are assumed to not have a billable rate configured in Toggl
+
+#### Project Definition Schema
+
+```json
+"projects": {
+  "Client A": {
+    "billing_type": "hourly_with_cap",
+    "hourly_rate": 150,
+    "cap_hours": 20
+  },
+  "Client B": {
+    "billing_type": "fixed_monthly",
+    "monthly_amount": 2000,
+    "hour_tracking": "required",
+    "target_hours": 10
+  },
+  "Client C": {
+    "billing_type": "fixed_monthly",
+    "monthly_amount": 3000,
+    "hour_tracking": "soft",
+    "target_hours": 30
+  },
+  "Client D": {
+    "billing_type": "fixed_monthly",
+    "monthly_amount": 4000,
+    "hour_tracking": "none"
+  }
+}
+```
+
+#### Carryover
+
+Carryover applies to `hourly_with_cap` and `fixed_monthly / hour_tracking: required`. Balance is stored in `~/Library/Application Support/TogglMenuBar/retainer_carryover.json` and displayed in the monthly hours progress bar. Auto-calculated from cached time entries at end of month; can also be manually set or overridden via the Projects tab in preferences (the "Feb carryover h" field shown for applicable billing types):
+
+```
+Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
+[████████░░░░░░░░]
+↳ -2h carryover from Feb
+```
+
+| Billing type | Under | Over |
+|---|---|---|
+| `fixed_monthly / required` | hours owed roll forward (target increases next month) | hours credited forward (target decreases next month) |
+| `hourly_with_cap` | bill actual hours (no penalty) | overflow hours credited to next month (cap decreases next month) |
+
+#### Project Hour Targets
+- Set monthly hour targets for any project (also configurable via `project_targets` for non-project-definition projects)
 - Visual progress bars with Unicode blocks on separate line
 - Progress tracking with percentages inline with hours
 - Example: "Client A: 45.2h / 80h (57%)" followed by "[██████░░░░░░]" on next line
-- Non-billable projects only appear in monthly view if target is configured
+- For `fixed_monthly / required` and `hourly_with_cap`, the target denominator is adjusted by carryover balance
 
-### Retainer Hourly Overrides
-- It is assumed that retainer projects are not configured with an hourly rate in Toggl
-- Configure `retainer_hourly_rates` in preferences to assign an hourly value to retainer/non-billable projects
-- Retainer projects with overrides contribute to daily, weekly, and monthly dollar totals
-- Retainer projects with overrides are treated as earning work for monthly projection worked-day calculations
-- Native Preferences window includes a `Retainer Rates` tab for editing overrides
-- No additional Toggl API calls required (local preference only)
-
-### Retainer Domain Rules (For Upcoming Features)
-- Business model goal: retainers are fixed monthly invoice amounts, not purely hours × rate
-- Expected future behavior: monthly over/under delivery hours can roll forward between months (carryover balance)
-- Current implementation: retainer projects are represented as hourly-value earnings via `retainer_hourly_rates` in the app
-- It is assumed that retainer projects are not configured with an hourly rate in Toggl
-- Status: this section documents business rules for future implementation; carryover logic is not yet implemented in app totals
+#### Legacy: Retainer Hourly Overrides
+- `retainer_hourly_rates` preference key is still supported as a fallback for projects without a definition
+- Migrate to `projects` with `billing_type: fixed_monthly` for full functionality
+- Native Preferences window: "Retainer Rates" tab replaced by "Projects" tab
 
 ### Smart Caching
 - Minimizes API calls to respect Toggl rate limits
@@ -79,7 +140,9 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Customizable goals and targets
 - Vacation day settings
 - Cache TTL controls
-- Retainer hourly overrides by project name
+- Project definitions with billing types (`projects` key)
+- `fixed_monthly` projects are always fixed in projections — no toggle needed
+- Legacy `retainer_hourly_rates` still supported
 
 ### Monitoring & Logging
 - API audit log for transparency
