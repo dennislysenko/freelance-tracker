@@ -24,6 +24,16 @@ You'll be prompted for your [Toggl API token](https://track.toggl.com/profile). 
 
 **Prerequisites:** macOS, Python 3, Git. Install missing tools with [Homebrew](https://brew.sh).
 
+## Updating
+
+Click **🆕 Update App** in the menu bar — a small progress window will show the update steps and restart the app automatically.
+
+Or from the terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dennislysenko/freelance-tracker/main/update.sh | bash
+```
+
 <details>
 <summary>Manual setup (for contributors)</summary>
 
