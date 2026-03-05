@@ -199,6 +199,11 @@ def validate_preferences(prefs):
                         errors.append(f"{prefix}: 'hourly_rate' must be a positive number")
                     if not isinstance(cap_hours, (int, float)) or cap_hours <= 0:
                         errors.append(f"{prefix}: 'cap_hours' must be a positive number")
+                    last_billed_date = defn.get('last_billed_date')
+                    if last_billed_date is not None:
+                        import re
+                        if not re.match(r'^\d{4}-\d{2}-\d{2}$', str(last_billed_date)):
+                            errors.append(f"{prefix}: 'last_billed_date' must be YYYY-MM-DD format")
 
                 elif billing_type == 'fixed_monthly':
                     monthly_amount = defn.get('monthly_amount')

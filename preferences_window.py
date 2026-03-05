@@ -25,7 +25,7 @@ class PreferencesWindowController:
     _instance = None
     PROJECT_TARGET_ROWS = 5
     RETAINER_RATE_ROWS = 5
-    PROJECT_DEFINITION_ROWS = 8
+    PROJECT_DEFINITION_ROWS = 5
 
     # Maps UI type label → (billing_type, hour_tracking)
     BILLING_TYPE_OPTIONS = [
@@ -113,6 +113,7 @@ class PreferencesWindowController:
         save_btn.setTarget_(self)
         save_btn.setAction_("handleSave:")
         parent_view.addSubview_(save_btn)
+        self.widgets['save_btn'] = save_btn
 
         # Cancel button (middle-right)
         cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(370, 20, 100, 32))
@@ -258,8 +259,9 @@ class PreferencesWindowController:
 
         # --- Row layout constants ---
         Y_ROW_BASE = 452    # popup y for row 0
-        ROW_STRIDE = 58     # vertical distance between rows
+        ROW_STRIDE = 86     # vertical distance between rows
         EXTRA_OFFSET = 28   # extra fields are this far below popup y
+        EXTRA2_OFFSET = 54  # third line (advanced carryover)
 
         from carryover import get_balance, get_previous_month_str as _prev_month_str
 
@@ -294,6 +296,7 @@ class PreferencesWindowController:
         for i in range(self.PROJECT_DEFINITION_ROWS):
             popup_y = Y_ROW_BASE - i * ROW_STRIDE
             extra_y = popup_y - EXTRA_OFFSET
+            extra2_y = popup_y - EXTRA2_OFFSET
             defn = proj_list[i][1] if i < len(proj_list) else {}
             proj_name = proj_list[i][0] if i < len(proj_list) else ""
 
@@ -355,10 +358,20 @@ class PreferencesWindowController:
             self.widgets[f'pd_lbl_cap_{i}'] = lbl_cap
             self.widgets[f'pd_cap_{i}'] = f_cap
 
-            # Carryover h (hourly_with_cap and fixed/required — editable override for prev month)
+            # Last billed date (hourly_with_cap only — replaces manual carryover when set)
+            last_billed_val = defn.get('last_billed_date', '') if defn else ''
+            lbl_last_billed = make_field_label(355, extra_y, 72, "Last billed")
+            f_last_billed = NSTextField.alloc().initWithFrame_(NSMakeRect(430, extra_y, 110, 22))
+            f_last_billed.setStringValue_(last_billed_val)
+            f_last_billed.setPlaceholderString_("YYYY-MM-DD")
+            view.addSubview_(f_last_billed)
+            self.widgets[f'pd_lbl_last_billed_{i}'] = lbl_last_billed
+            self.widgets[f'pd_last_billed_{i}'] = f_last_billed
+
+            # Manual carryover h (advanced — used when last billed date is not set)
             carry_val = get_balance(proj_name, _ym) if proj_name else 0.0
-            lbl_carry = make_field_label(355, extra_y, 88, f"{_ml} carryover h")
-            f_carry = make_plain_field(446, extra_y, 94, carry_val)
+            lbl_carry = make_field_label(10, extra2_y, 260, "Manual start of month carryover h (advanced)")
+            f_carry = make_plain_field(275, extra2_y, 80, carry_val)
             self.widgets[f'pd_lbl_carryover_{i}'] = lbl_carry
             self.widgets[f'pd_carryover_{i}'] = f_carry
 
@@ -380,8 +393,14 @@ class PreferencesWindowController:
         show_target = billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft')
         show_rate = billing_type == 'hourly_with_cap'
         show_cap = billing_type == 'hourly_with_cap'
+        show_last_billed = billing_type == 'hourly_with_cap'
         show_carryover = billing_type == 'hourly_with_cap' or \
                          (billing_type == 'fixed_monthly' and hour_tracking == 'required')
+        # Hide manual carryover when last_billed_date is filled (date mode takes over)
+        if billing_type == 'hourly_with_cap':
+            last_billed_widget = self.widgets.get(f'pd_last_billed_{i}')
+            if last_billed_widget and last_billed_widget.stringValue().strip():
+                show_carryover = False
 
         self.widgets[f'pd_lbl_monthly_{i}'].setHidden_(not show_monthly)
         self.widgets[f'pd_monthly_{i}'].setHidden_(not show_monthly)
@@ -391,6 +410,8 @@ class PreferencesWindowController:
         self.widgets[f'pd_rate_{i}'].setHidden_(not show_rate)
         self.widgets[f'pd_lbl_cap_{i}'].setHidden_(not show_cap)
         self.widgets[f'pd_cap_{i}'].setHidden_(not show_cap)
+        self.widgets[f'pd_lbl_last_billed_{i}'].setHidden_(not show_last_billed)
+        self.widgets[f'pd_last_billed_{i}'].setHidden_(not show_last_billed)
         self.widgets[f'pd_lbl_carryover_{i}'].setHidden_(not show_carryover)
         self.widgets[f'pd_carryover_{i}'].setHidden_(not show_carryover)
 
@@ -519,6 +540,7 @@ class PreferencesWindowController:
                 self.widgets[f'pd_target_{i}'].setStringValue_(_fmt(defn.get('target_hours')))
                 self.widgets[f'pd_cap_{i}'].setStringValue_(_fmt(defn.get('cap_hours')))
                 self.widgets[f'pd_rate_{i}'].setStringValue_(_fmt(defn.get('hourly_rate')))
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_(defn.get('last_billed_date', ''))
             else:
                 name = ""
                 self.widgets[f'pd_name_{i}'].selectItemWithTitle_("—")
@@ -527,6 +549,7 @@ class PreferencesWindowController:
                 self.widgets[f'pd_target_{i}'].setStringValue_("")
                 self.widgets[f'pd_cap_{i}'].setStringValue_("")
                 self.widgets[f'pd_rate_{i}'].setStringValue_("")
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
 
             # Carryover: refresh month label + value from carryover store
             carry_val = get_balance(name, _ym) if name else 0.0
@@ -566,6 +589,9 @@ class PreferencesWindowController:
             if billing_type == 'hourly_with_cap':
                 defn['hourly_rate'] = _read_float(f'pd_rate_{i}')
                 defn['cap_hours'] = _read_float(f'pd_cap_{i}')
+                last_billed = self.widgets[f'pd_last_billed_{i}'].stringValue().strip()
+                if last_billed:
+                    defn['last_billed_date'] = last_billed
             elif billing_type == 'fixed_monthly':
                 defn['monthly_amount'] = _read_float(f'pd_monthly_{i}')
                 defn['hour_tracking'] = hour_tracking
@@ -575,15 +601,19 @@ class PreferencesWindowController:
             projects_config[name] = defn
 
             # Write carryover override only if the field has content (empty = leave existing value)
-            needs_carryover = billing_type == 'hourly_with_cap' or \
-                              (billing_type == 'fixed_monthly' and hour_tracking == 'required')
+            # For hourly_with_cap: skip carryover if last_billed_date is set (date takes precedence)
+            needs_carryover = billing_type == 'hourly_with_cap' or                               (billing_type == 'fixed_monthly' and hour_tracking == 'required')
             if needs_carryover:
-                carry_str = self.widgets[f'pd_carryover_{i}'].stringValue().strip()
-                if carry_str:  # non-empty means user explicitly set a value (including "0")
-                    try:
-                        set_balance(name, _ym, float(carry_str))
-                    except ValueError:
-                        pass
+                has_last_billed = billing_type == 'hourly_with_cap' and defn.get('last_billed_date')
+                if has_last_billed:
+                    set_balance(name, _ym, 0.0)  # clear carryover — date mode takes over
+                else:
+                    carry_str = self.widgets[f'pd_carryover_{i}'].stringValue().strip()
+                    if carry_str:
+                        try:
+                            set_balance(name, _ym, float(carry_str))
+                        except ValueError:
+                            pass
 
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
@@ -614,14 +644,19 @@ class PreferencesWindowController:
         # Save
         save_preferences(new_prefs)
 
-        # Success notification
-        rumps.notification(
-            title="Freelance Tracker",
-            subtitle="Preferences Saved",
-            message="Settings updated successfully"
-        )
+        # Flash "Saved ✓" on the Save button briefly
+        save_btn = self.widgets.get('save_btn')
+        if save_btn:
+            save_btn.setTitle_("Saved ✓")
+            save_btn.setEnabled_(False)
+            def _reset_btn():
+                import time; time.sleep(1.5)
+                save_btn.setTitle_("Save")
+                save_btn.setEnabled_(True)
+            import threading
+            threading.Thread(target=_reset_btn, daemon=True).start()
 
-        # Trigger app reload (will be implemented in menubar_app.py)
+        # Trigger app reload
         try:
             NSApp.delegate().app.update_display()
         except:
@@ -662,4 +697,6 @@ class PreferencesWindowController:
                 self.widgets[f'pd_target_{i}'].setStringValue_("")
                 self.widgets[f'pd_cap_{i}'].setStringValue_("")
                 self.widgets[f'pd_rate_{i}'].setStringValue_("")
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
                 self.widgets[f'pd_carryover_{i}'].setStringValue_("")
