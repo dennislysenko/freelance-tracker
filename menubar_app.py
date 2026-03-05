@@ -9,6 +9,7 @@ from pathlib import Path
 from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings, is_rate_limited, force_refresh_entries
 from preferences import load_preferences
 from preferences_window import PreferencesWindowController
+from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
 
 # Hide dock icon - must be set before app creation
@@ -43,6 +44,7 @@ class FreelanceTrackerApp(rumps.App):
         )
         self.last_update = None
         self.prefs_controller = PreferencesWindowController()
+        self.update_controller = UpdateWindowController()
         self.update_display()
 
     def calculate_api_calls(self, force_refresh=False):
@@ -245,6 +247,7 @@ class FreelanceTrackerApp(rumps.App):
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
             self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
+            self.menu.add(rumps.MenuItem("🆕 Update App", callback=self.update_app))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -267,6 +270,7 @@ class FreelanceTrackerApp(rumps.App):
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
             self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
+            self.menu.add(rumps.MenuItem("🆕 Update App", callback=self.update_app))
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -352,6 +356,10 @@ class FreelanceTrackerApp(rumps.App):
                 subtitle="Error",
                 message=f"Failed to open audit log: {str(e)}"
             )
+
+    def update_app(self, _):
+        """Open update progress window and run update."""
+        self.update_controller.show_and_run()
 
     def edit_preferences(self, _):
         """Open native preferences window."""
