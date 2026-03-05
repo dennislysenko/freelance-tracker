@@ -470,13 +470,21 @@ def _try_calculate_last_month_carryover(projects_config):
         if get_balance(project_name, prev_month_str) != 0.0:
             continue
 
-        # Try to load last month's entries from historical cache
-        h_start = datetime.combine(prev_start, datetime.min.time()).astimezone()
-        h_end = datetime.combine(prev_end, datetime.max.time()).astimezone()
-        cache_key = f"monthly_{prev_start.isoformat()}_to_{prev_end.isoformat()}"
-        cached_entries = get_cached_entries(cache_key, h_start, h_end)
-        if cached_entries is None:
-            continue  # No cache available, skip silently
+        # Reconstruct last month's entries from individual daily cache files.
+        # (A full-month cache file never exists for past months — the monthly cache
+        # is written as "month-start to current day" and resets when a new month starts.)
+        cached_entries = []
+        for day_offset in range(last_day):
+            day = prev_start + timedelta(days=day_offset)
+            daily_cache = CACHE_DIR / f"daily_{day.isoformat()}.json"
+            if daily_cache.exists():
+                try:
+                    with open(daily_cache) as f:
+                        cached_entries.extend(json.load(f).get('entries', []))
+                except Exception:
+                    pass
+        if not cached_entries:
+            continue  # No daily data available for this project, skip
 
         projects_map = get_projects()
         total_hours = sum(
