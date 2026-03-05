@@ -13,7 +13,18 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 🚀 **Runs as system service** (auto-starts on login)
 - 📍 **Standard macOS storage** locations
 
-## First Time Setup
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dennislysenko/freelance-tracker/main/install.sh | bash
+```
+
+You'll be prompted for your [Toggl API token](https://track.toggl.com/profile). The app installs to `~/.freelance-tracker` and starts automatically on login.
+
+**Prerequisites:** macOS, Python 3, Git. Install missing tools with [Homebrew](https://brew.sh).
+
+<details>
+<summary>Manual setup (for contributors)</summary>
 
 ### 1. Get Your Toggl API Token
 
@@ -27,29 +38,20 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 ### 2. Clone & Install
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd freelance-workflow
-
-# Create virtual environment
+git clone https://github.com/dennislysenko/freelance-tracker.git
+cd freelance-tracker
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### 3. Configure API Token
 
 ```bash
-# Copy the example env file
 cp .env.example .env
-
-# Edit .env and add your API token
 nano .env
 ```
 
-Add your token:
 ```
 TOGGL_API_TOKEN=your_token_here
 TOGGL_WORKSPACE_ID=your_workspace_id  # Optional, auto-detected
@@ -85,6 +87,8 @@ Now it will:
 - ✅ Auto-refresh every 30 minutes
 - ✅ Restart if it crashes
 - ✅ Run in the background
+
+</details>
 
 ## Management Scripts
 
