@@ -96,7 +96,7 @@ Every project can have an optional definition in the `projects` preference key. 
 
 #### Carryover
 
-Carryover applies to `hourly_with_cap` and `fixed_monthly / hour_tracking: required`. Balance is stored in `~/Library/Application Support/TogglMenuBar/retainer_carryover.json` and displayed in the monthly hours progress bar:
+Carryover applies to `hourly_with_cap` and `fixed_monthly / hour_tracking: required`. Balance is stored in `~/Library/Application Support/TogglMenuBar/retainer_carryover.json` and displayed in the monthly hours progress bar. Auto-calculated from cached time entries at end of month; can also be manually set or overridden via the Projects tab in preferences (the "Feb carryover h" field shown for applicable billing types):
 
 ```
 Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover

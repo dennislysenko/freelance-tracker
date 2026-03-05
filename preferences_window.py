@@ -7,8 +7,9 @@ from AppKit import (
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable, NSSwitchButton, NSOnState, NSOffState,
     NSNumberFormatter, NSAlertFirstButtonReturn, NSTabView, NSTabViewItem,
-    NSPopUpButton
+    NSPopUpButton, NSBox
 )
+NSBoxSeparator = 2
 from preferences import (
     load_preferences, save_preferences, validate_preferences, DEFAULT_PREFERENCES
 )
@@ -28,11 +29,11 @@ class PreferencesWindowController:
 
     # Maps UI type label → (billing_type, hour_tracking)
     BILLING_TYPE_OPTIONS = [
-        ("hourly",          "hourly",          None),
-        ("hourly w/ cap",   "hourly_with_cap",  None),
-        ("fixed/required",  "fixed_monthly",    "required"),
-        ("fixed/soft",      "fixed_monthly",    "soft"),
-        ("fixed/none",      "fixed_monthly",    "none"),
+        ("Hourly",                 "hourly",          None),
+        ("Hourly with cap",        "hourly_with_cap",  None),
+        ("Fixed + required hours", "fixed_monthly",    "required"),
+        ("Fixed + soft target",    "fixed_monthly",    "soft"),
+        ("Fixed flat (no tracking)", "fixed_monthly",  "none"),
     ]
 
     def __new__(cls):
@@ -61,9 +62,9 @@ class PreferencesWindowController:
 
     def _create_window(self):
         """Create the NSWindow with tabbed interface."""
-        # Center window on screen (600x500)
+        # Center window on screen
         screen_frame = NSScreen.mainScreen().frame()
-        window_width, window_height = 600, 500
+        window_width, window_height = 600, 680
         window_x = (screen_frame.size.width - window_width) / 2
         window_y = (screen_frame.size.height - window_height) / 2
 
@@ -87,8 +88,11 @@ class PreferencesWindowController:
         # Get content view
         content_view = self.window.contentView()
 
+        # Keep panel visible when app loses focus
+        self.window.setHidesOnDeactivate_(False)
+
         # Create tab view
-        tab_view = NSTabView.alloc().initWithFrame_(NSMakeRect(20, 60, 560, 400))
+        tab_view = NSTabView.alloc().initWithFrame_(NSMakeRect(20, 60, 560, 580))
 
         # Create tabs
         self._create_caching_tab(tab_view)
@@ -221,20 +225,18 @@ class PreferencesWindowController:
         """Tab: Projects — billing type definitions per project."""
         tab = NSTabViewItem.alloc().initWithIdentifier_("projects")
         tab.setLabel_("Projects")
-        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
 
-        y = 340
-
-        header = NSTextField.alloc().initWithFrame_(NSMakeRect(10, y, 540, 20))
+        # --- Header ---
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 524, 540, 20))
         header.setStringValue_("Project Billing Definitions")
         header.setBezeled_(False)
         header.setDrawsBackground_(False)
         header.setEditable_(False)
         header.setFont_(NSFont.boldSystemFontOfSize_(12))
         view.addSubview_(header)
-        y -= 18
 
-        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(10, y, 540, 16))
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 504, 540, 16))
         help_text.setStringValue_(
             "fixed/required: hours carry over monthly  ·  fixed/soft: soft target only  ·  fixed/none: freeform amount"
         )
@@ -243,39 +245,41 @@ class PreferencesWindowController:
         help_text.setEditable_(False)
         help_text.setFont_(NSFont.systemFontOfSize_(10))
         view.addSubview_(help_text)
-        y -= 28
 
         # Column headers
-        for cx, cw, ct in [(10, 195, "Project"), (210, 130, "Billing Type"), (345, 205, "")]:
-            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(cx, y, cw, 16))
+        for cx, cw, ct in [(10, 230, "Project"), (248, 302, "Billing Type")]:
+            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(cx, 484, cw, 16))
             lbl.setStringValue_(ct)
             lbl.setBezeled_(False)
             lbl.setDrawsBackground_(False)
             lbl.setEditable_(False)
             lbl.setFont_(NSFont.boldSystemFontOfSize_(10))
             view.addSubview_(lbl)
-        y -= 20
+
+        # --- Row layout constants ---
+        Y_ROW_BASE = 452    # popup y for row 0
+        ROW_STRIDE = 58     # vertical distance between rows
+        EXTRA_OFFSET = 28   # extra fields are this far below popup y
 
         projects_config = self.current_prefs.get('projects', {})
         proj_list = list(projects_config.items())
         toggl_names = self._get_toggl_project_names()
         type_labels = [opt[0] for opt in self.BILLING_TYPE_OPTIONS]
 
-        def make_float_field(x, yy, w, value):
+        def make_plain_field(x, yy, w, value):
+            """Plain text field (no formatter) so cmd+backspace works."""
             f = NSTextField.alloc().initWithFrame_(NSMakeRect(x, yy, w, 22))
-            f.setDoubleValue_(float(value))
+            if value:
+                v = float(value)
+                f.setStringValue_(str(int(v)) if v == int(v) else str(v))
+            else:
+                f.setStringValue_("")
             f.setPlaceholderString_("0")
-            fmt = NSNumberFormatter.alloc().init()
-            fmt.setMinimum_(0)
-            fmt.setAllowsFloats_(True)
-            fmt.setMinimumFractionDigits_(0)
-            fmt.setMaximumFractionDigits_(2)
-            f.setFormatter_(fmt)
             view.addSubview_(f)
             return f
 
-        def make_inline_label(x, yy, text):
-            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(x, yy + 2, 50, 18))
+        def make_field_label(x, yy, w, text):
+            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(x, yy + 3, w, 16))
             lbl.setStringValue_(text)
             lbl.setBezeled_(False)
             lbl.setDrawsBackground_(False)
@@ -285,15 +289,23 @@ class PreferencesWindowController:
             return lbl
 
         for i in range(self.PROJECT_DEFINITION_ROWS):
+            popup_y = Y_ROW_BASE - i * ROW_STRIDE
+            extra_y = popup_y - EXTRA_OFFSET
             defn = proj_list[i][1] if i < len(proj_list) else {}
             proj_name = proj_list[i][0] if i < len(proj_list) else ""
 
-            # Project name dropdown (populated from Toggl cache)
+            # Separator line between rows
+            if i > 0:
+                sep_y = popup_y + 24 + 3  # 3px above this row's popup top
+                sep = NSBox.alloc().initWithFrame_(NSMakeRect(5, sep_y, 545, 1))
+                sep.setBoxType_(NSBoxSeparator)
+                view.addSubview_(sep)
+
+            # Top line: Project name popup
             name_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-                NSMakeRect(10, y, 195, 22), False
+                NSMakeRect(10, popup_y, 230, 24), False
             )
             name_popup.addItemWithTitle_("—")
-            # Ensure configured name is in list even if not in cache
             names_for_row = list(toggl_names)
             if proj_name and proj_name not in names_for_row:
                 names_for_row.insert(0, proj_name)
@@ -303,9 +315,9 @@ class PreferencesWindowController:
             view.addSubview_(name_popup)
             self.widgets[f'pd_name_{i}'] = name_popup
 
-            # Billing type dropdown
+            # Top line: Billing type popup
             type_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-                NSMakeRect(210, y, 130, 22), False
+                NSMakeRect(248, popup_y, 302, 24), False
             )
             for lbl in type_labels:
                 type_popup.addItemWithTitle_(lbl)
@@ -315,35 +327,42 @@ class PreferencesWindowController:
             view.addSubview_(type_popup)
             self.widgets[f'pd_type_{i}'] = type_popup
 
-            # --- Dynamic extra fields (x starts at 345) ---
-            # Monthly $ (fixed types)
-            lbl_mo = make_inline_label(345, y, "Mo $")
-            f_monthly = make_float_field(388, y, 70, defn.get('monthly_amount', 0))
+            # Bottom line: extra fields (shown/hidden based on billing type)
+            # Monthly $ (fixed_monthly types)
+            lbl_mo = make_field_label(10, extra_y, 72, "Monthly $")
+            f_monthly = make_plain_field(85, extra_y, 100, defn.get('monthly_amount', 0))
             self.widgets[f'pd_lbl_monthly_{i}'] = lbl_mo
             self.widgets[f'pd_monthly_{i}'] = f_monthly
 
             # Target h (fixed/required and fixed/soft)
-            lbl_tgt = make_inline_label(462, y, "Tgt h")
-            f_target = make_float_field(505, y, 45, defn.get('target_hours', 0))
+            lbl_tgt = make_field_label(200, extra_y, 60, "Target h")
+            f_target = make_plain_field(263, extra_y, 80, defn.get('target_hours', 0))
             self.widgets[f'pd_lbl_target_{i}'] = lbl_tgt
             self.widgets[f'pd_target_{i}'] = f_target
 
             # Rate $/h (hourly_with_cap)
-            lbl_rate = make_inline_label(345, y, "Rate")
-            f_rate = make_float_field(388, y, 70, defn.get('hourly_rate', 0))
+            lbl_rate = make_field_label(10, extra_y, 66, "Rate $/h")
+            f_rate = make_plain_field(79, extra_y, 100, defn.get('hourly_rate', 0))
             self.widgets[f'pd_lbl_rate_{i}'] = lbl_rate
             self.widgets[f'pd_rate_{i}'] = f_rate
 
             # Cap h (hourly_with_cap)
-            lbl_cap = make_inline_label(462, y, "Cap h")
-            f_cap = make_float_field(505, y, 45, defn.get('cap_hours', 0))
+            lbl_cap = make_field_label(200, extra_y, 48, "Cap h")
+            f_cap = make_plain_field(251, extra_y, 80, defn.get('cap_hours', 0))
             self.widgets[f'pd_lbl_cap_{i}'] = lbl_cap
             self.widgets[f'pd_cap_{i}'] = f_cap
 
+            # Carryover h (hourly_with_cap and fixed/required — editable override for prev month)
+            from carryover import get_balance, get_previous_month_str as _prev_month_str
+            _ym, _ml = _prev_month_str()
+            carry_val = get_balance(proj_name, _ym) if proj_name else 0.0
+            lbl_carry = make_field_label(355, extra_y, 88, f"{_ml} carryover h")
+            f_carry = make_plain_field(446, extra_y, 94, carry_val)
+            self.widgets[f'pd_lbl_carryover_{i}'] = lbl_carry
+            self.widgets[f'pd_carryover_{i}'] = f_carry
+
             # Apply initial visibility
             self._update_project_row_visibility(i)
-
-            y -= 32
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
@@ -360,6 +379,8 @@ class PreferencesWindowController:
         show_target = billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft')
         show_rate = billing_type == 'hourly_with_cap'
         show_cap = billing_type == 'hourly_with_cap'
+        show_carryover = billing_type == 'hourly_with_cap' or \
+                         (billing_type == 'fixed_monthly' and hour_tracking == 'required')
 
         self.widgets[f'pd_lbl_monthly_{i}'].setHidden_(not show_monthly)
         self.widgets[f'pd_monthly_{i}'].setHidden_(not show_monthly)
@@ -369,6 +390,8 @@ class PreferencesWindowController:
         self.widgets[f'pd_rate_{i}'].setHidden_(not show_rate)
         self.widgets[f'pd_lbl_cap_{i}'].setHidden_(not show_cap)
         self.widgets[f'pd_cap_{i}'].setHidden_(not show_cap)
+        self.widgets[f'pd_lbl_carryover_{i}'].setHidden_(not show_carryover)
+        self.widgets[f'pd_carryover_{i}'].setHidden_(not show_carryover)
 
     def handleProjectTypeChange_(self, sender):
         """Called when a billing type dropdown changes — updates field visibility."""
@@ -384,7 +407,7 @@ class PreferencesWindowController:
         for label, bt, ht in self.BILLING_TYPE_OPTIONS:
             if bt == billing_type and ht == hour_tracking:
                 return label
-        return "hourly"
+        return "Hourly"
 
     def _type_label_to_defn_fields(self, label):
         """Convert a UI type label to (billing_type, hour_tracking) tuple."""
@@ -481,17 +504,30 @@ class PreferencesWindowController:
                     name_popup.insertItemWithTitle_atIndex_(name, 1)
                 name_popup.selectItemWithTitle_(name)
                 self.widgets[f'pd_type_{i}'].selectItemWithTitle_(self._defn_to_type_label(defn))
-                self.widgets[f'pd_monthly_{i}'].setDoubleValue_(float(defn.get('monthly_amount', 0)))
-                self.widgets[f'pd_target_{i}'].setDoubleValue_(float(defn.get('target_hours', 0)))
-                self.widgets[f'pd_cap_{i}'].setDoubleValue_(float(defn.get('cap_hours', 0)))
-                self.widgets[f'pd_rate_{i}'].setDoubleValue_(float(defn.get('hourly_rate', 0)))
+                def _fmt(v):
+                    v = float(v or 0)
+                    return (str(int(v)) if v == int(v) else str(v)) if v else ""
+                self.widgets[f'pd_monthly_{i}'].setStringValue_(_fmt(defn.get('monthly_amount')))
+                self.widgets[f'pd_target_{i}'].setStringValue_(_fmt(defn.get('target_hours')))
+                self.widgets[f'pd_cap_{i}'].setStringValue_(_fmt(defn.get('cap_hours')))
+                self.widgets[f'pd_rate_{i}'].setStringValue_(_fmt(defn.get('hourly_rate')))
             else:
+                name = ""
                 self.widgets[f'pd_name_{i}'].selectItemWithTitle_("—")
-                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("hourly")
-                self.widgets[f'pd_monthly_{i}'].setDoubleValue_(0.0)
-                self.widgets[f'pd_target_{i}'].setDoubleValue_(0.0)
-                self.widgets[f'pd_cap_{i}'].setDoubleValue_(0.0)
-                self.widgets[f'pd_rate_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("Hourly")
+                self.widgets[f'pd_monthly_{i}'].setStringValue_("")
+                self.widgets[f'pd_target_{i}'].setStringValue_("")
+                self.widgets[f'pd_cap_{i}'].setStringValue_("")
+                self.widgets[f'pd_rate_{i}'].setStringValue_("")
+
+            # Carryover: load from carryover store (refresh month label + value)
+            from carryover import get_balance, get_previous_month_str as _prev_month_str
+            _ym, _ml = _prev_month_str()
+            carry_val = get_balance(name, _ym) if name else 0.0
+            self.widgets[f'pd_lbl_carryover_{i}'].setStringValue_(f"{_ml} carryover h")
+            def _fmt_carry(v):
+                return (str(int(v)) if v == int(v) else str(v)) if v else ""
+            self.widgets[f'pd_carryover_{i}'].setStringValue_(_fmt_carry(carry_val))
             self._update_project_row_visibility(i)
 
     def handleSave_(self, sender):
@@ -513,16 +549,35 @@ class PreferencesWindowController:
             type_label = self.widgets[f'pd_type_{i}'].titleOfSelectedItem()
             billing_type, hour_tracking = self._type_label_to_defn_fields(type_label)
             defn = {'billing_type': billing_type}
+
+            def _read_float(key):
+                try:
+                    return float(self.widgets[key].stringValue() or 0)
+                except (ValueError, TypeError):
+                    return 0.0
+
             if billing_type == 'hourly_with_cap':
-                defn['hourly_rate'] = self.widgets[f'pd_rate_{i}'].doubleValue()
-                defn['cap_hours'] = self.widgets[f'pd_cap_{i}'].doubleValue()
+                defn['hourly_rate'] = _read_float(f'pd_rate_{i}')
+                defn['cap_hours'] = _read_float(f'pd_cap_{i}')
             elif billing_type == 'fixed_monthly':
-                defn['monthly_amount'] = self.widgets[f'pd_monthly_{i}'].doubleValue()
+                defn['monthly_amount'] = _read_float(f'pd_monthly_{i}')
                 defn['hour_tracking'] = hour_tracking
                 if hour_tracking in ('required', 'soft'):
-                    defn['target_hours'] = self.widgets[f'pd_target_{i}'].doubleValue()
+                    defn['target_hours'] = _read_float(f'pd_target_{i}')
             # billing_type == 'hourly': no extra fields needed
             projects_config[name] = defn
+
+            # Write carryover override if field is visible and has a value
+            needs_carryover = billing_type == 'hourly_with_cap' or \
+                              (billing_type == 'fixed_monthly' and hour_tracking == 'required')
+            if needs_carryover:
+                from carryover import set_balance, get_previous_month_str as _prev_month_str
+                _ym, _ = _prev_month_str()
+                carry_str = self.widgets[f'pd_carryover_{i}'].stringValue().strip()
+                try:
+                    set_balance(name, _ym, float(carry_str) if carry_str else 0.0)
+                except ValueError:
+                    pass
 
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
@@ -560,9 +615,6 @@ class PreferencesWindowController:
             message="Settings updated successfully"
         )
 
-        # Close window
-        self.window.close()
-
         # Trigger app reload (will be implemented in menubar_app.py)
         try:
             NSApp.delegate().app.update_display()
@@ -599,8 +651,9 @@ class PreferencesWindowController:
             # Clear all project definition fields
             for i in range(self.PROJECT_DEFINITION_ROWS):
                 self.widgets[f'pd_name_{i}'].selectItemWithTitle_("—")
-                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("hourly")
-                self.widgets[f'pd_monthly_{i}'].setDoubleValue_(0.0)
-                self.widgets[f'pd_target_{i}'].setDoubleValue_(0.0)
-                self.widgets[f'pd_cap_{i}'].setDoubleValue_(0.0)
-                self.widgets[f'pd_rate_{i}'].setDoubleValue_(0.0)
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("Hourly")
+                self.widgets[f'pd_monthly_{i}'].setStringValue_("")
+                self.widgets[f'pd_target_{i}'].setStringValue_("")
+                self.widgets[f'pd_cap_{i}'].setStringValue_("")
+                self.widgets[f'pd_rate_{i}'].setStringValue_("")
+                self.widgets[f'pd_carryover_{i}'].setStringValue_("")
