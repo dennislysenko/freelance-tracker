@@ -279,6 +279,54 @@ class TestPreferencesValidation:
         errors = validate_preferences(prefs)
         assert any("projects" in e for e in errors)
 
+    def test_projects_hourly_with_cap_missing_hourly_rate(self):
+        """hourly_with_cap without hourly_rate should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {"billing_type": "hourly_with_cap", "cap_hours": 20}
+        }
+        errors = validate_preferences(prefs)
+        assert any("hourly_rate" in e for e in errors)
+
+    def test_projects_fixed_monthly_soft_missing_target_hours(self):
+        """fixed_monthly/soft without target_hours should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 3000,
+                "hour_tracking": "soft",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("target_hours" in e for e in errors)
+
+    def test_projects_fixed_monthly_zero_amount_rejected(self):
+        """fixed_monthly with monthly_amount of 0 should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 0,
+                "hour_tracking": "none",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("monthly_amount" in e for e in errors)
+
+    def test_projects_fixed_monthly_negative_amount_rejected(self):
+        """fixed_monthly with negative monthly_amount should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": -500,
+                "hour_tracking": "none",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("monthly_amount" in e for e in errors)
+
     def test_all_required_fields_present(self):
         """Verify all 3 required fields are checked."""
         required = [
