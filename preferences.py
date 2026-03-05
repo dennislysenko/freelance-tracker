@@ -16,7 +16,7 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_PREFERENCES = {
     "cache_ttl_projects": 86400,  # 24 hours
     "cache_ttl_today": 1800,  # 30 minutes
-    "vacation_days_per_month": 4,  # Vacation/PTO days to exclude from projection
+    "vacation_days_per_month": 4,  # Vacation days to exclude from projection
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
     "projects": {},  # Project definitions by name: see docs/SOT.md for schema

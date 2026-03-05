@@ -269,7 +269,7 @@ These should be clearly documented in the preferences file:
 - `daily_goal`: Daily earnings target in dollars (integer)
 - `weekly_goal`: Weekly earnings target (integer)
 - `monthly_goal`: Monthly earnings target (integer)
-- `vacation_days_per_month`: PTO days to exclude from projections (0-31)
+- `vacation_days_per_month`: vacation days to exclude from projections (0-31)
 - `project_targets`: Monthly hour targets by project name (object, e.g., {"ProjectName": 30})
 
 **Refresh Settings:**

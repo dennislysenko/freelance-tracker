@@ -34,7 +34,7 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 ### Month Projection
 - Intelligent forecast based on current performance
 - Accounts for business days vs worked days
-- Configurable vacation/PTO days
+- Configurable vacation days
 - Formula for hourly projects: `(earnings ÷ worked days) × workable days`
 - `fixed_monthly` projects are always treated as guaranteed income — only `hourly` and `hourly_with_cap` earnings are extrapolated by pace: `fixed_monthly_total + project((variable earnings) by pace)`
 

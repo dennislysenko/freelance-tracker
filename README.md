@@ -6,7 +6,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 
 - 💰 **Live earnings display** in menu bar (daily, weekly, monthly)
 - 🔄 **Auto-refresh** every 30 minutes
-- 📈 **Month projection** based on pace, accounting for vacation/PTO days
+- 📈 **Month projection** based on pace, accounting for planned days off
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly
 - 🔁 **Carryover tracking** for capped and fixed-monthly projects across months
 - 🕐 **Last update timestamp**
@@ -160,7 +160,7 @@ Click to see:
 
 The app automatically calculates your projected monthly earnings based on:
 - **Worked days**: Days with earnings-contributing time entries this month (Toggl billable rates or configured retainer overrides)
-- **Workable days**: Business days minus vacation/PTO days (default: 4 days)
+- **Workable days**: Business days minus vacation days (default: 4 days)
 - **Daily average**: Current earnings ÷ worked days
 - **Projection**: Daily average × workable days
 
@@ -169,7 +169,7 @@ Example: If you earned $1,000 in 4 worked days, with 20 business days and 4 vaca
 To adjust vacation days, edit preferences:
 ```json
 {
-  "vacation_days_per_month": 4  // Change this to your typical PTO days
+  "vacation_days_per_month": 4  // Change this to your typical vacation days
 }
 ```
 
@@ -282,7 +282,7 @@ Edit `~/Library/Application Support/TogglMenuBar/preferences.json`:
     "Client A Retainer": 150,     // Used when Toggl project has no billable rate
     "Ops Retainer": 95
   },
-  "vacation_days_per_month": 4    // PTO/vacation days to exclude from projection
+  "vacation_days_per_month": 4    // vacation days to exclude from projection
 }
 ```
 
