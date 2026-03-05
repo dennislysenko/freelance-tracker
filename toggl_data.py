@@ -632,6 +632,29 @@ def calculate_monthly_projection():
         daily_variable_avg = 0
         projected_variable = 0
 
+    # Cap the projected variable earnings for hourly_with_cap projects.
+    # If every variable project has a cap, the projection can't exceed the sum of those caps.
+    from carryover import get_balance, get_previous_month_str as _prev_month_str
+    _prev_ym, _ = _prev_month_str()
+    capped_ceiling = 0.0
+    has_uncapped_hourly = False
+    for proj_name, defn in projects_config.items():
+        bt = defn.get('billing_type', 'hourly')
+        if bt == 'hourly_with_cap':
+            prev_carryover = get_balance(proj_name, _prev_ym)
+            effective_cap = max(0.0, defn.get('cap_hours', 0) - max(0.0, prev_carryover))
+            capped_ceiling += effective_cap * defn.get('hourly_rate', 0)
+        elif bt == 'hourly':
+            has_uncapped_hourly = True
+
+    is_projection_capped = (
+        not has_uncapped_hourly
+        and capped_ceiling > 0
+        and projected_variable > capped_ceiling
+    )
+    if is_projection_capped:
+        projected_variable = capped_ceiling
+
     projected_total = fixed_monthly_total + projected_variable
 
     return {
@@ -642,5 +665,7 @@ def calculate_monthly_projection():
         "total_business_days": total_business_days,
         "workable_days": workable_days,
         "vacation_days": vacation_days,
-        "daily_average": daily_variable_avg
+        "daily_average": daily_variable_avg,
+        "is_projection_capped": is_projection_capped,
+        "capped_ceiling": capped_ceiling if not has_uncapped_hourly else None,
     }

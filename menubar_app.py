@@ -213,7 +213,11 @@ class FreelanceTrackerApp(rumps.App):
                 fixed_total = projection.get('fixed_monthly_total', 0)
                 projected_variable = projection.get('projected_variable', 0)
 
-                menu_items.append(f"📈 Month Projection: ${projected:.0f}")
+                if projection.get('is_projection_capped'):
+                    ceiling = projection['capped_ceiling']
+                    menu_items.append(f"📈 Month Projection: ${projected:.0f} (capped at ${ceiling:.0f})")
+                else:
+                    menu_items.append(f"📈 Month Projection: ${projected:.0f}")
                 if fixed_total > 0:
                     menu_items.append(f"   ${fixed_total:.0f} fixed + ${projected_variable:.0f} projected hourly")
                 menu_items.append(f"   Worked {worked}/{workable} workable days")
