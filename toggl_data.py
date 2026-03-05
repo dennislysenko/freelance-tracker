@@ -265,6 +265,28 @@ def get_entries_with_cache(period):
     return all_entries
 
 
+def get_entries_since_date(start_date):
+    """
+    Collect cached time entries from start_date to today (inclusive).
+    Reads existing daily cache files — no new API calls.
+    Used for last_billed_date unbilled hour calculations.
+    """
+    today = datetime.now().date()
+    all_entries = []
+    current = start_date
+    while current <= today:
+        cache_file = CACHE_DIR / f"daily_{current.isoformat()}.json"
+        if cache_file.exists():
+            try:
+                with open(cache_file) as f:
+                    data = json.load(f)
+                    all_entries.extend(data.get('entries', []))
+            except Exception:
+                pass
+        current += timedelta(days=1)
+    return all_entries
+
+
 def get_effective_project_rate(project_info, retainer_hourly_rates, projects_config=None):
     """
     Resolve the effective rate source for a project.
@@ -331,6 +353,31 @@ def calculate_period_earnings(period):
     biz_days_this_month = calculate_business_days(today.year, today.month)
     prev_month_str, _ = get_previous_month_str()
 
+    # For hourly_with_cap projects with last_billed_date, pre-compute unbilled hours
+    # (only relevant for monthly view — daily/weekly show regular period hours)
+    lbd_results = {}  # proj_name -> {hours, earnings}
+    if period == "monthly":
+        for proj_name, defn in projects_config.items():
+            if defn.get('billing_type') == 'hourly_with_cap' and defn.get('last_billed_date'):
+                try:
+                    last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
+                except ValueError:
+                    continue
+                unbilled_entries = get_entries_since_date(last_billed + timedelta(days=1))
+                unbilled_h = sum(
+                    e['duration'] / 3600
+                    for e in unbilled_entries
+                    if projects_map.get(str(e.get('project_id')), {}).get('name') == proj_name
+                    and e.get('duration', 0) > 0
+                )
+                cap_hours = defn.get('cap_hours', 0)
+                hourly_rate = defn.get('hourly_rate', 0)
+                lbd_results[proj_name] = {
+                    'hours': unbilled_h,
+                    'earnings': min(unbilled_h, cap_hours) * hourly_rate,
+                    'rate': hourly_rate,
+                }
+
     # Group entries by project
     project_data = defaultdict(lambda: {"duration": 0, "entries": []})
 
@@ -387,10 +434,16 @@ def calculate_period_earnings(period):
                 fixed_earnings += earnings
 
             elif rate_source == "hourly_with_cap" and period == "monthly":
-                prev_carryover = get_balance(project_name, prev_month_str)
-                # Positive carryover = over-delivered last month → reduces this month's cap
-                effective_cap = max(0, proj_def.get('cap_hours', 0) - max(0, prev_carryover))
-                earnings = min(hours, effective_cap) * effective_rate
+                if project_name in lbd_results:
+                    # last_billed_date mode: use unbilled hours since that date
+                    hours = lbd_results[project_name]['hours']
+                    project_entry["hours"] = hours
+                    earnings = lbd_results[project_name]['earnings']
+                else:
+                    prev_carryover = get_balance(project_name, prev_month_str)
+                    # Positive carryover = over-delivered last month → reduces this month's cap
+                    effective_cap = max(0, proj_def.get('cap_hours', 0) - max(0, prev_carryover))
+                    earnings = min(hours, effective_cap) * effective_rate
 
             else:
                 earnings = hours * effective_rate
@@ -400,6 +453,23 @@ def calculate_period_earnings(period):
             project_entry["rate"] = effective_rate
             project_entry["rate_source"] = rate_source
             billable_projects_list.append(project_entry)
+
+    # Add lbd projects that had no entries in the current period (all work was before period start)
+    if period == "monthly":
+        processed_names = {p['name'] for p in all_projects_list}
+        for proj_name, lbd in lbd_results.items():
+            if proj_name not in processed_names and lbd['hours'] > 0:
+                entry = {
+                    'name': proj_name,
+                    'hours': lbd['hours'],
+                    'earnings': lbd['earnings'],
+                    'billable': True,
+                    'rate': lbd['rate'],
+                    'rate_source': 'hourly_with_cap',
+                }
+                billable_projects_list.append(entry)
+                all_projects_list.append(entry)
+                total_earnings += lbd['earnings']
 
     billable_projects_list.sort(key=lambda x: x["earnings"], reverse=True)
     all_projects_list.sort(key=lambda x: x["hours"], reverse=True)
@@ -613,8 +683,55 @@ def calculate_monthly_projection():
         if defn.get('billing_type') == 'fixed_monthly'
     )
 
-    # Variable earnings so far this month (hourly + hourly_with_cap)
-    variable_earnings = current_total - fixed_earnings_so_far
+    # Remaining business days in current month (from tomorrow onwards)
+    last_day_of_month = calendar.monthrange(today.year, today.month)[1]
+    remaining_biz_days = sum(
+        1 for d in range(today.day + 1, last_day_of_month + 1)
+        if datetime(today.year, today.month, d).weekday() < 5
+    )
+
+    # Handle hourly_with_cap projects with last_billed_date separately.
+    # Their unbilled hours span from last_billed_date+1 to today, crossing month boundaries.
+    projects_map = get_projects()
+    lbd_current_earnings = 0.0
+    lbd_projected_earnings = 0.0
+
+    from carryover import get_balance, get_previous_month_str as _prev_month_str
+    _prev_ym, _ = _prev_month_str()
+
+    for proj_name, defn in projects_config.items():
+        if defn.get('billing_type') != 'hourly_with_cap' or not defn.get('last_billed_date'):
+            continue
+        try:
+            last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
+        except ValueError:
+            continue
+
+        unbilled_entries = get_entries_since_date(last_billed + timedelta(days=1))
+        hours_by_day = defaultdict(float)
+        for e in unbilled_entries:
+            if (projects_map.get(str(e.get('project_id')), {}).get('name') == proj_name
+                    and e.get('duration', 0) > 0):
+                entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+                hours_by_day[entry_date] += e['duration'] / 3600
+
+        unbilled_hours = sum(hours_by_day.values())
+        worked_days_in_period = len(hours_by_day)
+        cap_hours = defn.get('cap_hours', 0)
+        hourly_rate = defn.get('hourly_rate', 0)
+
+        lbd_current_earnings += min(unbilled_hours, cap_hours) * hourly_rate
+
+        if worked_days_in_period > 0:
+            daily_avg = unbilled_hours / worked_days_in_period
+            projected_unbilled = unbilled_hours + daily_avg * remaining_biz_days
+        else:
+            projected_unbilled = unbilled_hours
+
+        lbd_projected_earnings += min(projected_unbilled, cap_hours) * hourly_rate
+
+    # Variable earnings so far this month (hourly + hourly_with_cap), excluding lbd projects
+    variable_earnings = current_total - fixed_earnings_so_far - lbd_current_earnings
 
     # Business days and workable days
     total_business_days = calculate_business_days(today.year, today.month)
@@ -624,7 +741,7 @@ def calculate_monthly_projection():
     worked_days = get_worked_days_this_month()
     worked_days_count = len(worked_days)
 
-    # Project variable earnings by pace, add guaranteed fixed income
+    # Project generic variable earnings by pace
     if worked_days_count > 0:
         daily_variable_avg = variable_earnings / worked_days_count
         projected_variable = daily_variable_avg * workable_days
@@ -632,20 +749,27 @@ def calculate_monthly_projection():
         daily_variable_avg = 0
         projected_variable = 0
 
-    # Cap the projected variable earnings for hourly_with_cap projects.
-    # If every variable project has a cap, the projection can't exceed the sum of those caps.
-    from carryover import get_balance, get_previous_month_str as _prev_month_str
-    _prev_ym, _ = _prev_month_str()
+    # Add lbd projected earnings to variable total
+    projected_variable += lbd_projected_earnings
+
+    # Cap the projected variable earnings for non-lbd hourly_with_cap projects.
     capped_ceiling = 0.0
     has_uncapped_hourly = False
     for proj_name, defn in projects_config.items():
         bt = defn.get('billing_type', 'hourly')
         if bt == 'hourly_with_cap':
+            if defn.get('last_billed_date'):
+                continue  # already handled above
             prev_carryover = get_balance(proj_name, _prev_ym)
             effective_cap = max(0.0, defn.get('cap_hours', 0) - max(0.0, prev_carryover))
             capped_ceiling += effective_cap * defn.get('hourly_rate', 0)
         elif bt == 'hourly':
             has_uncapped_hourly = True
+
+    # Add lbd ceilings to capped_ceiling for the overall cap check
+    for proj_name, defn in projects_config.items():
+        if defn.get('billing_type') == 'hourly_with_cap' and defn.get('last_billed_date'):
+            capped_ceiling += defn.get('cap_hours', 0) * defn.get('hourly_rate', 0)
 
     is_projection_capped = (
         not has_uncapped_hourly
