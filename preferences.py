@@ -19,6 +19,7 @@ DEFAULT_PREFERENCES = {
     "vacation_days_per_month": 4,  # Vacation/PTO days to exclude from projection
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
+    "projects": {},  # Project definitions by name: see docs/SOT.md for schema
 }
 
 
@@ -166,6 +167,56 @@ def validate_preferences(prefs):
                     errors.append(
                         f"'retainer_hourly_rates.{project_name}': must be greater than 0 (got {rate})"
                     )
+
+    # Optional field: projects
+    if 'projects' in prefs:
+        projects = prefs['projects']
+
+        if not isinstance(projects, dict):
+            errors.append("'projects': must be an object/dictionary")
+        else:
+            valid_billing_types = {'hourly', 'hourly_with_cap', 'fixed_monthly'}
+            valid_hour_tracking = {'required', 'soft', 'none'}
+
+            for project_name, defn in projects.items():
+                prefix = f"'projects.{project_name}'"
+
+                if not isinstance(defn, dict):
+                    errors.append(f"{prefix}: must be an object")
+                    continue
+
+                billing_type = defn.get('billing_type')
+                if billing_type not in valid_billing_types:
+                    errors.append(
+                        f"{prefix}: 'billing_type' must be one of {sorted(valid_billing_types)}, got {billing_type!r}"
+                    )
+                    continue
+
+                if billing_type == 'hourly_with_cap':
+                    hourly_rate = defn.get('hourly_rate')
+                    cap_hours = defn.get('cap_hours')
+                    if not isinstance(hourly_rate, (int, float)) or hourly_rate <= 0:
+                        errors.append(f"{prefix}: 'hourly_rate' must be a positive number")
+                    if not isinstance(cap_hours, (int, float)) or cap_hours <= 0:
+                        errors.append(f"{prefix}: 'cap_hours' must be a positive number")
+
+                elif billing_type == 'fixed_monthly':
+                    monthly_amount = defn.get('monthly_amount')
+                    if not isinstance(monthly_amount, (int, float)) or monthly_amount <= 0:
+                        errors.append(f"{prefix}: 'monthly_amount' must be a positive number")
+
+                    hour_tracking = defn.get('hour_tracking', 'none')
+                    if hour_tracking not in valid_hour_tracking:
+                        errors.append(
+                            f"{prefix}: 'hour_tracking' must be one of {sorted(valid_hour_tracking)}, got {hour_tracking!r}"
+                        )
+
+                    if hour_tracking in ('required', 'soft'):
+                        target_hours = defn.get('target_hours')
+                        if not isinstance(target_hours, (int, float)) or target_hours <= 0:
+                            errors.append(
+                                f"{prefix}: 'target_hours' must be a positive number when hour_tracking is '{hour_tracking}'"
+                            )
 
     return errors
 

@@ -182,6 +182,151 @@ class TestPreferencesValidation:
         assert "retainer_hourly_rates.Client A Retainer" in errors[0]
         assert "must be greater than 0" in errors[0]
 
+    # --- projects key tests ---
+
+    def test_projects_valid_hourly_with_cap(self):
+        """Valid hourly_with_cap project should pass."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {"billing_type": "hourly_with_cap", "hourly_rate": 150.0, "cap_hours": 20}
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_projects_valid_fixed_monthly_required(self):
+        """Valid fixed_monthly/required project should pass."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Hooli": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 1500,
+                "hour_tracking": "required",
+                "target_hours": 10,
+            }
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_projects_valid_fixed_monthly_soft(self):
+        """Valid fixed_monthly/soft project should pass."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Randonautica Retainer": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 3000,
+                "hour_tracking": "soft",
+                "target_hours": 30,
+            }
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_projects_valid_fixed_monthly_none(self):
+        """Valid fixed_monthly/none project should pass (no target_hours needed)."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Stark Industries": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 4000,
+                "hour_tracking": "none",
+            }
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_projects_invalid_billing_type(self):
+        """Unknown billing_type should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {"Client A": {"billing_type": "magic"}}
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "billing_type" in errors[0]
+
+    def test_projects_hourly_with_cap_missing_cap_hours(self):
+        """hourly_with_cap without cap_hours should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {"billing_type": "hourly_with_cap", "hourly_rate": 150.0}
+        }
+        errors = validate_preferences(prefs)
+        assert any("cap_hours" in e for e in errors)
+
+    def test_projects_fixed_monthly_required_missing_target_hours(self):
+        """fixed_monthly/required without target_hours should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 2000,
+                "hour_tracking": "required",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("target_hours" in e for e in errors)
+
+    def test_projects_fixed_monthly_none_no_target_hours_ok(self):
+        """fixed_monthly/none without target_hours is valid."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 2000,
+                "hour_tracking": "none",
+            }
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_projects_not_dict_rejected(self):
+        """projects as a list should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = ["not", "a", "dict"]
+        errors = validate_preferences(prefs)
+        assert any("projects" in e for e in errors)
+
+    def test_projects_hourly_with_cap_missing_hourly_rate(self):
+        """hourly_with_cap without hourly_rate should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {"billing_type": "hourly_with_cap", "cap_hours": 20}
+        }
+        errors = validate_preferences(prefs)
+        assert any("hourly_rate" in e for e in errors)
+
+    def test_projects_fixed_monthly_soft_missing_target_hours(self):
+        """fixed_monthly/soft without target_hours should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 3000,
+                "hour_tracking": "soft",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("target_hours" in e for e in errors)
+
+    def test_projects_fixed_monthly_zero_amount_rejected(self):
+        """fixed_monthly with monthly_amount of 0 should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": 0,
+                "hour_tracking": "none",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("monthly_amount" in e for e in errors)
+
+    def test_projects_fixed_monthly_negative_amount_rejected(self):
+        """fixed_monthly with negative monthly_amount should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['projects'] = {
+            "Client A": {
+                "billing_type": "fixed_monthly",
+                "monthly_amount": -500,
+                "hour_tracking": "none",
+            }
+        }
+        errors = validate_preferences(prefs)
+        assert any("monthly_amount" in e for e in errors)
+
     def test_all_required_fields_present(self):
         """Verify all 3 required fields are checked."""
         required = [
