@@ -33,6 +33,12 @@ def get_balance(project_name, year_month):
     return data.get(project_name, {}).get(year_month, 0.0)
 
 
+def has_balance(project_name, year_month):
+    """Return True if a balance has been explicitly stored (distinguishes stored 0.0 from unset)."""
+    data = load_carryover()
+    return project_name in data and year_month in data[project_name]
+
+
 def set_balance(project_name, year_month, hours):
     """Store carryover balance for a project in a given month."""
     data = load_carryover()

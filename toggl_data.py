@@ -10,7 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from preferences import CACHE_DIR, load_preferences
 from api_audit import log_api_request, is_currently_rate_limited
-from carryover import get_balance, set_balance, get_previous_month_str
+from carryover import get_balance, has_balance, set_balance, get_previous_month_str
 
 load_dotenv()
 
@@ -270,21 +270,19 @@ def get_effective_project_rate(project_info, retainer_hourly_rates, projects_con
     Resolve the effective rate source for a project.
 
     Priority:
-    1) Toggl billable + Toggl project rate → (rate, "toggl")
-    2) projects_config: hourly_with_cap → (hourly_rate, "hourly_with_cap")
-    3) projects_config: fixed_monthly required/soft → (monthly/target, "fixed_monthly")
-    4) projects_config: fixed_monthly none → (None, "fixed_monthly_flat")
+    1) projects_config: hourly_with_cap → (hourly_rate, "hourly_with_cap")  [cap must apply]
+    2) projects_config: fixed_monthly required/soft → (monthly/target, "fixed_monthly")
+    3) projects_config: fixed_monthly none → (None, "fixed_monthly_flat")
+    4) Toggl billable + Toggl project rate → (rate, "toggl")  [also used for billing_type "hourly"]
     5) Legacy retainer_hourly_rates → (rate, "retainer")
     6) No rate → (None, None)
+
+    Note: projects_config takes priority over Toggl for non-hourly billing types so that
+    hourly_with_cap cap logic and fixed_monthly flat amounts are always applied correctly,
+    regardless of whether the Toggl project also has a billable rate configured.
     """
     if projects_config is None:
         projects_config = {}
-
-    toggl_rate = project_info.get("rate")
-    toggl_billable = project_info.get("billable")
-
-    if toggl_billable and toggl_rate:
-        return toggl_rate, "toggl"
 
     project_name = project_info.get("name")
     if not project_name:
@@ -306,6 +304,12 @@ def get_effective_project_rate(project_info, retainer_hourly_rates, projects_con
                     return monthly_amount / target_hours, "fixed_monthly"
             else:
                 return None, "fixed_monthly_flat"
+        # billing_type == 'hourly': fall through to Toggl rate below
+
+    toggl_rate = project_info.get("rate")
+    toggl_billable = project_info.get("billable")
+    if toggl_billable and toggl_rate:
+        return toggl_rate, "toggl"
 
     retainer_rate = retainer_hourly_rates.get(project_name)
     if isinstance(retainer_rate, (int, float)) and retainer_rate > 0:
@@ -466,8 +470,8 @@ def _try_calculate_last_month_carryover(projects_config):
         if not needs_carryover:
             continue
 
-        # Skip if already calculated
-        if get_balance(project_name, prev_month_str) != 0.0:
+        # Skip if already calculated (has_balance distinguishes stored 0.0 from unset)
+        if has_balance(project_name, prev_month_str):
             continue
 
         # Reconstruct last month's entries from individual daily cache files.
