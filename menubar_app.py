@@ -168,7 +168,6 @@ class FreelanceTrackerApp(rumps.App):
 
                             # Determine if this project has a carryover-adjusted target
                             carryover_balance = 0.0
-                            carryover_label = ""
                             if (billing_type == 'fixed_monthly' and hour_tracking == 'required') or \
                                billing_type == 'hourly_with_cap':
                                 carryover_balance, prev_month_label = get_previous_month_balance(name)

@@ -238,7 +238,7 @@ class PreferencesWindowController:
 
         help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 504, 540, 16))
         help_text.setStringValue_(
-            "fixed/required: hours carry over monthly  ·  fixed/soft: soft target only  ·  fixed/none: freeform amount"
+            "Fixed + required hours: carry over monthly  ·  Fixed + soft target: display only  ·  Fixed flat: freeform amount"
         )
         help_text.setBezeled_(False)
         help_text.setDrawsBackground_(False)
@@ -261,10 +261,13 @@ class PreferencesWindowController:
         ROW_STRIDE = 58     # vertical distance between rows
         EXTRA_OFFSET = 28   # extra fields are this far below popup y
 
+        from carryover import get_balance, get_previous_month_str as _prev_month_str
+
         projects_config = self.current_prefs.get('projects', {})
         proj_list = list(projects_config.items())
         toggl_names = self._get_toggl_project_names()
         type_labels = [opt[0] for opt in self.BILLING_TYPE_OPTIONS]
+        _ym, _ml = _prev_month_str()
 
         def make_plain_field(x, yy, w, value):
             """Plain text field (no formatter) so cmd+backspace works."""
@@ -353,8 +356,6 @@ class PreferencesWindowController:
             self.widgets[f'pd_cap_{i}'] = f_cap
 
             # Carryover h (hourly_with_cap and fixed/required — editable override for prev month)
-            from carryover import get_balance, get_previous_month_str as _prev_month_str
-            _ym, _ml = _prev_month_str()
             carry_val = get_balance(proj_name, _ym) if proj_name else 0.0
             lbl_carry = make_field_label(355, extra_y, 88, f"{_ml} carryover h")
             f_carry = make_plain_field(446, extra_y, 94, carry_val)
@@ -492,6 +493,16 @@ class PreferencesWindowController:
                 self.widgets[f'project_hours_{i}'].setIntValue_(0)
 
         # Load project definitions
+        from carryover import get_balance, get_previous_month_str as _prev_month_str
+        _ym, _ml = _prev_month_str()
+
+        def _fmt(v):
+            v = float(v or 0)
+            return (str(int(v)) if v == int(v) else str(v)) if v else ""
+
+        def _fmt_carry(v):
+            return (str(int(v)) if v == int(v) else str(v)) if v else ""
+
         projects_config = self.current_prefs.get('projects', {})
         proj_list = list(projects_config.items())
 
@@ -504,9 +515,6 @@ class PreferencesWindowController:
                     name_popup.insertItemWithTitle_atIndex_(name, 1)
                 name_popup.selectItemWithTitle_(name)
                 self.widgets[f'pd_type_{i}'].selectItemWithTitle_(self._defn_to_type_label(defn))
-                def _fmt(v):
-                    v = float(v or 0)
-                    return (str(int(v)) if v == int(v) else str(v)) if v else ""
                 self.widgets[f'pd_monthly_{i}'].setStringValue_(_fmt(defn.get('monthly_amount')))
                 self.widgets[f'pd_target_{i}'].setStringValue_(_fmt(defn.get('target_hours')))
                 self.widgets[f'pd_cap_{i}'].setStringValue_(_fmt(defn.get('cap_hours')))
@@ -520,13 +528,9 @@ class PreferencesWindowController:
                 self.widgets[f'pd_cap_{i}'].setStringValue_("")
                 self.widgets[f'pd_rate_{i}'].setStringValue_("")
 
-            # Carryover: load from carryover store (refresh month label + value)
-            from carryover import get_balance, get_previous_month_str as _prev_month_str
-            _ym, _ml = _prev_month_str()
+            # Carryover: refresh month label + value from carryover store
             carry_val = get_balance(name, _ym) if name else 0.0
             self.widgets[f'pd_lbl_carryover_{i}'].setStringValue_(f"{_ml} carryover h")
-            def _fmt_carry(v):
-                return (str(int(v)) if v == int(v) else str(v)) if v else ""
             self.widgets[f'pd_carryover_{i}'].setStringValue_(_fmt_carry(carry_val))
             self._update_project_row_visibility(i)
 
@@ -541,6 +545,15 @@ class PreferencesWindowController:
                 project_targets[name] = hours
 
         # Build projects dict from project definition rows
+        from carryover import set_balance, get_previous_month_str as _prev_month_str
+        _ym, _ = _prev_month_str()
+
+        def _read_float(key):
+            try:
+                return float(self.widgets[key].stringValue() or 0)
+            except (ValueError, TypeError):
+                return 0.0
+
         projects_config = {}
         for i in range(self.PROJECT_DEFINITION_ROWS):
             name = self.widgets[f'pd_name_{i}'].titleOfSelectedItem()
@@ -549,12 +562,6 @@ class PreferencesWindowController:
             type_label = self.widgets[f'pd_type_{i}'].titleOfSelectedItem()
             billing_type, hour_tracking = self._type_label_to_defn_fields(type_label)
             defn = {'billing_type': billing_type}
-
-            def _read_float(key):
-                try:
-                    return float(self.widgets[key].stringValue() or 0)
-                except (ValueError, TypeError):
-                    return 0.0
 
             if billing_type == 'hourly_with_cap':
                 defn['hourly_rate'] = _read_float(f'pd_rate_{i}')
@@ -567,17 +574,16 @@ class PreferencesWindowController:
             # billing_type == 'hourly': no extra fields needed
             projects_config[name] = defn
 
-            # Write carryover override if field is visible and has a value
+            # Write carryover override only if the field has content (empty = leave existing value)
             needs_carryover = billing_type == 'hourly_with_cap' or \
                               (billing_type == 'fixed_monthly' and hour_tracking == 'required')
             if needs_carryover:
-                from carryover import set_balance, get_previous_month_str as _prev_month_str
-                _ym, _ = _prev_month_str()
                 carry_str = self.widgets[f'pd_carryover_{i}'].stringValue().strip()
-                try:
-                    set_balance(name, _ym, float(carry_str) if carry_str else 0.0)
-                except ValueError:
-                    pass
+                if carry_str:  # non-empty means user explicitly set a value (including "0")
+                    try:
+                        set_balance(name, _ym, float(carry_str))
+                    except ValueError:
+                        pass
 
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
