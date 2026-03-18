@@ -267,24 +267,25 @@ def get_entries_with_cache(period):
 
 def get_entries_since_date(start_date):
     """
-    Collect cached time entries from start_date to today (inclusive).
-    Reads existing daily cache files — no new API calls.
+    Get time entries from start_date to today (inclusive).
+    Uses a dedicated range cache; falls back to an API call if missing.
     Used for last_billed_date unbilled hour calculations.
     """
     today = datetime.now().date()
-    all_entries = []
-    current = start_date
-    while current <= today:
-        cache_file = CACHE_DIR / f"daily_{current.isoformat()}.json"
-        if cache_file.exists():
-            try:
-                with open(cache_file) as f:
-                    data = json.load(f)
-                    all_entries.extend(data.get('entries', []))
-            except Exception:
-                pass
-        current += timedelta(days=1)
-    return all_entries
+    start_dt = datetime.combine(start_date, datetime.min.time()).astimezone()
+    end_dt = datetime.combine(today, datetime.max.time()).astimezone()
+
+    # Try range cache (invalidated daily since end_date changes)
+    cache_key = f"lbd_{start_date.isoformat()}_to_{today.isoformat()}"
+    cached = get_cached_entries(cache_key, start_dt, end_dt)
+    if cached is not None:
+        log_api_request("/me/time_entries", "GET", cached=True)
+        return cached
+
+    # Fetch from API (single call for the whole range)
+    entries = get_time_entries(start_dt, end_dt)
+    cache_entries(cache_key, entries, start_dt, end_dt)
+    return entries
 
 
 def get_effective_project_rate(project_info, retainer_hourly_rates, projects_config=None):
