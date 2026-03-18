@@ -54,10 +54,10 @@ Every project can have an optional definition in the `projects` preference key. 
 - Under cap: bill actual hours worked (no penalty)
 - Over cap: overflow hours carry forward as a credit to next month, reducing available cap
 - Projection: `min(pace_projected_hours, cap_hours) × rate` — projection line notes "(capped at $X)" when clamped
-- Carryover displayed in monthly progress bar
-- Optional `last_billed_date` (YYYY-MM-DD): when set, unbilled hours are counted from that date + 1 day through today, crossing month boundaries. Replaces carryover-based tracking for projects with non-calendar billing cycles.
-  - Monthly display: unbilled hours / cap_hours
-  - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_march_biz_days, cap_hours) × rate`
+- Monthly progress bar (without `last_billed_date`): numerator = current month hours, denominator = `cap_hours - carryover` (carryover adjusts the denominator)
+- Optional `last_billed_date` (YYYY-MM-DD): when set, unbilled hours are counted from that date + 1 day through today, crossing month boundaries. Replaces carryover-based tracking for projects with non-calendar billing cycles. Fetches the full date range from the Toggl API (1 call, cached daily).
+  - Monthly progress bar: numerator = all unbilled hours since last_billed_date, denominator = raw `cap_hours` (no carryover adjustment)
+  - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_biz_days, cap_hours) × rate`
   - Carryover store is cleared when last_billed_date is saved; manual carryover field hidden in UI
 
 **`fixed_monthly`**
