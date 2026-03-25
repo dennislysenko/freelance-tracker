@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Freelance Tracker — Your revenue, always visible</title>
 <meta name="description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar. Open source, powered by Toggl.">
+<meta property="og:title" content="Freelance Tracker — Your revenue, always visible.">
+<meta property="og:description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar.">
+<meta property="og:image" content="https://dennislysenko.github.io/freelance-tracker/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Freelance Tracker — Your revenue, always visible.">
+<meta name="twitter:description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar.">
+<meta name="twitter:image" content="https://dennislysenko.github.io/freelance-tracker/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -26,6 +34,20 @@
     --serif: 'DM Serif Display', Georgia, serif;
     --sans: 'Outfit', -apple-system, sans-serif;
     --mono: 'JetBrains Mono', 'SF Mono', monospace;
+  }
+
+  :root.light {
+    --bg: #f5f5f7;
+    --bg-elevated: #ffffff;
+    --bg-card: #ffffff;
+    --border: #d8d8de;
+    --border-subtle: #e8e8ec;
+    --text: #1a1a1f;
+    --text-secondary: #5a5a6a;
+    --text-tertiary: #8a8a9a;
+    --accent: #0d9668;
+    --accent-dim: #0d9668;
+    --accent-glow: rgba(13, 150, 104, 0.06);
   }
 
   html { scroll-behavior: smooth; }
@@ -55,6 +77,24 @@
     color: var(--bg);
   }
 
+  :root.light body::before { opacity: 0; }
+
+  /* ── Theme toggle ── */
+  .theme-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
+    transition: color 0.2s, border-color 0.2s;
+    display: flex;
+    align-items: center;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--text-tertiary); }
+
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
@@ -79,6 +119,11 @@
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--border-subtle);
+    transition: background 0.3s;
+  }
+
+  :root.light nav {
+    background: rgba(245, 245, 247, 0.85);
   }
 
   nav .container {
@@ -743,6 +788,7 @@
           GitHub
         </a>
       </li>
+      <li><button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">&#9789;</button></li>
     </ul>
   </div>
 </nav>
@@ -937,6 +983,24 @@
 </footer>
 
 <script>
+function toggleTheme() {
+  const root = document.documentElement;
+  const btn = document.getElementById('themeBtn');
+  root.classList.toggle('light');
+  const isLight = root.classList.contains('light');
+  btn.innerHTML = isLight ? '&#9790;' : '&#9789;';
+  localStorage.setItem('theme', isLight ? 'light' : 'dark');
+}
+
+// Apply saved theme
+(function() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light') {
+    document.documentElement.classList.add('light');
+    document.getElementById('themeBtn').innerHTML = '&#9790;';
+  }
+})();
+
 function copyInstall(btn) {
   const cmd = 'curl -fsSL https://raw.githubusercontent.com/dennislysenko/freelance-tracker/main/install.sh | bash';
   navigator.clipboard.writeText(cmd).then(() => {
