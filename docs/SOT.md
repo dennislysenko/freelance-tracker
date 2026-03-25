@@ -64,7 +64,7 @@ Every project can have an optional definition in the `projects` preference key. 
 - Guaranteed monthly amount regardless of hours worked
 - Three hour-tracking modes:
   - `hour_tracking: required` — expected hours per month; over/under rolls forward as carryover balance
-  - `hour_tracking: soft` — display-only target; effective hourly rate = `monthly_amount / target_hours`; no carryover
+  - `hour_tracking: soft` — display-only target; effective hourly rate = `monthly_amount / target_hours`; no carryover. Monthly earnings capped at `monthly_amount`. Daily/weekly show $0 for hours beyond `target_hours` (checked against monthly total).
   - `hour_tracking: none` — freeform; no hour tracking
 - Effective hourly rate for daily/weekly display: `monthly_amount / target_hours` (required/soft), or `monthly_amount / working_days` per day (none)
 - These projects are assumed to not have a billable rate configured in Toggl
