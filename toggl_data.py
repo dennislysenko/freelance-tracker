@@ -288,6 +288,16 @@ def get_entries_since_date(start_date):
     return entries
 
 
+def _get_monthly_project_hours(project_id, projects_map, entries_cache=None):
+    """Get total hours for a project in the current month (from cache, no API calls)."""
+    monthly_entries = get_entries_with_cache("monthly")
+    total = 0.0
+    for e in monthly_entries:
+        if str(e.get("project_id")) == str(project_id) and e.get("duration", 0) > 0:
+            total += e["duration"] / 3600
+    return total
+
+
 def get_effective_project_rate(project_info, retainer_hourly_rates, projects_config=None):
     """
     Resolve the effective rate source for a project.
@@ -431,7 +441,22 @@ def calculate_period_earnings(period):
                 fixed_earnings += earnings
 
             elif rate_source == "fixed_monthly":
-                earnings = hours * effective_rate
+                hour_tracking = proj_def.get('hour_tracking', 'none')
+                if hour_tracking == 'soft':
+                    target_hours = proj_def.get('target_hours', 0)
+                    monthly_amount = proj_def.get('monthly_amount', 0)
+                    if period == 'monthly':
+                        # Cap at the fixed monthly amount
+                        earnings = min(hours * effective_rate, monthly_amount)
+                    else:
+                        # Daily/weekly: $0 once monthly target is reached
+                        monthly_project_hours = _get_monthly_project_hours(
+                            project_id, projects_map, entries_cache=None
+                        )
+                        remaining = max(0, target_hours - (monthly_project_hours - hours))
+                        earnings = min(hours, remaining) * effective_rate
+                else:
+                    earnings = hours * effective_rate
                 fixed_earnings += earnings
 
             elif rate_source == "hourly_with_cap" and period == "monthly":
