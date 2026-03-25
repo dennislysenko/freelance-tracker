@@ -7,12 +7,12 @@
 <meta name="description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar. Open source, powered by Toggl.">
 <meta property="og:title" content="Freelance Tracker — Your revenue, always visible.">
 <meta property="og:description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar.">
-<meta property="og:image" content="https://dennislysenko.github.io/freelance-tracker/og.png">
+<meta property="og:image" content="https://freelance-tracker-landing.vercel.app/og.png">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Freelance Tracker — Your revenue, always visible.">
 <meta name="twitter:description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar.">
-<meta name="twitter:image" content="https://dennislysenko.github.io/freelance-tracker/og.png">
+<meta name="twitter:image" content="https://freelance-tracker-landing.vercel.app/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -637,6 +637,131 @@
     text-decoration: none;
   }
 
+  /* ── Project types ── */
+  .project-types {
+    padding: 100px 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .project-types-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    text-align: center;
+    margin-bottom: 16px;
+  }
+
+  .project-types-heading {
+    font-family: var(--sans);
+    font-size: clamp(18px, 2.5vw, 22px);
+    text-align: center;
+    margin-bottom: 48px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .type-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 32px;
+  }
+
+  .type-tab {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 18px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .type-tab:hover { border-color: var(--text-tertiary); color: var(--text); }
+  .type-tab.active { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+
+  .type-panel {
+    display: none;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  .type-panel.active { display: block; }
+
+  .type-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+  }
+
+  .type-card h3 {
+    font-family: var(--sans);
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .type-card .type-subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    font-weight: 300;
+    margin-bottom: 20px;
+  }
+
+  .type-details {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .type-detail-col h4 {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+
+  .type-detail-col ul {
+    list-style: none;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.8;
+    font-weight: 300;
+  }
+
+  .type-detail-col li::before {
+    content: '~';
+    color: var(--text-tertiary);
+    margin-right: 8px;
+    font-family: var(--mono);
+  }
+
+  .type-example {
+    margin-top: 20px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .type-example .money { color: var(--accent); font-weight: 500; }
+  .type-example .label { color: var(--text-secondary); }
+
+  @media (max-width: 680px) {
+    .type-tabs { flex-wrap: wrap; }
+    .type-details { grid-template-columns: 1fr; }
+  }
+
   /* ── Step visuals ── */
   .step-visual {
     width: 180px;
@@ -781,6 +906,7 @@
     <div class="nav-brand"><span>$</span> freelance-tracker</div>
     <ul class="nav-links">
       <li><a href="#features">Features</a></li>
+      <li><a href="#project-types">Project Types</a></li>
       <li><a href="#install">Install</a></li>
       <li>
         <a href="https://github.com/dennislysenko/freelance-tracker" class="nav-github">
@@ -855,16 +981,6 @@
   </div>
 </section>
 
-<!-- Reframe -->
-<section class="reframe">
-  <div class="container">
-    <p class="reframe-text">
-      Toggl tells you what you worked on.<br>
-      <strong>This tells you where you stand.</strong>
-    </p>
-  </div>
-</section>
-
 <!-- Features -->
 <section class="features" id="features">
   <div class="container">
@@ -906,6 +1022,191 @@
         </div>
         <h3>See your month shaping up</h3>
         <p>A running projection of your monthly revenue based on how you're actually working.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Reframe -->
+<section class="reframe">
+  <div class="container">
+    <p class="reframe-text">
+      Toggl tells you what you worked on.<br>
+      <strong>This tells you where you stand.</strong>
+    </p>
+  </div>
+</section>
+
+<!-- Project Types -->
+<section class="project-types" id="project-types">
+  <div class="container">
+    <div class="project-types-label">Billing Models</div>
+    <h2 class="project-types-heading">Works however you bill</h2>
+    <div class="type-tabs">
+      <button class="type-tab active" data-tab="hourly">Hourly</button>
+      <button class="type-tab" data-tab="hourly-cap">Hourly with Cap</button>
+      <button class="type-tab" data-tab="fixed-required">Fixed + Required Hours</button>
+      <button class="type-tab" data-tab="fixed-soft">Fixed + Soft Target</button>
+      <button class="type-tab" data-tab="fixed-flat">Fixed Flat</button>
+    </div>
+
+    <div class="type-panel active" data-panel="hourly">
+      <div class="type-card">
+        <h3>Hourly</h3>
+        <p class="type-subtitle">Uses your hourly rate from Toggl. This is the default if you don't configure a project.</p>
+        <div class="type-details">
+          <div class="type-detail-col">
+            <h4>Config</h4>
+            <ul>
+              <li>Rate pulled from Toggl project settings</li>
+              <li>No additional configuration needed</li>
+            </ul>
+          </div>
+          <div class="type-detail-col">
+            <h4>Display</h4>
+            <ul>
+              <li>Daily, weekly, monthly earnings</li>
+              <li>Hours and dollar amounts per project</li>
+              <li>Included in month projection</li>
+            </ul>
+          </div>
+        </div>
+        <div class="type-example">
+          <div><span class="label">Acme Corp</span> &mdash; hourly @ $125/hr</div>
+          <div style="margin-top:4px">Today: 3.5h = <span class="money">$437.50</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="type-panel" data-panel="hourly-cap">
+      <div class="type-card">
+        <h3>Hourly with Cap</h3>
+        <p class="type-subtitle">Billed hourly up to a maximum number of hours. Works in two modes depending on how your billing cycle works.</p>
+        <div class="type-details">
+          <div class="type-detail-col">
+            <h4>Monthly cycle (carryover)</h4>
+            <ul>
+              <li>Cap resets each calendar month</li>
+              <li>Over/under hours carry forward</li>
+              <li>Progress bar adjusts for carryover</li>
+            </ul>
+          </div>
+          <div class="type-detail-col">
+            <h4>Rolling cycle (last_billed_date)</h4>
+            <ul>
+              <li>Cap resets from your last invoice date</li>
+              <li>Hours counted since that date, not month start</li>
+              <li>Set <code>last_billed_date</code> after each invoice</li>
+            </ul>
+          </div>
+        </div>
+        <div class="type-details" style="margin-top:16px">
+          <div class="type-detail-col">
+            <h4>Config</h4>
+            <ul>
+              <li><code>hourly_rate</code> and <code>cap_hours</code></li>
+              <li>Optional <code>last_billed_date</code> for rolling cycles</li>
+            </ul>
+          </div>
+          <div class="type-detail-col">
+            <h4>Display</h4>
+            <ul>
+              <li>Progress bar: hours vs cap</li>
+              <li>Daily earnings show $0 past the cap</li>
+            </ul>
+          </div>
+        </div>
+        <div class="type-example">
+          <div><span class="label">Moonlight Labs</span> &mdash; 28.5h / 30.0h cap</div>
+          <div style="margin-top:4px">28.5h &times; $100/hr = <span class="money">$2,850</span> <span style="color:var(--text-tertiary)">(max $3,000/cycle)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="type-panel" data-panel="fixed-required">
+      <div class="type-card">
+        <h3>Fixed + Required Hours</h3>
+        <p class="type-subtitle">You get paid a fixed monthly amount for a specific number of hours. Over/under hours carry over to adjust next month's target.</p>
+        <div class="type-details">
+          <div class="type-detail-col">
+            <h4>Config</h4>
+            <ul>
+              <li><code>monthly_amount</code> and <code>target_hours</code></li>
+              <li>Effective rate = amount &divide; target</li>
+              <li>Carryover auto-calculated monthly</li>
+            </ul>
+          </div>
+          <div class="type-detail-col">
+            <h4>Display</h4>
+            <ul>
+              <li>Progress bar: hours vs adjusted target</li>
+              <li>Carryover from prior month</li>
+              <li>Fixed amount included in projection</li>
+            </ul>
+          </div>
+        </div>
+        <div class="type-example">
+          <div><span class="label">Startup X</span> &mdash; 18.0h / 20.0h target</div>
+          <div style="margin-top:4px">Fixed <span class="money">$4,000/mo</span> <span style="color:var(--text-tertiary)">&middot; +2.0h carryover from Feb</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="type-panel" data-panel="fixed-soft">
+      <div class="type-card">
+        <h3>Fixed + Soft Target</h3>
+        <p class="type-subtitle">Fixed monthly amount with a target hour guideline. No carryover &mdash; once you hit the target, daily earnings show $0 for additional hours.</p>
+        <div class="type-details">
+          <div class="type-detail-col">
+            <h4>Config</h4>
+            <ul>
+              <li><code>monthly_amount</code> and <code>target_hours</code></li>
+              <li>No carryover tracking</li>
+              <li>Effective rate = amount &divide; target</li>
+            </ul>
+          </div>
+          <div class="type-detail-col">
+            <h4>Display</h4>
+            <ul>
+              <li>Progress bar: hours vs target</li>
+              <li>Monthly earnings capped at amount</li>
+              <li>Daily shows $0 past target hours</li>
+            </ul>
+          </div>
+        </div>
+        <div class="type-example">
+          <div><span class="label">Agency Y</span> &mdash; 10.0h / 10.0h target</div>
+          <div style="margin-top:4px">Fixed <span class="money">$2,000/mo</span> <span style="color:var(--text-tertiary)">&middot; at target, today shows $0</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="type-panel" data-panel="fixed-flat">
+      <div class="type-card">
+        <h3>Fixed Flat</h3>
+        <p class="type-subtitle">A flat monthly payment with no hour tracking at all. Hours are logged in Toggl but don't affect earnings.</p>
+        <div class="type-details">
+          <div class="type-detail-col">
+            <h4>Config</h4>
+            <ul>
+              <li><code>monthly_amount</code> only</li>
+              <li>No target hours or carryover</li>
+              <li>Rate derived from hours worked</li>
+            </ul>
+          </div>
+          <div class="type-detail-col">
+            <h4>Display</h4>
+            <ul>
+              <li>Hours shown, no progress bar</li>
+              <li>Earnings based on effective rate</li>
+              <li>Fixed amount in projection</li>
+            </ul>
+          </div>
+        </div>
+        <div class="type-example">
+          <div><span class="label">Consulting Co</span> &mdash; flat monthly</div>
+          <div style="margin-top:4px">Fixed <span class="money">$3,000/mo</span> <span style="color:var(--text-tertiary)">&middot; 6.5h logged this month</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1032,6 +1333,16 @@ const observer = new IntersectionObserver((entries) => {
 }, { threshold: 0.3 });
 
 observer.observe(document.querySelector('.preview-window'));
+
+// Tab switching for project types
+document.querySelectorAll('.type-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.type-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.type-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelector(`[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+  });
+});
 </script>
 
 </body>
