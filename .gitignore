@@ -29,3 +29,4 @@ build/
 
 # macOS system files (contain personal data)
 Library/
+.vercel
