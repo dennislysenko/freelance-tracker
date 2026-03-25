@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Freelance Tracker — Your revenue, always visible</title>
+<meta name="description" content="Track retainers, caps, and projections at a glance — right in your macOS menu bar. Open source, powered by Toggl.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #08080a;
+    --bg-elevated: #111114;
+    --bg-card: #16161a;
+    --border: #222228;
+    --border-subtle: #1a1a1f;
+    --text: #e8e8ec;
+    --text-secondary: #8a8a9a;
+    --text-tertiary: #55555f;
+    --accent: #34d399;
+    --accent-dim: #1a7a52;
+    --accent-glow: rgba(52, 211, 153, 0.08);
+    --serif: 'DM Serif Display', Georgia, serif;
+    --sans: 'Outfit', -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', 'SF Mono', monospace;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-weight: 400;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* ── Noise texture overlay ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Layout ── */
+  .container {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  section { padding: 100px 0; }
+
+  /* ── Navigation ── */
+  nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    padding: 16px 0;
+    background: rgba(8, 8, 10, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  nav .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .nav-brand {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .nav-brand span { color: var(--accent); }
+
+  .nav-links {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+    list-style: none;
+  }
+
+  .nav-links a {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    transition: color 0.2s;
+  }
+
+  .nav-links a:hover {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .nav-github {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    vertical-align: middle;
+  }
+
+  .nav-github svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+    display: block;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    padding: 180px 0 100px;
+    position: relative;
+  }
+
+  /* Subtle radial glow behind hero */
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 400px;
+    background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-layout {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 48px;
+    align-items: center;
+  }
+
+  .hero-text {
+    text-align: left;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+    background: var(--bg-elevated);
+  }
+
+  .hero-badge-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .hero h1 {
+    font-family: var(--serif);
+    font-size: clamp(40px, 6vw, 64px);
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin-bottom: 24px;
+    position: relative;
+  }
+
+  .hero h1 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+
+  .hero-sub {
+    font-size: clamp(16px, 2vw, 19px);
+    color: var(--text-secondary);
+    max-width: 520px;
+    margin: 0 0 36px;
+    font-weight: 300;
+    line-height: 1.6;
+  }
+
+  /* ── Install block ── */
+  .install-block {
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  .install-box {
+    display: flex;
+    align-items: center;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 4px 4px 20px;
+    gap: 12px;
+    transition: border-color 0.2s;
+  }
+
+  .install-box:hover {
+    border-color: var(--accent-dim);
+  }
+
+  .install-box code {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow-x: auto;
+    flex: 1;
+    user-select: all;
+  }
+
+  .install-box code span { color: var(--accent); }
+
+  .copy-btn {
+    flex-shrink: 0;
+    padding: 10px 20px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 7px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.02em;
+  }
+
+  .copy-btn:hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+
+  .copy-btn:active {
+    transform: translateY(0);
+  }
+
+  .install-note {
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+  }
+
+  .install-note a { color: var(--text-secondary); }
+
+  /* ── Reframe section ── */
+  .reframe {
+    padding: 80px 0;
+    text-align: center;
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .reframe-text {
+    font-family: var(--sans);
+    font-size: clamp(16px, 2vw, 19px);
+    font-weight: 300;
+    line-height: 1.6;
+    max-width: 520px;
+    margin: 0 auto;
+    color: var(--text-secondary);
+  }
+
+  .reframe-text strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ── Menu bar preview ── */
+  .preview-window {
+    max-width: 380px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 12px;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.03),
+      0 20px 60px rgba(0,0,0,0.5),
+      0 0 120px var(--accent-glow);
+  }
+
+  .preview-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .preview-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+  }
+
+  .preview-dot:nth-child(1) { background: #ff5f57; }
+  .preview-dot:nth-child(2) { background: #febc2e; }
+  .preview-dot:nth-child(3) { background: #28c840; }
+
+  .preview-content {
+    padding: 16px;
+  }
+
+  .preview-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .preview-row.header {
+    color: var(--text);
+    font-weight: 500;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .preview-row .money { color: var(--accent); font-weight: 500; }
+
+  .preview-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 8px 0;
+  }
+
+  .preview-progress-label {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 6px;
+    margin-bottom: 4px;
+  }
+
+  .preview-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 4px;
+  }
+
+  .preview-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 1.5s ease-out;
+  }
+
+  .preview-bar-text {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    margin-bottom: 10px;
+  }
+
+  .preview-projection {
+    padding: 8px 0 4px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .preview-projection .money {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* ── Features ── */
+  .features {
+    padding: 100px 0;
+  }
+
+  .features-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    text-align: center;
+    margin-bottom: 16px;
+  }
+
+  .features-heading {
+    font-family: var(--sans);
+    font-size: clamp(18px, 2.5vw, 22px);
+    text-align: center;
+    margin-bottom: 64px;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--text-secondary);
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+
+  .feature-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 36px 32px;
+    transition: border-color 0.25s, transform 0.25s;
+  }
+
+  .feature-card:hover {
+    border-color: var(--accent-dim);
+    transform: translateY(-2px);
+  }
+
+  .feature-icon {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-glow);
+    border: 1px solid rgba(52, 211, 153, 0.15);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 16px;
+  }
+
+  .feature-card h3 {
+    font-family: var(--sans);
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    letter-spacing: -0.01em;
+  }
+
+  .feature-card p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    font-weight: 300;
+  }
+
+  /* ── How it works ── */
+  .how-it-works {
+    padding: 100px 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .how-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    text-align: center;
+    margin-bottom: 16px;
+  }
+
+  .how-heading {
+    font-family: var(--sans);
+    font-size: clamp(18px, 2.5vw, 22px);
+    text-align: center;
+    margin-bottom: 64px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .step {
+    text-align: center;
+  }
+
+  .step-number {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    margin-bottom: 16px;
+  }
+
+  .step-title {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+
+  .step-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 300;
+    line-height: 1.6;
+  }
+
+  /* ── CTA ── */
+  .cta {
+    padding: 100px 0;
+    text-align: center;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .cta h2 {
+    font-family: var(--sans);
+    font-size: clamp(22px, 3vw, 28px);
+    font-weight: 500;
+    margin-bottom: 16px;
+  }
+
+  .cta-sub {
+    font-size: 16px;
+    color: var(--text-secondary);
+    font-weight: 300;
+    margin-bottom: 40px;
+  }
+
+  /* ── Footer ── */
+  footer {
+    padding: 40px 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  footer .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .footer-left {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  .footer-left a { color: var(--text-secondary); }
+
+  .footer-right {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+  }
+
+  .footer-right a {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    transition: color 0.2s;
+  }
+
+  .footer-right a:hover {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  /* ── Step visuals ── */
+  .step-visual {
+    width: 180px;
+    margin: 16px auto 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-align: left;
+  }
+
+  .step-visual-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .step-visual-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+  }
+
+  .step-visual .sv-label { color: var(--text-secondary); }
+  .step-visual .sv-accent { color: var(--accent); }
+  .step-visual .sv-dim { color: var(--text-tertiary); }
+
+  .step-visual-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+    font-size: 9px;
+  }
+
+  .step-visual-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+
+  .step-visual select,
+  .step-visual-dropdown {
+    display: block;
+    width: 100%;
+    padding: 3px 6px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    font-size: 9px;
+    margin-top: 4px;
+  }
+
+  /* ── Feature card mini-previews ── */
+  .feature-preview {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 20px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+
+  .fp-menubar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-end;
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+  }
+
+  .fp-menubar-item { color: var(--text-tertiary); font-size: 10px; }
+  .fp-menubar-highlight { color: var(--accent); font-weight: 500; }
+
+  .fp-bar-label { font-size: 9px; margin-bottom: 3px; color: var(--text-secondary); }
+  .fp-bar { height: 5px; background: var(--border); border-radius: 3px; margin-bottom: 3px; }
+  .fp-bar-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+  .fp-bar-fill.warn { background: #f59e0b; }
+  .fp-bar-pct { font-size: 8px; text-align: right; }
+
+  .fp-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 9px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .fp-row:last-child { border-bottom: none; }
+  .fp-row .money { color: var(--accent); }
+
+  .fp-projection { font-size: 9px; padding-top: 4px; }
+  .fp-projection .money { color: var(--accent); font-weight: 500; }
+
+  /* ── Responsive ── */
+  @media (max-width: 1060px) {
+    .hero-layout {
+      grid-template-columns: 1fr;
+      gap: 48px;
+    }
+
+    .hero-text { text-align: center; }
+    .hero-sub { margin: 0 auto 36px; }
+    .hero-preview { display: flex; justify-content: center; }
+  }
+
+  @media (max-width: 680px) {
+    .features-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .steps {
+      grid-template-columns: 1fr;
+      gap: 40px;
+    }
+
+    .hero { padding: 140px 0 80px; }
+    section { padding: 64px 0; }
+    .nav-links { gap: 16px; }
+
+    footer .container {
+      flex-direction: column;
+      gap: 16px;
+      text-align: center;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+  <div class="container">
+    <div class="nav-brand"><span>$</span> freelance-tracker</div>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#install">Install</a></li>
+      <li>
+        <a href="https://github.com/dennislysenko/freelance-tracker" class="nav-github">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </li>
+    </ul>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-layout">
+      <div class="hero-text">
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span>
+          Open source &middot; macOS menu bar
+        </div>
+        <h1>Your freelance revenue,<br><em>always visible.</em></h1>
+        <p class="hero-sub">Track retainers, caps, and projections at a glance — right in your menu bar.</p>
+        <div class="install-block" id="install">
+          <div class="install-box">
+            <code><span>curl</span> -fsSL https://raw.githubusercontent.com/dennislysenko/freelance-tracker/main/install.sh | <span>bash</span></code>
+            <button class="copy-btn" onclick="copyInstall(this)">Copy</button>
+          </div>
+          <p class="install-note">Requires macOS, Python 3, Git &middot; <a href="https://github.com/dennislysenko/freelance-tracker">view source</a></p>
+        </div>
+      </div>
+      <div class="hero-preview">
+        <div class="preview-window">
+          <div class="preview-titlebar">
+            <div class="preview-dot"></div>
+            <div class="preview-dot"></div>
+            <div class="preview-dot"></div>
+          </div>
+          <div class="preview-content">
+            <div class="preview-row header">
+              <span>TODAY</span>
+              <span class="money">$425.00</span>
+            </div>
+            <div class="preview-row">
+              <span>Acme Corp</span>
+              <span class="money">$300 <span style="color:var(--text-tertiary)">(2.4h)</span></span>
+            </div>
+            <div class="preview-row">
+              <span>Moonlight Labs</span>
+              <span class="money">$125 <span style="color:var(--text-tertiary)">(1.0h)</span></span>
+            </div>
+            <div class="preview-divider"></div>
+            <div class="preview-row header">
+              <span>THIS MONTH</span>
+              <span class="money">$6,840.00</span>
+            </div>
+            <div class="preview-progress-label">Acme Corp Retainer: 28.5h / 30.0h (95%)</div>
+            <div class="preview-bar"><div class="preview-bar-fill" style="width: 95%"></div></div>
+            <div class="preview-bar-text">Almost there</div>
+            <div class="preview-progress-label">Moonlight Labs: 12.0h / 40.0h (30%)</div>
+            <div class="preview-bar"><div class="preview-bar-fill" style="width: 30%"></div></div>
+            <div class="preview-bar-text">On pace</div>
+            <div class="preview-projection">
+              <span>Month Projection:</span>
+              <span class="money">$9,200</span>
+              <span style="color:var(--text-tertiary)">&middot; 14/22 workable days</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Reframe -->
+<section class="reframe">
+  <div class="container">
+    <p class="reframe-text">
+      Toggl tells you what you worked on.<br>
+      <strong>This tells you where you stand.</strong>
+    </p>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="features" id="features">
+  <div class="container">
+    <div class="features-label">Features</div>
+    <h2 class="features-heading">Built for freelancers who<br>juggle multiple clients</h2>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-preview">
+          <div class="fp-menubar">
+            <span class="fp-menubar-item">9:41 AM</span>
+            <span class="fp-menubar-highlight">💰 $425</span>
+          </div>
+        </div>
+        <h3>Always in your menu bar</h3>
+        <p>Today's earnings are one glance away. No apps to open, no tabs to find.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-preview">
+          <div class="fp-bar-label">Acme Retainer: 28.5h / 30.0h</div>
+          <div class="fp-bar"><div class="fp-bar-fill warn" style="width:95%"></div></div>
+          <div class="fp-bar-pct">95%</div>
+        </div>
+        <h3>Know when you've hit the cap</h3>
+        <p>Progress bars track your hours against retainer targets. No surprises on the next invoice.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-preview">
+          <div class="fp-row"><span>Acme Corp</span><span class="money">$300</span></div>
+          <div class="fp-row"><span>Moonlight Labs</span><span class="money">$125</span></div>
+          <div class="fp-row"><span>Startup X</span><span class="money">$80</span></div>
+        </div>
+        <h3>See who needs attention</h3>
+        <p>All your projects in a single dropdown. Spot the client you've been neglecting this week.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-preview">
+          <div class="fp-projection">Month Projection: <span class="money">$9,200</span></div>
+          <div class="fp-projection" style="color:var(--text-tertiary)">14/22 workable days &middot; $460/day avg</div>
+        </div>
+        <h3>See your month shaping up</h3>
+        <p>A running projection of your monthly revenue based on how you're actually working.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- How it works -->
+<section class="how-it-works" id="how">
+  <div class="container">
+    <div class="how-label">Setup</div>
+    <h2 class="how-heading">Three minutes to clarity</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">01</div>
+        <div class="step-title">Connect Toggl</div>
+        <div class="step-desc">Paste your API token. That's your only credential.</div>
+        <div class="step-visual">
+          <div style="color:var(--text-secondary);margin-bottom:4px">~ $</div>
+          <div><span class="sv-accent">Toggl API Token:</span></div>
+          <div style="margin-top:2px">&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">02</div>
+        <div class="step-title">Define your projects</div>
+        <div class="step-desc">Set billing types — hourly, capped, or fixed retainer.</div>
+        <div class="step-visual">
+          <div class="step-visual-row"><span class="sv-label">Acme Corp</span></div>
+          <div class="step-visual-dropdown">Hourly with cap</div>
+          <div style="height:4px"></div>
+          <div class="step-visual-row"><span class="sv-label">Moonlight</span></div>
+          <div class="step-visual-dropdown">Fixed retainer</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">03</div>
+        <div class="step-title">Work as usual</div>
+        <div class="step-desc">Revenue appears in your menu bar, updating every 30 minutes.</div>
+        <div class="step-visual">
+          <div class="fp-menubar">
+            <span class="fp-menubar-item">Wi-Fi</span>
+            <span class="fp-menubar-item">3:42 PM</span>
+            <span class="fp-menubar-highlight">💰 $425</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+  <div class="container">
+    <h2>Start tracking in minutes</h2>
+    <p class="cta-sub">Free, open source, runs locally. Your data never leaves your machine.</p>
+    <div class="install-block">
+      <div class="install-box">
+        <code><span>curl</span> -fsSL https://raw.githubusercontent.com/dennislysenko/freelance-tracker/main/install.sh | <span>bash</span></code>
+        <button class="copy-btn" onclick="copyInstall(this)">Copy</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div class="footer-left">
+      Built with Python + <a href="https://github.com/jaredks/rumps">rumps</a>
+    </div>
+    <div class="footer-right">
+      <a href="https://github.com/dennislysenko/freelance-tracker">Source</a>
+      <a href="https://github.com/dennislysenko/freelance-tracker/issues">Issues</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+function copyInstall(btn) {
+  const cmd = 'curl -fsSL https://raw.githubusercontent.com/dennislysenko/freelance-tracker/main/install.sh | bash';
+  navigator.clipboard.writeText(cmd).then(() => {
+    btn.textContent = 'Copied';
+    btn.style.background = 'var(--accent-dim)';
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.style.background = '';
+    }, 2000);
+  });
+}
+
+// Animate progress bars on scroll
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.querySelectorAll('.preview-bar-fill').forEach(bar => {
+        const width = bar.style.width;
+        bar.style.width = '0%';
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            bar.style.width = width;
+          });
+        });
+      });
+      observer.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.3 });
+
+observer.observe(document.querySelector('.preview-window'));
+</script>
+
+</body>
+</html>
