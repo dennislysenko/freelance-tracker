@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1200px;
+    height: 630px;
+    background: #08080a;
+    color: #e8e8ec;
+    font-family: 'Outfit', sans-serif;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
+  body::before {
+    content: '';
+    position: absolute;
+    top: -100px;
+    left: 200px;
+    width: 600px;
+    height: 500px;
+    background: radial-gradient(ellipse, rgba(52,211,153,0.1) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .left {
+    flex: 1;
+    padding: 80px 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border: 1px solid #222228;
+    border-radius: 100px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: #8a8a9a;
+    background: #111114;
+    margin-bottom: 32px;
+    width: fit-content;
+  }
+  .badge-dot {
+    width: 7px;
+    height: 7px;
+    background: #34d399;
+    border-radius: 50%;
+  }
+  h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 56px;
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+  }
+  h1 em {
+    font-style: italic;
+    color: #34d399;
+  }
+  p {
+    font-size: 20px;
+    color: #8a8a9a;
+    font-weight: 300;
+    line-height: 1.5;
+    max-width: 440px;
+  }
+  .right {
+    width: 420px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-right: 40px;
+  }
+  .preview {
+    width: 360px;
+    background: #16161a;
+    border: 1px solid #222228;
+    border-radius: 12px;
+    overflow: hidden;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 120px rgba(52,211,153,0.06);
+  }
+  .titlebar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid #222228;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot:nth-child(1) { background: #ff5f57; }
+  .dot:nth-child(2) { background: #febc2e; }
+  .dot:nth-child(3) { background: #28c840; }
+  .content { padding: 14px; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; color: #8a8a9a; }
+  .row.header { color: #e8e8ec; font-weight: 500; padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid #1a1a1f; }
+  .money { color: #34d399; font-weight: 500; }
+  .divider { height: 1px; background: #1a1a1f; margin: 6px 0; }
+  .bar-label { font-size: 10px; color: #55555f; margin-top: 4px; margin-bottom: 3px; }
+  .bar { height: 5px; background: #222228; border-radius: 3px; margin-bottom: 6px; }
+  .bar-fill { height: 100%; border-radius: 3px; background: #34d399; }
+  .proj { font-size: 10px; color: #55555f; padding-top: 6px; border-top: 1px solid #1a1a1f; }
+  .proj .money { font-size: 10px; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="badge"><span class="badge-dot"></span> Open source &middot; macOS menu bar</div>
+    <h1>Your freelance revenue,<br><em>always visible.</em></h1>
+    <p>Track retainers, caps, and projections at a glance — right in your menu bar.</p>
+  </div>
+  <div class="right">
+    <div class="preview">
+      <div class="titlebar">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      </div>
+      <div class="content">
+        <div class="row header"><span>TODAY</span><span class="money">$425.00</span></div>
+        <div class="row"><span>Acme Corp</span><span class="money">$300</span></div>
+        <div class="row"><span>Moonlight Labs</span><span class="money">$125</span></div>
+        <div class="divider"></div>
+        <div class="row header"><span>THIS MONTH</span><span class="money">$6,840</span></div>
+        <div class="bar-label">Acme Retainer: 28.5h / 30.0h (95%)</div>
+        <div class="bar"><div class="bar-fill" style="width:95%"></div></div>
+        <div class="bar-label">Moonlight Labs: 12.0h / 40.0h (30%)</div>
+        <div class="bar"><div class="bar-fill" style="width:30%"></div></div>
+        <div class="proj">Month Projection: <span class="money">$9,200</span> &middot; 14/22 days</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
