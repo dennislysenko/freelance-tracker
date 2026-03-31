@@ -198,6 +198,15 @@ class FreelanceTrackerApp(rumps.App):
                                     menu_items.append(
                                         f"       ↳ {sign}{carryover_balance:.1f}h carryover from {prev_month_label}"
                                     )
+                                # Show timesheet cutoff date for hourly_with_cap projects over cap
+                                cap_fill_date = project.get('cap_fill_date')
+                                if billing_type == 'hourly_with_cap' and cap_fill_date:
+                                    from datetime import datetime as _dt
+                                    fill_dt = _dt.strptime(cap_fill_date, '%Y-%m-%d')
+                                    fill_label = fill_dt.strftime('%b %-d')
+                                    menu_items.append(
+                                        f"       ↳ capped as of {fill_label}"
+                                    )
                             elif is_billable:
                                 menu_items.append(
                                     f"     {name}: {project['hours']:.1f}h (${project['earnings']:.0f})"

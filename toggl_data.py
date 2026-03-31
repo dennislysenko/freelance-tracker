@@ -288,6 +288,34 @@ def get_entries_since_date(start_date):
     return entries
 
 
+def _calculate_cap_fill_date(hours_by_day, cap_hours):
+    """
+    Walk through actual time entries chronologically and find the last date
+    where cumulative hours are at or just under the cap.
+    Returns a date string (YYYY-MM-DD) or None if under cap (all days fit).
+    Only meaningful when total hours exceed the cap.
+    """
+    if not hours_by_day or cap_hours <= 0:
+        return None
+    total = sum(hours_by_day.values())
+    if total <= cap_hours:
+        return None  # all hours fit within cap, no cutoff needed
+
+    # Walk through days in chronological order
+    cumulative = 0.0
+    last_date_under_cap = None
+    for day in sorted(hours_by_day.keys()):
+        if cumulative + hours_by_day[day] > cap_hours:
+            # This day would push us over — the previous day is the cutoff
+            return (last_date_under_cap or day).isoformat()
+        cumulative += hours_by_day[day]
+        last_date_under_cap = day
+        if cumulative == cap_hours:
+            return day.isoformat()
+
+    return None
+
+
 def _get_monthly_project_hours(project_id, projects_map, entries_cache=None):
     """Get total hours for a project in the current month (from cache, no API calls)."""
     monthly_entries = get_entries_with_cache("monthly")
@@ -375,18 +403,21 @@ def calculate_period_earnings(period):
                 except ValueError:
                     continue
                 unbilled_entries = get_entries_since_date(last_billed + timedelta(days=1))
-                unbilled_h = sum(
-                    e['duration'] / 3600
-                    for e in unbilled_entries
-                    if projects_map.get(str(e.get('project_id')), {}).get('name') == proj_name
-                    and e.get('duration', 0) > 0
-                )
+                hours_by_day = defaultdict(float)
+                for e in unbilled_entries:
+                    if (projects_map.get(str(e.get('project_id')), {}).get('name') == proj_name
+                            and e.get('duration', 0) > 0):
+                        entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+                        hours_by_day[entry_date] += e['duration'] / 3600
+                unbilled_h = sum(hours_by_day.values())
+                worked_days_count = len(hours_by_day)
                 cap_hours = defn.get('cap_hours', 0)
                 hourly_rate = defn.get('hourly_rate', 0)
                 lbd_results[proj_name] = {
                     'hours': unbilled_h,
                     'earnings': min(unbilled_h, cap_hours) * hourly_rate,
                     'rate': hourly_rate,
+                    'cap_fill_date': _calculate_cap_fill_date(hours_by_day, cap_hours),
                 }
 
     # Group entries by project
@@ -465,11 +496,19 @@ def calculate_period_earnings(period):
                     hours = lbd_results[project_name]['hours']
                     project_entry["hours"] = hours
                     earnings = lbd_results[project_name]['earnings']
+                    project_entry["cap_fill_date"] = lbd_results[project_name].get('cap_fill_date')
                 else:
                     prev_carryover = get_balance(project_name, prev_month_str)
                     # Positive carryover = over-delivered last month → reduces this month's cap
                     effective_cap = max(0, proj_def.get('cap_hours', 0) - max(0, prev_carryover))
                     earnings = min(hours, effective_cap) * effective_rate
+                    # Calculate cap fill date for calendar-month mode
+                    cal_hours_by_day = defaultdict(float)
+                    for e in data['entries']:
+                        if e.get('duration', 0) > 0 and e.get('start'):
+                            ed = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+                            cal_hours_by_day[ed] += e['duration'] / 3600
+                    project_entry["cap_fill_date"] = _calculate_cap_fill_date(cal_hours_by_day, effective_cap)
 
             else:
                 earnings = hours * effective_rate
@@ -489,6 +528,7 @@ def calculate_period_earnings(period):
                     'name': proj_name,
                     'hours': lbd['hours'],
                     'earnings': lbd['earnings'],
+                    'cap_fill_date': lbd.get('cap_fill_date'),
                     'billable': True,
                     'rate': lbd['rate'],
                     'rate_source': 'hourly_with_cap',
