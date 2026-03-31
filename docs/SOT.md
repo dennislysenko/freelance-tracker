@@ -59,6 +59,7 @@ Every project can have an optional definition in the `projects` preference key. 
   - Monthly progress bar: numerator = all unbilled hours since last_billed_date, denominator = raw `cap_hours` (no carryover adjustment)
   - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_biz_days, cap_hours) × rate`
   - Carryover store is cleared when last_billed_date is saved; manual carryover field hidden in UI
+- **Timesheet last day**: shown below the progress bar when over 100%. Walks through actual time entries chronologically and finds the last date where cumulative hours were at or just under the cap. Displayed as "↳ timesheet last day: Mar 15". Tells you what date to put on a timesheet as your last worked day to bill as close to 100% as possible without exceeding the cap. Works for both `last_billed_date` and calendar-month modes.
 
 **`fixed_monthly`**
 - Guaranteed monthly amount regardless of hours worked
