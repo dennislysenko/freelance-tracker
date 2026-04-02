@@ -5,6 +5,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 ## Features
 
 - 💰 **Live earnings display** in menu bar (daily, weekly, monthly)
+- 🪟 **Resilient dashboard startup** with automatic fallback to the classic dropdown if the rich WebKit panel is unavailable
 - 🔄 **Auto-refresh** every 30 minutes
 - 📈 **Month projection** based on pace, accounting for planned days off
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly

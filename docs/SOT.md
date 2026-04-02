@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-03-04
+**Last Updated:** 2026-04-02
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -17,6 +17,7 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 ### Real-Time Earnings Display
 - Menu bar icon showing daily total (e.g., "💰 $400")
 - Click to see detailed breakdown
+- Rich popover dashboard uses WebKit when available; if the WebKit bridge is missing, the app falls back to the classic dropdown menu instead of failing to launch
 - Auto-refresh every 30 minutes
 - Manual refresh available
 
