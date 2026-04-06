@@ -551,22 +551,72 @@ def calculate_period_earnings(period):
 
 def force_refresh_entries():
     """
-    Force refresh today's time entries, bypassing cache.
+    Force refresh the caches used by the current dashboard periods.
     Used for manual "Refresh Now" button.
+    Invalidates today's cache plus the current week/month historical ranges
+    so back-dated entries in the active dashboard periods show up on refresh.
     """
-    now = datetime.now().astimezone()
-    today = now.date()
-    start_date = datetime.combine(today, datetime.min.time()).astimezone()
-    end_date = datetime.combine(today, datetime.max.time()).astimezone()
+    for cache_file in _get_manual_refresh_cache_files():
+        cache_file.unlink(missing_ok=True)
 
-    # Fetch fresh data
-    entries = get_time_entries(start_date, end_date)
 
-    # Update cache
-    cache_key = f"daily_{today.isoformat()}"
-    cache_entries(cache_key, entries, start_date, end_date)
+def _get_manual_refresh_cache_files(today=None):
+    """Return the cache files that manual refresh should invalidate."""
+    if today is None:
+        today = datetime.now().astimezone().date()
 
-    return entries
+    yesterday = today - timedelta(days=1)
+    cache_files = [CACHE_DIR / f"daily_{today.isoformat()}.json"]
+
+    start_of_week = today - timedelta(days=today.weekday())
+    if start_of_week < today:
+        cache_files.append(
+            CACHE_DIR / f"weekly_{start_of_week.isoformat()}_to_{yesterday.isoformat()}.json"
+        )
+
+    start_of_month = today.replace(day=1)
+    if start_of_month < today:
+        cache_files.append(
+            CACHE_DIR / f"monthly_{start_of_month.isoformat()}_to_{yesterday.isoformat()}.json"
+        )
+
+    cache_files.extend(sorted(CACHE_DIR.glob(f"lbd_*_to_{today.isoformat()}.json")))
+    return cache_files
+
+
+def estimate_manual_refresh_entry_api_calls(today=None):
+    """
+    Estimate entry API calls triggered by manual refresh.
+    Counts today's refetch, current week/month historical refetches, and
+    one range refetch per valid hourly_with_cap project using last_billed_date.
+    """
+    if today is None:
+        today = datetime.now().astimezone().date()
+
+    calls = 1  # today's entries are always invalidated
+
+    start_of_week = today - timedelta(days=today.weekday())
+    if start_of_week < today:
+        calls += 1
+
+    start_of_month = today.replace(day=1)
+    if start_of_month < today:
+        calls += 1
+
+    projects_config = load_preferences().get('projects', {})
+    for defn in projects_config.values():
+        if defn.get('billing_type') != 'hourly_with_cap':
+            continue
+        last_billed_date = defn.get('last_billed_date')
+        if not last_billed_date:
+            continue
+        try:
+            datetime.strptime(last_billed_date, '%Y-%m-%d')
+        except ValueError:
+            continue
+        calls += 1
+
+    return calls
 
 
 def get_daily_earnings():

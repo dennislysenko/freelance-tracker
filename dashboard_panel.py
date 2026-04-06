@@ -9,7 +9,7 @@ from AppKit import (
     NSMakeRect, NSEvent, NSViewController, NSView, NSColor, NSAppearance,
 )
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
-from preferences import load_preferences
+from preferences import load_preferences, save_preferences, DEFAULT_PREFERENCES
 from carryover import get_previous_month_balance
 
 # Import NSPopover and related constants
@@ -26,15 +26,26 @@ def _debug(msg):
 class ActionMessageHandler(objc.lookUpClass('NSObject')):
     """Handles JavaScript messages from the dashboard WebView."""
 
-    def initWithCallbacks_(self, callbacks):
+    def initWithController_callbacks_(self, controller, callbacks):
         self = objc.super(ActionMessageHandler, self).init()
         if self is None:
             return None
+        self._controller = controller
         self._callbacks = callbacks
         return self
 
     def userContentController_didReceiveScriptMessage_(self, controller, message):
         action = str(message.body())
+        if action.startswith("height:"):
+            try:
+                self._controller.set_measured_height(int(action.split(":", 1)[1]))
+            except (TypeError, ValueError):
+                pass
+            return
+        if action.startswith("toggle:"):
+            _, section_key, state = action.split(":", 2)
+            self._controller.set_section_expanded(section_key, state == "expanded")
+            return
         callback = self._callbacks.get(action)
         if callback:
             callback()
@@ -55,6 +66,7 @@ class DashboardViewController(NSViewController):
     def loadView(self):
         w, h = self._size
         container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
+        container.setAutoresizingMask_(2 | 16)  # width + height sizable
         # Set dark background on the container to prevent white flash
         container.setWantsLayer_(True)
         container.layer().setBackgroundColor_(
@@ -84,16 +96,37 @@ class DashboardViewController(NSViewController):
             self.webview.setValue_forKey_(False, "_drawsBackground")
         except Exception:
             pass
-        self.webview.setAutoresizingMask_(1 | 2 | 4 | 8 | 16 | 32)  # flex all
+        self.webview.setTranslatesAutoresizingMaskIntoConstraints_(False)
         if hasattr(self.webview, 'setInspectable_'):
             self.webview.setInspectable_(True)
 
         container.addSubview_(self.webview)
+        self.webview.leadingAnchor().constraintEqualToAnchor_(container.leadingAnchor()).setActive_(True)
+        self.webview.trailingAnchor().constraintEqualToAnchor_(container.trailingAnchor()).setActive_(True)
+        self.webview.topAnchor().constraintEqualToAnchor_(container.topAnchor()).setActive_(True)
+        self.webview.bottomAnchor().constraintEqualToAnchor_(container.bottomAnchor()).setActive_(True)
         self.setView_(container)
+        if hasattr(self, 'setPreferredContentSize_'):
+            self.setPreferredContentSize_((w, h))
 
     def loadHTML_(self, html):
         if self.webview:
             self.webview.loadHTMLString_baseURL_(html, None)
+
+    def resizeTo_(self, size):
+        """Resize the host view and webview to match the popover size."""
+        self._size = size
+        if not self.isViewLoaded():
+            return
+
+        w, h = size
+        if hasattr(self, 'setPreferredContentSize_'):
+            self.setPreferredContentSize_(size)
+
+        view = self.view()
+        view.setFrameSize_((w, h))
+        view.setBoundsSize_((w, h))
+        view.layoutSubtreeIfNeeded()
 
 
 class DashboardPanelController:
@@ -104,7 +137,8 @@ class DashboardPanelController:
 
     _instance = None
     PANEL_WIDTH = 420
-    PANEL_HEIGHT = 620
+    PANEL_MIN_HEIGHT = 260
+    PANEL_MAX_HEIGHT = 620
 
     def __new__(cls):
         if cls._instance is None:
@@ -123,6 +157,8 @@ class DashboardPanelController:
         self._callbacks = {}
         self._last_data = None
         self._message_handler = None
+        self._last_measured_height = None
+        self._current_panel_height = None
 
     def set_callbacks(self, callbacks):
         """Set action callbacks: {'refresh': fn, 'preferences': fn, 'quit': fn}"""
@@ -135,17 +171,23 @@ class DashboardPanelController:
 
         _debug("Creating NSPopover")
 
+        initial_height = self.PANEL_MIN_HEIGHT
+        if self._last_data:
+            initial_height = self._preferred_panel_height(*self._last_data)
+
         # Create message handler for JS -> Python bridge
-        self._message_handler = ActionMessageHandler.alloc().initWithCallbacks_(self._callbacks)
+        self._message_handler = ActionMessageHandler.alloc().initWithController_callbacks_(
+            self, self._callbacks
+        )
 
         # Create the view controller with webview
         self._view_controller = DashboardViewController.alloc().initWithSize_messageHandler_(
-            (self.PANEL_WIDTH, self.PANEL_HEIGHT), self._message_handler
+            (self.PANEL_WIDTH, initial_height), self._message_handler
         )
 
         # Create NSPopover with dark appearance to prevent white flash
         self.popover = NSPopover.alloc().init()
-        self.popover.setContentSize_((self.PANEL_WIDTH, self.PANEL_HEIGHT))
+        self.popover.setContentSize_((self.PANEL_WIDTH, initial_height))
         self.popover.setBehavior_(1)  # NSPopoverBehaviorTransient - close on click outside
         self.popover.setAnimates_(True)
         dark_appearance = NSAppearance.appearanceNamed_("NSAppearanceNameVibrantDark")
@@ -154,6 +196,7 @@ class DashboardPanelController:
 
         # Force the view to load now so WKWebView is ready
         _ = self._view_controller.view()
+        self._current_panel_height = initial_height
 
         # Pre-load HTML if we already have data (prevents white flash on first show)
         if self._last_data:
@@ -178,6 +221,7 @@ class DashboardPanelController:
 
         # Load data into webview
         if self._last_data:
+            self._resize_for_data(*self._last_data)
             html = self._generate_html(*self._last_data)
             self._view_controller.loadHTML_(html)
             _debug("HTML loaded")
@@ -228,15 +272,152 @@ class DashboardPanelController:
     def update_data(self, daily, weekly, monthly):
         """Update the dashboard with new data."""
         self._last_data = (daily, weekly, monthly)
+        self._resize_for_data(daily, weekly, monthly)
         if self.popover and self.popover.isShown():
             html = self._generate_html(daily, weekly, monthly)
             self._view_controller.loadHTML_(html)
+
+    def _resize_for_data(self, daily, weekly, monthly):
+        """Resize the popover to fit current content, within min/max bounds."""
+        if not self.popover or not self._view_controller:
+            return
+
+        height = self._preferred_panel_height(daily, weekly, monthly)
+        self._apply_panel_height(height, reason="estimate")
+
+    def set_measured_height(self, height):
+        """Apply a DOM-measured height reported by the web view."""
+        if not self.popover or not self._view_controller:
+            return
+
+        height = max(self.PANEL_MIN_HEIGHT, min(self.PANEL_MAX_HEIGHT, int(height)))
+        if self._last_measured_height == height and self._current_panel_height == height:
+            return
+
+        self._last_measured_height = height
+        self._apply_panel_height(height, reason="measured")
+
+    def _apply_panel_height(self, height, reason):
+        """Resize the native popover and hosted web view."""
+        height = max(self.PANEL_MIN_HEIGHT, min(self.PANEL_MAX_HEIGHT, int(height)))
+        if self._current_panel_height == height:
+            return
+
+        size = (self.PANEL_WIDTH, height)
+        self._view_controller.resizeTo_(size)
+        self.popover.setContentSize_(size)
+        self._current_panel_height = height
+        _debug(f"Applied {reason} popover height {height}")
+
+    def _preferred_panel_height(self, daily, weekly, monthly):
+        """Use the last measured DOM height when available, else fall back to an estimate."""
+        if self._last_measured_height is not None:
+            return self._last_measured_height
+        return self._estimate_panel_height(daily, weekly, monthly)
+
+    def _get_section_states(self):
+        """Load persisted expanded/collapsed state for dashboard sections."""
+        states = DEFAULT_PREFERENCES['dashboard_sections'].copy()
+        current = load_preferences().get('dashboard_sections', {})
+        if isinstance(current, dict):
+            states.update({k: bool(v) for k, v in current.items() if k in states})
+        return states
+
+    def set_section_expanded(self, section_key, expanded):
+        """Persist section state changed inside the dashboard."""
+        valid_sections = set(DEFAULT_PREFERENCES['dashboard_sections'])
+        if section_key not in valid_sections:
+            return
+
+        prefs = load_preferences()
+        current = prefs.get('dashboard_sections', {})
+        if not isinstance(current, dict):
+            current = DEFAULT_PREFERENCES['dashboard_sections'].copy()
+        else:
+            current = {
+                **DEFAULT_PREFERENCES['dashboard_sections'],
+                **current,
+            }
+        current[section_key] = bool(expanded)
+        prefs['dashboard_sections'] = current
+        save_preferences(prefs)
+
+    def _estimate_panel_height(self, daily, weekly, monthly):
+        """Estimate the height needed for the current dashboard content."""
+        prefs = load_preferences()
+        project_targets = prefs.get('project_targets', {})
+        projects_config = prefs.get('projects', {})
+        section_states = self._get_section_states()
+
+        # Base chrome: top/bottom paddings, footer actions/update line, scroll area padding.
+        height = 170
+
+        # Three section headers are always visible.
+        height += 3 * 46
+
+        if section_states.get('today', True):
+            daily_rows = daily.get('all_projects', daily.get('projects', []))
+            height += max(1, len(daily_rows)) * 28
+
+        if section_states.get('week', True):
+            weekly_rows = weekly.get('all_projects', weekly.get('projects', []))
+            height += max(1, len(weekly_rows)) * 28
+
+        monthly_rows = monthly.get('all_projects', monthly.get('projects', []))
+        if section_states.get('month', True):
+            for project in monthly_rows:
+                if project['hours'] <= 0:
+                    continue
+
+                name = project['name']
+                is_billable = project.get('billable', True)
+                proj_def = projects_config.get(name, {})
+                billing_type = proj_def.get('billing_type')
+                hour_tracking = proj_def.get('hour_tracking')
+                has_target = name in project_targets
+                has_def = name in projects_config
+
+                if not (is_billable or has_target or has_def):
+                    continue
+
+                target = project_targets.get(name)
+                if not target and billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft'):
+                    target = proj_def.get('target_hours')
+                elif not target and billing_type == 'hourly_with_cap':
+                    target = proj_def.get('cap_hours')
+
+                if target:
+                    height += 52  # header + progress bar + status
+
+                    if (billing_type == 'fixed_monthly' and hour_tracking == 'required') or \
+                       billing_type == 'hourly_with_cap':
+                        carryover_balance, _ = get_previous_month_balance(name)
+                        if carryover_balance != 0.0:
+                            height += 14
+
+                    if billing_type == 'hourly_with_cap' and project.get('cap_fill_date'):
+                        height += 14
+                else:
+                    height += 32
+
+        projection = monthly.get('projection', {})
+        if projection and projection.get('worked_days', 0) > 0:
+            height += 44
+            if projection.get('fixed_monthly_total', 0) > 0:
+                height += 14
+            if projection.get('daily_average', 0) > 0:
+                height += 14
+            if projection.get('vacation_days', 0) > 0:
+                height += 14
+
+        return max(self.PANEL_MIN_HEIGHT, min(self.PANEL_MAX_HEIGHT, int(height)))
 
     def _generate_html(self, daily, weekly, monthly):
         """Generate the rich dashboard HTML."""
         prefs = load_preferences()
         project_targets = prefs.get('project_targets', {})
         projects_config = prefs.get('projects', {})
+        section_states = self._get_section_states()
 
         # === TODAY section ===
         today_total = daily.get('total', 0)
@@ -264,6 +445,33 @@ class DashboardPanelController:
 
         if not all_daily_projects:
             daily_rows = '<div class="empty-state">No time logged today</div>'
+
+        # === THIS WEEK section ===
+        weekly_total = weekly.get('total', 0)
+        all_weekly_projects = weekly.get('all_projects', weekly.get('projects', []))
+
+        weekly_rows = ""
+        for p in all_weekly_projects:
+            if p.get('billable', True):
+                weekly_rows += f"""
+                <div class="project-row">
+                    <span class="project-name">{_esc(p['name'])}</span>
+                    <span class="project-value">
+                        <span class="money">${p['earnings']:.0f}</span>
+                        <span class="hours">({p['hours']:.1f}h)</span>
+                    </span>
+                </div>"""
+            else:
+                weekly_rows += f"""
+                <div class="project-row">
+                    <span class="project-name">{_esc(p['name'])}</span>
+                    <span class="project-value">
+                        <span class="hours">{p['hours']:.1f}h</span>
+                    </span>
+                </div>"""
+
+        if not all_weekly_projects:
+            weekly_rows = '<div class="empty-state">No time logged this week</div>'
 
         # === THIS MONTH section ===
         month_total = monthly.get('total', 0)
@@ -414,8 +622,15 @@ class DashboardPanelController:
                 {projection_details}
             </div>"""
 
-        # === WEEKLY ===
-        weekly_total = weekly.get('total', 0)
+        today_section = self._render_section(
+            "today", "Today", f"${today_total:,.2f}", daily_rows, section_states.get('today', True)
+        )
+        week_section = self._render_section(
+            "week", "This Week", f"${weekly_total:,.2f}", weekly_rows, section_states.get('week', True)
+        )
+        month_section = self._render_section(
+            "month", "This Month", f"${month_total:,.2f}", monthly_rows, section_states.get('month', True)
+        )
 
         html = f"""<!DOCTYPE html>
 <html>
@@ -425,61 +640,78 @@ class DashboardPanelController:
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
 html, body {{
-    height: 100%;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
     background: #1c1c1e;
     color: #c9d1d9;
     -webkit-user-select: none;
     cursor: default;
-    overflow: hidden;
+    overflow-x: hidden;
 }}
 
 .wrapper {{
+    padding: 10px 12px 12px;
+}}
+
+.section-list {{
     display: flex;
     flex-direction: column;
-    height: 100%;
-}}
-
-.scroll-area {{
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 18px 20px 0;
-    -webkit-overflow-scrolling: touch;
-}}
-
-.scroll-area::-webkit-scrollbar {{
-    width: 6px;
-}}
-.scroll-area::-webkit-scrollbar-track {{
-    background: transparent;
-}}
-.scroll-area::-webkit-scrollbar-thumb {{
-    background: rgba(255,255,255,0.12);
-    border-radius: 3px;
-}}
-.scroll-area::-webkit-scrollbar-thumb:hover {{
-    background: rgba(255,255,255,0.2);
+    gap: 10px;
 }}
 
 .footer {{
-    flex-shrink: 0;
-    padding: 10px 20px 14px;
-    background: #1c1c1e;
+    margin-top: 12px;
+    padding-top: 8px;
     border-top: 1px solid rgba(255,255,255,0.06);
 }}
 
 .section {{
-    margin-bottom: 14px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.05);
+    overflow: hidden;
 }}
 
 .section-header {{
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    min-height: 46px;
+}}
+
+.section-header.clickable {{
+    cursor: pointer;
+    transition: background 0.15s ease;
+}}
+
+.section-header.clickable:hover {{
+    background: rgba(255,255,255,0.03);
+}}
+
+.section-meta {{
+    display: flex;
     align-items: baseline;
-    margin-bottom: 8px;
-    padding-bottom: 5px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    gap: 10px;
+    min-width: 0;
+}}
+
+.section-body {{
+    padding: 0 12px 10px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+}}
+
+.section.collapsed .section-body {{
+    display: none;
+}}
+
+.section.collapsed {{
+    background: rgba(255,255,255,0.02);
+}}
+
+.section.collapsed .section-header {{
+    min-height: 42px;
+    padding-top: 8px;
+    padding-bottom: 8px;
 }}
 
 .section-title {{
@@ -491,10 +723,18 @@ html, body {{
 }}
 
 .section-total {{
-    font-size: 22px;
+    font-size: 18px;
     font-weight: 700;
     color: #3fb950;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}}
+
+.section-chevron {{
+    font-size: 13px;
+    color: #8b949e;
+    margin-left: 10px;
+    flex-shrink: 0;
 }}
 
 .project-row {{
@@ -528,12 +768,6 @@ html, body {{
 .hours {{
     color: #8b949e;
     margin-left: 4px;
-}}
-
-.weekly-line {{
-    font-size: 12px;
-    color: #8b949e;
-    padding: 4px 6px 0;
 }}
 
 .monthly-project {{
@@ -603,6 +837,7 @@ html, body {{
     border-radius: 8px;
     background: rgba(63, 185, 80, 0.05);
     border: 1px solid rgba(63, 185, 80, 0.1);
+    margin-bottom: 8px;
 }}
 
 .projection-line {{
@@ -626,9 +861,7 @@ html, body {{
 .actions {{
     display: flex;
     gap: 6px;
-    margin-top: auto;
-    padding-top: 10px;
-    border-top: 1px solid rgba(255,255,255,0.06);
+    margin-top: 8px;
 }}
 
 .action-btn {{
@@ -669,33 +902,16 @@ html, body {{
     font-size: 10px;
     color: #484f58;
     text-align: center;
-    margin-top: 8px;
+    margin-top: 6px;
 }}
 </style>
 </head>
 <body>
 <div class="wrapper">
-    <div class="scroll-area">
-        <div class="section">
-            <div class="section-header">
-                <span class="section-title">Today</span>
-                <span class="section-total">${today_total:,.2f}</span>
-            </div>
-            {daily_rows}
-            <div class="weekly-line">
-                This week: <span class="money">${weekly_total:,.2f}</span>
-            </div>
-        </div>
-
-        <div class="divider"></div>
-
-        <div class="section">
-            <div class="section-header">
-                <span class="section-title">This Month</span>
-                <span class="section-total">${month_total:,.2f}</span>
-            </div>
-            {monthly_rows}
-        </div>
+    <div class="section-list">
+        {today_section}
+        {week_section}
+        {month_section}
     </div>
 
     <div class="footer">
@@ -712,6 +928,83 @@ html, body {{
 </div>
 
 <script>
+    var heightReportQueued = false;
+    var heightObserver = null;
+
+    function postAction(message) {{
+        var handler = window.webkit &&
+            window.webkit.messageHandlers &&
+            window.webkit.messageHandlers.action;
+        if (handler && typeof handler.postMessage === 'function') {{
+            handler.postMessage(message);
+        }}
+    }}
+
+    function scheduleReportHeight() {{
+        if (heightReportQueued) {{
+            return;
+        }}
+        heightReportQueued = true;
+        requestAnimationFrame(function() {{
+            heightReportQueued = false;
+            reportHeight();
+        }});
+    }}
+
+    function toggleSection(sectionKey) {{
+        var section = document.querySelector('[data-section="' + sectionKey + '"]');
+        if (!section) return;
+        var willExpand = section.getAttribute('data-expanded') !== 'true';
+        section.setAttribute('data-expanded', willExpand ? 'true' : 'false');
+        section.classList.toggle('collapsed', !willExpand);
+
+        var chevron = section.querySelector('.section-chevron');
+        if (chevron) {{
+            chevron.textContent = willExpand ? '▾' : '▸';
+        }}
+
+        postAction(
+            'toggle:' + sectionKey + ':' + (willExpand ? 'expanded' : 'collapsed')
+        );
+        scheduleReportHeight();
+    }}
+
+    function handleSectionKey(event, sectionKey) {{
+        if (event.key === 'Enter' || event.key === ' ') {{
+            event.preventDefault();
+            toggleSection(sectionKey);
+        }}
+    }}
+
+    function reportHeight() {{
+        var wrapper = document.querySelector('.wrapper');
+        if (!wrapper || !document.body || !document.documentElement) return;
+
+        var totalHeight = Math.ceil(Math.max(
+            wrapper.getBoundingClientRect().height,
+            document.body.scrollHeight,
+            document.documentElement.scrollHeight
+        ));
+        postAction('height:' + totalHeight);
+    }}
+
+    function startHeightObserver() {{
+        if (heightObserver || typeof ResizeObserver !== 'function') {{
+            return;
+        }}
+
+        var wrapper = document.querySelector('.wrapper');
+        heightObserver = new ResizeObserver(function() {{
+            scheduleReportHeight();
+        }});
+
+        heightObserver.observe(document.documentElement);
+        heightObserver.observe(document.body);
+        if (wrapper) {{
+            heightObserver.observe(wrapper);
+        }}
+    }}
+
     var now = new Date();
     var h = now.getHours();
     var m = now.getMinutes();
@@ -719,11 +1012,40 @@ html, body {{
     h = h % 12 || 12;
     m = m < 10 ? '0' + m : m;
     document.getElementById('updateTime').textContent = 'Updated ' + h + ':' + m + ' ' + ampm;
+
+    document.addEventListener('DOMContentLoaded', function() {{
+        startHeightObserver();
+        scheduleReportHeight();
+    }});
+    window.addEventListener('load', function() {{
+        scheduleReportHeight();
+    }});
+    window.addEventListener('resize', scheduleReportHeight);
 </script>
 </body>
 </html>"""
 
         return html
+
+    def _render_section(self, section_key, title, total, body_html, expanded):
+        """Render a dashboard section with persisted collapse state."""
+        collapsed_class = "" if expanded else " collapsed"
+        chevron = "▾" if expanded else "▸"
+        return f"""
+        <div class="section{collapsed_class}" data-section="{section_key}" data-expanded="{str(expanded).lower()}">
+            <div class="section-header clickable" role="button" tabindex="0"
+                 onclick="toggleSection('{section_key}')"
+                 onkeydown="handleSectionKey(event, '{section_key}')">
+                <div class="section-meta">
+                    <span class="section-title">{_esc(title)}</span>
+                    <span class="section-total">{_esc(total)}</span>
+                </div>
+                <span class="section-chevron">{chevron}</span>
+            </div>
+            <div class="section-body">
+                {body_html}
+            </div>
+        </div>"""
 
 
 def _esc(text):

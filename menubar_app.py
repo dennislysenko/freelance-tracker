@@ -11,7 +11,14 @@ import subprocess
 import os
 from datetime import datetime
 from pathlib import Path
-from toggl_data import get_daily_earnings, get_weekly_earnings, get_monthly_earnings, is_rate_limited, force_refresh_entries
+from toggl_data import (
+    get_daily_earnings,
+    get_weekly_earnings,
+    get_monthly_earnings,
+    is_rate_limited,
+    force_refresh_entries,
+    estimate_manual_refresh_entry_api_calls,
+)
 from preferences import load_preferences
 from preferences_window import PreferencesWindowController
 from update_window import UpdateWindowController
@@ -164,7 +171,7 @@ class FreelanceTrackerApp(rumps.App):
                 calls += 1
 
         if force_refresh:
-            calls += 1
+            calls += estimate_manual_refresh_entry_api_calls()
         else:
             today = datetime.now().date()
             today_cache = CACHE_DIR / f"daily_{today.isoformat()}.json"

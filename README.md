@@ -6,12 +6,16 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 
 - 💰 **Live earnings display** in menu bar (daily, weekly, monthly)
 - 🪟 **Resilient dashboard startup** with automatic fallback to the classic dropdown if the rich WebKit panel is unavailable
+- ↕️ **Adaptive dashboard height** so short project lists do not leave large empty space
+- 📂 **Collapsible dashboard sections** for Today, This Week, and This Month, with expanded/collapsed state saved across launches
+- 📉 **This Week collapsed by default** to keep the dashboard tighter unless you need that breakdown
 - 🔄 **Auto-refresh** every 30 minutes
 - 📈 **Month projection** based on pace, accounting for planned days off
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly
 - 🔁 **Carryover tracking** for capped and fixed-monthly projects across months
 - 🕐 **Last update timestamp**
 - 💾 **Smart caching** to minimize Toggl API calls
+  Manual refresh only invalidates the current dashboard period caches instead of wiping all historical entry caches
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)
 - 📍 **Standard macOS storage** locations
 

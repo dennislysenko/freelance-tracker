@@ -20,6 +20,11 @@ DEFAULT_PREFERENCES = {
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
     "projects": {},  # Project definitions by name: see docs/SOT.md for schema
+    "dashboard_sections": {
+        "today": True,
+        "week": False,
+        "month": True,
+    },  # Expanded/collapsed dashboard sections, persisted across launches
 }
 
 
@@ -30,7 +35,13 @@ def load_preferences():
             with open(PREFERENCES_FILE, 'r') as f:
                 prefs = json.load(f)
                 # Merge with defaults (in case new keys were added)
-                return {**DEFAULT_PREFERENCES, **prefs}
+                merged = {**DEFAULT_PREFERENCES, **prefs}
+                merged['dashboard_sections'] = {
+                    **DEFAULT_PREFERENCES['dashboard_sections'],
+                    **prefs.get('dashboard_sections', {})
+                } if isinstance(prefs.get('dashboard_sections', {}), dict) \
+                    else DEFAULT_PREFERENCES['dashboard_sections'].copy()
+                return merged
         except Exception as e:
             print(f"Error loading preferences: {e}")
             return DEFAULT_PREFERENCES.copy()
@@ -222,6 +233,25 @@ def validate_preferences(prefs):
                             errors.append(
                                 f"{prefix}: 'target_hours' must be a positive number when hour_tracking is '{hour_tracking}'"
                             )
+
+    # Optional field: dashboard_sections
+    if 'dashboard_sections' in prefs:
+        dashboard_sections = prefs['dashboard_sections']
+        valid_sections = {'today', 'week', 'month'}
+
+        if not isinstance(dashboard_sections, dict):
+            errors.append("'dashboard_sections': must be an object/dictionary")
+        else:
+            for section_name, expanded in dashboard_sections.items():
+                if section_name not in valid_sections:
+                    errors.append(
+                        f"'dashboard_sections': key '{section_name}' must be one of {sorted(valid_sections)}"
+                    )
+                    continue
+                if not isinstance(expanded, bool):
+                    errors.append(
+                        f"'dashboard_sections.{section_name}': must be a boolean, got {type(expanded).__name__}"
+                    )
 
     return errors
 

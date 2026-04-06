@@ -11,6 +11,7 @@ class TestPreferencesValidation:
         """Default preferences should pass validation."""
         errors = validate_preferences(DEFAULT_PREFERENCES.copy())
         assert errors == [], f"Default prefs failed: {errors}"
+        assert DEFAULT_PREFERENCES['dashboard_sections']['week'] is False
 
     def test_valid_custom_preferences(self):
         """Custom valid preferences should pass."""
@@ -181,6 +182,32 @@ class TestPreferencesValidation:
         assert len(errors) == 1
         assert "retainer_hourly_rates.Client A Retainer" in errors[0]
         assert "must be greater than 0" in errors[0]
+
+    def test_dashboard_sections_valid(self):
+        """Dashboard section collapse state should validate as booleans."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['dashboard_sections'] = {
+            "today": True,
+            "week": False,
+            "month": True,
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_dashboard_sections_invalid_type(self):
+        """dashboard_sections must be a dict."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['dashboard_sections'] = ["today", True]
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "'dashboard_sections'" in errors[0]
+
+    def test_dashboard_sections_invalid_value(self):
+        """dashboard_sections entries must be booleans."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['dashboard_sections'] = {"today": "yes"}
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "dashboard_sections.today" in errors[0]
 
     # --- projects key tests ---
 
