@@ -20,6 +20,9 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Rich popover dashboard uses WebKit when available; if the WebKit bridge is missing, the app falls back to the classic dropdown menu instead of failing to launch
 - Dashboard popover auto-sizes to the current content for short project lists, while preserving scrolling for taller dashboards
 - `This Week` is collapsed by default; section collapse state is then persisted per user across launches
+- Preferences window no longer exposes dashboard collapse-state defaults; its fourth tab is `Advanced` and currently only exposes the API audit log
+- Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data` or one-off `Refresh Projects`), `Settings`, `Update`, and `Quit`
+- Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
 - Auto-refresh every 30 minutes
 - Manual refresh available
 
@@ -33,7 +36,7 @@ Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at
 - Current week total with per-project breakdown in the dashboard
 - Current month total
 - Monthly hours breakdown by project
-- Today / This Week / This Month sections can each be collapsed or expanded from the dashboard, and their state persists across app relaunches and is editable from Preferences
+- Today / This Week / This Month sections can each be collapsed or expanded from the dashboard, and their state persists across app relaunches
 
 ### Month Projection
 - Intelligent forecast based on current performance

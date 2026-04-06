@@ -1,5 +1,7 @@
 """Regression tests for dashboard popover HTML sizing."""
 
+from datetime import datetime
+
 from dashboard_panel import DashboardPanelController
 
 
@@ -27,6 +29,9 @@ def _make_controller():
 def test_dashboard_html_measures_document_height():
     """Popover sizing should measure document height and observe later layout changes."""
     controller = _make_controller()
+    controller.set_last_updated(datetime(2026, 4, 6, 17, 4))
+    controller.set_rate_limited(True)
+    controller.set_error_message("network timeout")
     html = controller._generate_html(
         {
             "total": 812.5,
@@ -52,9 +57,24 @@ def test_dashboard_html_measures_document_height():
     assert 'class="section-list"' in html
     assert "scheduleReportHeight" in html
     assert "new ResizeObserver" in html
+    assert "refresh_projects" in html
+    assert "settings" in html
+    assert "update_app" in html
+    assert "toggleRefreshMenu" in html
+    assert "refresh-primary" in html
+    assert "refresh-arrow" in html
+    assert "Refresh Data" in html
+    assert "Refresh Projects" in html
+    assert "Settings" in html
+    assert "Advanced" not in html
+    assert "Toggl rate limit reached. Showing cached data." in html
+    assert "Refresh failed. Showing last successful data." in html
+    assert "network timeout" in html
+    assert "Retry" in html
     assert "document.body.scrollHeight" in html
     assert "document.documentElement.scrollHeight" in html
     assert "window.addEventListener('resize', scheduleReportHeight)" in html
+    assert "Last updated: 05:04 PM" in html
 
 
 def test_measured_height_reapplies_after_estimate_resizes_popover():

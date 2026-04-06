@@ -1,6 +1,8 @@
 """Native macOS preferences window for Freelance Tracker."""
 
 import json
+import subprocess
+from pathlib import Path
 from AppKit import (
     NSWindow, NSApp, NSApplication, NSTextField, NSButton, NSAlert,
     NSMakeRect, NSPanel, NSBackingStoreBuffered, NSView, NSFont, NSScreen,
@@ -96,9 +98,9 @@ class PreferencesWindowController:
 
         # Create tabs
         self._create_caching_tab(tab_view)
-        self._create_dashboard_tab(tab_view)
         self._create_work_planning_tab(tab_view)
         self._create_projects_tab(tab_view)
+        self._create_advanced_tab(tab_view)
 
         content_view.addSubview_(tab_view)
 
@@ -205,41 +207,6 @@ class PreferencesWindowController:
             self.widgets[f'project_hours_{i}'] = hours_field
 
             y -= 35
-
-        tab.setView_(view)
-        tab_view.addTabViewItem_(tab)
-
-    def _create_dashboard_tab(self, tab_view):
-        """Tab: Dashboard behavior and default section state."""
-        tab = NSTabViewItem.alloc().initWithIdentifier_("dashboard")
-        tab.setLabel_("Dashboard")
-        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
-
-        y = 320
-        info = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 34))
-        info.setStringValue_(
-            "Click section headers in the menu bar dashboard to collapse or expand them. "
-            "These saved states also control how sections open after relaunch."
-        )
-        info.setBezeled_(False)
-        info.setDrawsBackground_(False)
-        info.setEditable_(False)
-        info.setFont_(NSFont.systemFontOfSize_(12))
-        view.addSubview_(info)
-        y -= 70
-
-        dashboard_sections = self.current_prefs.get('dashboard_sections', {})
-        self.widgets['dashboard_today_expanded'] = self._create_checkbox(
-            view, "Open Today expanded", 20, y, dashboard_sections.get('today', True)
-        )
-        y -= 36
-        self.widgets['dashboard_week_expanded'] = self._create_checkbox(
-            view, "Open This Week expanded", 20, y, dashboard_sections.get('week', True)
-        )
-        y -= 36
-        self.widgets['dashboard_month_expanded'] = self._create_checkbox(
-            view, "Open This Month expanded", 20, y, dashboard_sections.get('month', True)
-        )
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
@@ -417,6 +384,32 @@ class PreferencesWindowController:
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
 
+    def _create_advanced_tab(self, tab_view):
+        """Tab: Advanced utilities."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("advanced")
+        tab.setLabel_("Advanced")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
+
+        y = 320
+        info = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 34))
+        info.setStringValue_("Advanced tools for troubleshooting and diagnostics.")
+        info.setBezeled_(False)
+        info.setDrawsBackground_(False)
+        info.setEditable_(False)
+        info.setFont_(NSFont.systemFontOfSize_(12))
+        view.addSubview_(info)
+        y -= 60
+
+        audit_btn = NSButton.alloc().initWithFrame_(NSMakeRect(20, y, 170, 28))
+        audit_btn.setTitle_("View API Audit Log")
+        audit_btn.setBezelStyle_(1)
+        audit_btn.setTarget_(self)
+        audit_btn.setAction_("handleOpenAuditLog:")
+        view.addSubview_(audit_btn)
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
     def _update_project_row_visibility(self, i):
         """Show/hide extra fields for row i based on selected billing type."""
         type_popup = self.widgets.get(f'pd_type_{i}')
@@ -535,18 +528,6 @@ class PreferencesWindowController:
 
         # Load vacation days
         self.widgets['vacation_days'].setIntValue_(self.current_prefs['vacation_days_per_month'])
-
-        # Load dashboard section state
-        dashboard_sections = self.current_prefs.get('dashboard_sections', {})
-        self.widgets['dashboard_today_expanded'].setState_(
-            NSOnState if dashboard_sections.get('today', True) else NSOffState
-        )
-        self.widgets['dashboard_week_expanded'].setState_(
-            NSOnState if dashboard_sections.get('week', True) else NSOffState
-        )
-        self.widgets['dashboard_month_expanded'].setState_(
-            NSOnState if dashboard_sections.get('month', True) else NSOffState
-        )
 
         # Load project targets into name/hours field pairs
         project_targets = self.current_prefs.get('project_targets', {})
@@ -671,11 +652,6 @@ class PreferencesWindowController:
             'vacation_days_per_month': self.widgets['vacation_days'].intValue(),
             'project_targets': project_targets,
             'projects': projects_config,
-            'dashboard_sections': {
-                'today': self.widgets['dashboard_today_expanded'].state() == NSOnState,
-                'week': self.widgets['dashboard_week_expanded'].state() == NSOnState,
-                'month': self.widgets['dashboard_month_expanded'].state() == NSOnState,
-            },
         })
 
         # Validate using existing function
@@ -719,6 +695,21 @@ class PreferencesWindowController:
         """Cancel button clicked."""
         self.window.close()
 
+    def handleOpenAuditLog_(self, sender):
+        """Open the API audit log from the Advanced tab."""
+        log_path = Path.home() / "Library" / "Logs" / "toggl-api-audit.log"
+        terminal_command = f"tail -f {log_path}"
+        applescript = f'''
+        tell application "Terminal"
+            activate
+            do script "{terminal_command}"
+        end tell
+        '''
+        try:
+            subprocess.run(["osascript", "-e", applescript], check=True)
+        except subprocess.CalledProcessError:
+            pass
+
     def handleReset_(self, sender):
         """Reset to defaults button."""
         alert = NSAlert.alloc().init()
@@ -736,9 +727,6 @@ class PreferencesWindowController:
             self.widgets['cache_ttl_projects'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_projects'])
             self.widgets['cache_ttl_today'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_today'])
             self.widgets['vacation_days'].setIntValue_(DEFAULT_PREFERENCES['vacation_days_per_month'])
-            self.widgets['dashboard_today_expanded'].setState_(NSOnState)
-            self.widgets['dashboard_week_expanded'].setState_(NSOffState)
-            self.widgets['dashboard_month_expanded'].setState_(NSOnState)
 
             # Clear all project target fields
             for i in range(self.PROJECT_TARGET_ROWS):

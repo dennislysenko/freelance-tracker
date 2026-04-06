@@ -9,6 +9,8 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - ↕️ **Adaptive dashboard height** so short project lists do not leave large empty space
 - 📂 **Collapsible dashboard sections** for Today, This Week, and This Month, with expanded/collapsed state saved across launches
 - 📉 **This Week collapsed by default** to keep the dashboard tighter unless you need that breakdown
+- 🆕 **Dashboard update shortcut** in the main popover footer
+- ⚙️ **Settings button** in the main popover, with API audit log access under the Preferences `Advanced` tab
 - 🔄 **Auto-refresh** every 30 minutes
 - 📈 **Month projection** based on pace, accounting for planned days off
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly

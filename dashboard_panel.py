@@ -156,13 +156,47 @@ class DashboardPanelController:
         self._local_monitor = None
         self._callbacks = {}
         self._last_data = None
+        self._last_updated_at = None
+        self._is_rate_limited = False
+        self._error_message = None
         self._message_handler = None
         self._last_measured_height = None
         self._current_panel_height = None
 
     def set_callbacks(self, callbacks):
-        """Set action callbacks: {'refresh': fn, 'preferences': fn, 'quit': fn}"""
+        """Set action callbacks for dashboard buttons/menu items."""
         self._callbacks = callbacks
+
+    def set_last_updated(self, updated_at):
+        """Store the last successful update time for display in the dashboard."""
+        self._last_updated_at = updated_at
+
+    def set_rate_limited(self, rate_limited):
+        """Store whether the latest dashboard data came from rate-limited fallback."""
+        self._is_rate_limited = bool(rate_limited)
+
+    def set_error_message(self, error_message):
+        """Store the latest dashboard refresh error, if any."""
+        self._error_message = str(error_message) if error_message else None
+
+    def refresh_contents(self):
+        """Reload the current dashboard HTML to reflect status-only changes."""
+        if not self.popover or not self._view_controller:
+            return
+
+        daily, weekly, monthly = self._last_data or self._placeholder_data()
+        if self.popover.isShown():
+            self._resize_for_data(daily, weekly, monthly)
+        html = self._generate_html(daily, weekly, monthly)
+        self._view_controller.loadHTML_(html)
+
+    def _placeholder_data(self):
+        """Fallback data used when the dashboard has status but no successful fetch yet."""
+        return (
+            {"total": 0, "hours": 0, "all_projects": []},
+            {"total": 0, "hours": 0, "all_projects": []},
+            {"total": 0, "hours": 0, "all_projects": [], "projection": {}},
+        )
 
     def _ensure_popover(self):
         """Create the NSPopover and its content if not already created."""
@@ -631,6 +665,25 @@ class DashboardPanelController:
         month_section = self._render_section(
             "month", "This Month", f"${month_total:,.2f}", monthly_rows, section_states.get('month', True)
         )
+        update_time_text = ""
+        if self._last_updated_at is not None:
+            update_time_text = f"Last updated: {self._last_updated_at.strftime('%I:%M %p')}"
+        rate_limited_html = ""
+        if self._is_rate_limited:
+            rate_limited_html = """
+            <div class="status-banner warning">
+                Toggl rate limit reached. Showing cached data.
+            </div>"""
+        error_html = ""
+        if self._error_message:
+            error_html = f"""
+            <div class="status-banner error">
+                <div class="status-copy">
+                    <div class="status-title">Refresh failed. Showing last successful data.</div>
+                    <div class="status-detail">{_esc(self._error_message)}</div>
+                </div>
+                <button class="inline-action-btn" onclick="postAction('refresh')">Retry</button>
+            </div>"""
 
         html = f"""<!DOCTYPE html>
 <html>
@@ -852,6 +905,50 @@ html, body {{
     margin-top: 3px;
 }}
 
+.status-stack {{
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 8px;
+}}
+
+.status-banner {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+}}
+
+.status-banner.warning {{
+    background: rgba(255, 184, 108, 0.08);
+    border-color: rgba(255, 184, 108, 0.16);
+    color: #d9b26f;
+}}
+
+.status-banner.error {{
+    background: rgba(248, 81, 73, 0.08);
+    border-color: rgba(248, 81, 73, 0.16);
+}}
+
+.status-copy {{
+    min-width: 0;
+}}
+
+.status-title {{
+    font-size: 12px;
+    color: #d0d7de;
+}}
+
+.status-detail {{
+    font-size: 10px;
+    color: #8b949e;
+    margin-top: 2px;
+    word-break: break-word;
+}}
+
 .divider {{
     height: 1px;
     background: rgba(255,255,255,0.06);
@@ -862,6 +959,20 @@ html, body {{
     display: flex;
     gap: 6px;
     margin-top: 8px;
+}}
+
+.refresh-group {{
+    position: relative;
+    flex: 1;
+}}
+
+.refresh-group.open .refresh-menu {{
+    display: flex;
+}}
+
+.split-action {{
+    display: flex;
+    width: 100%;
 }}
 
 .action-btn {{
@@ -879,6 +990,43 @@ html, body {{
     -webkit-appearance: none;
 }}
 
+.refresh-toggle {{
+    width: 100%;
+    padding: 0;
+    overflow: hidden;
+}}
+
+.refresh-primary {{
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 7px 10px;
+    border: 0;
+    border-right: 1px solid rgba(255,255,255,0.1);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.refresh-primary:hover,
+.refresh-arrow:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.refresh-arrow {{
+    flex: 0 0 10%;
+    min-width: 28px;
+    max-width: 36px;
+    padding: 7px 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
 .action-btn:hover {{
     background: rgba(255,255,255,0.08);
     color: #c9d1d9;
@@ -889,6 +1037,55 @@ html, body {{
     background: rgba(248, 81, 73, 0.1);
     color: #f85149;
     border-color: rgba(248, 81, 73, 0.3);
+}}
+
+.refresh-menu {{
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 6px);
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 10px;
+    background: #202225;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 12px 24px rgba(0,0,0,0.28);
+    z-index: 20;
+}}
+
+.refresh-option {{
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #c9d1d9;
+    font-size: 11px;
+    text-align: left;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.refresh-option:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.inline-action-btn {{
+    flex-shrink: 0;
+    padding: 6px 9px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    color: #c9d1d9;
+    font-size: 11px;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.inline-action-btn:hover {{
+    background: rgba(255,255,255,0.08);
 }}
 
 .empty-state {{
@@ -915,15 +1112,29 @@ html, body {{
     </div>
 
     <div class="footer">
+        <div class="status-stack">
+            {error_html}
+            {rate_limited_html}
+        </div>
         {projection_html}
 
         <div class="actions">
-            <button class="action-btn" onclick="window.webkit.messageHandlers.action.postMessage('refresh')">↻ Refresh</button>
-            <button class="action-btn" onclick="window.webkit.messageHandlers.action.postMessage('preferences')">⚙ Preferences</button>
+            <div class="refresh-group" id="refreshGroup">
+                <div class="action-btn refresh-toggle split-action">
+                    <button class="refresh-primary" onclick="postAction('refresh')">Refresh</button>
+                    <button class="refresh-arrow" onclick="toggleRefreshMenu(event)" aria-label="Refresh options">▴</button>
+                </div>
+                <div class="refresh-menu" id="refreshMenu">
+                    <button class="refresh-option" onclick="runRefreshAction('refresh')">Refresh Data</button>
+                    <button class="refresh-option" onclick="runRefreshAction('refresh_projects')">Refresh Projects</button>
+                </div>
+            </div>
+            <button class="action-btn" onclick="window.webkit.messageHandlers.action.postMessage('settings')">Settings</button>
+            <button class="action-btn" onclick="window.webkit.messageHandlers.action.postMessage('update_app')">Update</button>
             <button class="action-btn danger" onclick="window.webkit.messageHandlers.action.postMessage('quit')">Quit</button>
         </div>
 
-        <div class="update-time" id="updateTime"></div>
+        <div class="update-time">{_esc(update_time_text)}</div>
     </div>
 </div>
 
@@ -949,6 +1160,28 @@ html, body {{
             heightReportQueued = false;
             reportHeight();
         }});
+    }}
+
+    function closeRefreshMenu() {{
+        var group = document.getElementById('refreshGroup');
+        if (group) {{
+            group.classList.remove('open');
+        }}
+    }}
+
+    function toggleRefreshMenu(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var group = document.getElementById('refreshGroup');
+        if (!group) return;
+        group.classList.toggle('open');
+    }}
+
+    function runRefreshAction(action) {{
+        closeRefreshMenu();
+        postAction(action);
     }}
 
     function toggleSection(sectionKey) {{
@@ -1005,17 +1238,17 @@ html, body {{
         }}
     }}
 
-    var now = new Date();
-    var h = now.getHours();
-    var m = now.getMinutes();
-    var ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    m = m < 10 ? '0' + m : m;
-    document.getElementById('updateTime').textContent = 'Updated ' + h + ':' + m + ' ' + ampm;
-
     document.addEventListener('DOMContentLoaded', function() {{
         startHeightObserver();
         scheduleReportHeight();
+    }});
+    document.addEventListener('click', function() {{
+        closeRefreshMenu();
+    }});
+    document.addEventListener('keydown', function(event) {{
+        if (event.key === 'Escape') {{
+            closeRefreshMenu();
+        }}
     }});
     window.addEventListener('load', function() {{
         scheduleReportHeight();

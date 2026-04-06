@@ -89,7 +89,9 @@ class FreelanceTrackerApp(rumps.App):
             self.dashboard = DashboardPanelController()
             self.dashboard.set_callbacks({
                 'refresh': self._dashboard_refresh,
-                'preferences': self._dashboard_preferences,
+                'refresh_projects': self._dashboard_refresh_projects,
+                'settings': self._dashboard_preferences,
+                'update_app': self._dashboard_update_app,
                 'quit': self._dashboard_quit,
             })
         else:
@@ -141,8 +143,12 @@ class FreelanceTrackerApp(rumps.App):
         force_refresh_entries()
         self.update_display()
 
+    def _dashboard_refresh_projects(self):
+        """Called from dashboard Projects button — refresh project cache and update in-place."""
+        self.refresh_projects(None)
+
     def _dashboard_preferences(self):
-        """Called from dashboard Preferences button."""
+        """Called from dashboard Settings button."""
         if self.dashboard is not None:
             self.dashboard.hide()
         self.prefs_controller.show_window()
@@ -152,6 +158,12 @@ class FreelanceTrackerApp(rumps.App):
         if self.dashboard is not None:
             self.dashboard.hide()
         rumps.quit_application()
+
+    def _dashboard_update_app(self):
+        """Called from dashboard Update button."""
+        if self.dashboard is not None:
+            self.dashboard.hide()
+        self.update_app(None)
 
     def calculate_api_calls(self, force_refresh=False):
         from preferences import CACHE_DIR, load_preferences
@@ -198,6 +210,9 @@ class FreelanceTrackerApp(rumps.App):
             self.title = f"💰 ${daily['total']:.0f}"
 
             if self._dashboard_enabled and self.dashboard is not None:
+                self.dashboard.set_last_updated(self.last_update)
+                self.dashboard.set_rate_limited(is_rate_limited())
+                self.dashboard.set_error_message(None)
                 self.dashboard.update_data(daily, weekly, monthly)
             else:
                 self._update_fallback_menu(daily, weekly, monthly, next_refresh_calls)
@@ -205,7 +220,11 @@ class FreelanceTrackerApp(rumps.App):
         except Exception as e:
             self.title = "💰 Error"
             _debug(f"Error updating display: {e}")
-            if not self._dashboard_enabled:
+            if self._dashboard_enabled and self.dashboard is not None:
+                self.dashboard.set_rate_limited(is_rate_limited())
+                self.dashboard.set_error_message(str(e))
+                self.dashboard.refresh_contents()
+            else:
                 self._show_fallback_error_menu(e)
 
     def _update_fallback_menu(self, daily, weekly, monthly, next_refresh_calls):
@@ -393,6 +412,7 @@ class FreelanceTrackerApp(rumps.App):
             get_projects()
         except Exception:
             pass
+        self.update_display()
 
     def edit_preferences(self, _):
         self.prefs_controller.show_window()
