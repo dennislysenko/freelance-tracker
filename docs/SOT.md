@@ -169,6 +169,18 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Daily, weekly, monthly reports
 - Works independently of menu bar app
 
+### Hours CSV Export
+- Footer `Export CSV` split button in the dashboard popover lists every project that has a resolvable billing rate
+- Click a project to export a billing-ready CSV with columns: `Description, Start date, Start time, End date, End time, Duration, Time Billed (hours), Hourly Rate (USD), Money Billed (USD)` plus a `---- Total ----` row
+- Output format is byte-compatible with the standalone `process_toggl_hours.py` script (per-project, one CSV per export)
+- Range selection respects the project's billing cycle:
+  - `hourly_with_cap` projects with `last_billed_date` set: range is automatically `last_billed_date + 1` through today (the same unbilled cycle the dashboard cap progress bar tracks)
+  - All other projects: a native date-range picker opens, defaulted to the previous calendar month
+- Hourly rate uses the project's effective rate from `get_effective_project_rate` (the same rate used everywhere else in the app)
+- Output saved to `~/Downloads/{project_slug}_{range}_hours.csv`, then revealed in Finder; a notification confirms the export
+- Also available as a submenu in the fallback dropdown menu when the WebKit dashboard is unavailable
+- API call cost: 1 call per export at most (the entries for the range are cached, so back-to-back exports for different projects in the same range hit the cache)
+
 ---
 
 ## Key Benefits

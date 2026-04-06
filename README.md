@@ -16,6 +16,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly
 - 🔁 **Carryover tracking** for capped and fixed-monthly projects across months
 - 🕐 **Last update timestamp**
+- 📤 **Hours CSV export** from the dashboard footer — pick a project, get a billing-ready CSV. Capped projects with `last_billed_date` use the unbilled cycle automatically; everything else opens a date picker defaulted to last month
 - 💾 **Smart caching** to minimize Toggl API calls
   Manual refresh only invalidates the current dashboard period caches instead of wiping all historical entry caches
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)

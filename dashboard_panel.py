@@ -46,6 +46,17 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
             _, section_key, state = action.split(":", 2)
             self._controller.set_section_expanded(section_key, state == "expanded")
             return
+        if action.startswith("export_csv:"):
+            parts = action.split(":")
+            # export_csv:{project_id}:{start_iso}:{end_iso}
+            if len(parts) >= 4:
+                project_id = parts[1]
+                start_iso = parts[2]
+                end_iso = parts[3]
+                callback = self._callbacks.get("export_csv")
+                if callback:
+                    callback(project_id, start_iso, end_iso)
+            return
         callback = self._callbacks.get(action)
         if callback:
             callback()
@@ -162,6 +173,11 @@ class DashboardPanelController:
         self._message_handler = None
         self._last_measured_height = None
         self._current_panel_height = None
+        self._exportable_projects = []
+
+    def set_exportable_projects(self, projects):
+        """List of {'id': str, 'name': str} dicts the user can export."""
+        self._exportable_projects = list(projects or [])
 
     def set_callbacks(self, callbacks):
         """Set action callbacks for dashboard buttons/menu items."""
@@ -685,6 +701,51 @@ class DashboardPanelController:
                 <button class="inline-action-btn" onclick="postAction('refresh')">Retry</button>
             </div>"""
 
+        # Compute preset date ranges (Python-side so JS doesn't have to)
+        from datetime import date as _date, timedelta as _td
+        from hours_csv_export import previous_month_range
+        _today = _date.today()
+        _last_week_start = _today - _td(days=_today.weekday() + 7)
+        _last_week_end = _last_week_start + _td(days=6)
+        _last_month_start, _last_month_end = previous_month_range(_today)
+        _ytd_start = _date(_today.year, 1, 1)
+        _ytd_end = _today
+
+        def _short_range(s, e):
+            same_year = s.year == e.year
+            if same_year:
+                return f"{s.strftime('%b %-d')} \u2013 {e.strftime('%b %-d')}"
+            return f"{s.strftime('%b %-d, %Y')} \u2013 {e.strftime('%b %-d, %Y')}"
+
+        if self._exportable_projects:
+            project_buttons = []
+            for p in self._exportable_projects:
+                lbd = p.get('last_billed_date') or ''
+                lbd_attr = f' data-last-billed="{_esc(lbd)}"' if lbd else ''
+                project_buttons.append(
+                    f'<button class="export-option" '
+                    f'data-project-id="{_esc(p["id"])}" '
+                    f'data-project-name="{_esc(p["name"])}"'
+                    f'{lbd_attr} '
+                    f'onclick="selectExportProject(this)">{_esc(p["name"])}</button>'
+                )
+            export_items_html = "".join(project_buttons)
+        else:
+            export_items_html = '<div class="export-empty">No exportable projects</div>'
+
+        export_menu_data_attrs = (
+            f'data-today="{_today.isoformat()}" '
+            f'data-last-week-start="{_last_week_start.isoformat()}" '
+            f'data-last-week-end="{_last_week_end.isoformat()}" '
+            f'data-last-month-start="{_last_month_start.isoformat()}" '
+            f'data-last-month-end="{_last_month_end.isoformat()}" '
+            f'data-ytd-start="{_ytd_start.isoformat()}" '
+            f'data-ytd-end="{_ytd_end.isoformat()}"'
+        )
+        last_week_label = _short_range(_last_week_start, _last_week_end)
+        last_month_label = _short_range(_last_month_start, _last_month_end)
+        ytd_label = _short_range(_ytd_start, _ytd_end)
+
         html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1072,6 +1133,267 @@ html, body {{
     background: rgba(255,255,255,0.08);
 }}
 
+.export-group {{
+    position: relative;
+    flex: 1;
+}}
+
+.export-group.open .export-menu {{
+    display: flex;
+}}
+
+.export-toggle {{
+    width: 100%;
+    padding: 0;
+    overflow: hidden;
+}}
+
+.export-primary {{
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 7px 10px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.export-primary:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.export-menu {{
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 6px);
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 10px;
+    background: #202225;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 12px 24px rgba(0,0,0,0.28);
+    z-index: 20;
+    max-height: 280px;
+    overflow-y: auto;
+}}
+
+.export-option {{
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #c9d1d9;
+    font-size: 11px;
+    text-align: left;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.export-option:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.export-empty {{
+    padding: 7px 8px;
+    color: #6e7681;
+    font-size: 11px;
+    font-style: italic;
+}}
+
+.export-stage {{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}}
+
+.export-stage-title {{
+    padding: 4px 8px 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6e7681;
+}}
+
+.export-stage-header {{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 4px 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 4px;
+}}
+
+.export-stage-header .export-stage-title {{
+    padding: 4px 4px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 11px;
+    color: #c9d1d9;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}}
+
+.export-back {{
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #c9d1d9;
+    font-size: 14px;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.export-back:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.export-preset {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #c9d1d9;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.export-preset:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.export-preset-name {{
+    font-size: 11px;
+}}
+
+.export-preset-range {{
+    font-size: 10px;
+    color: #6e7681;
+}}
+
+.export-custom-form {{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px 4px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    margin-top: 4px;
+}}
+
+.export-custom-row {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: #c9d1d9;
+}}
+
+.export-custom-row input[type="date"] {{
+    flex: 0 0 auto;
+    padding: 4px 6px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.04);
+    color: #c9d1d9;
+    font: inherit;
+    font-size: 11px;
+    color-scheme: dark;
+}}
+
+.export-custom-submit {{
+    margin-top: 2px;
+    padding: 7px 10px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    background: rgba(88, 166, 255, 0.12);
+    color: #58a6ff;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.export-custom-submit:hover {{
+    background: rgba(88, 166, 255, 0.2);
+}}
+
+.more-group {{
+    position: relative;
+    flex: 0 0 auto;
+}}
+
+.more-group.open .more-menu {{
+    display: flex;
+}}
+
+.more-toggle {{
+    min-width: 36px;
+    padding: 7px 10px;
+    font-size: 14px;
+    line-height: 1;
+}}
+
+.more-menu {{
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    min-width: 140px;
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 10px;
+    background: #202225;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 12px 24px rgba(0,0,0,0.28);
+    z-index: 20;
+}}
+
+.more-option {{
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #c9d1d9;
+    font-size: 11px;
+    text-align: left;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.more-option:hover {{
+    background: rgba(255,255,255,0.08);
+}}
+
+.more-option.danger {{
+    color: #c9d1d9;
+}}
+
+.more-option.danger:hover {{
+    background: rgba(248, 81, 73, 0.12);
+    color: #f85149;
+}}
+
 .inline-action-btn {{
     flex-shrink: 0;
     padding: 6px 9px;
@@ -1129,9 +1451,62 @@ html, body {{
                     <button class="refresh-option" onclick="runRefreshAction('refresh_projects')">Refresh Projects</button>
                 </div>
             </div>
-            <button class="action-btn" onclick="window.webkit.messageHandlers.action.postMessage('settings')">Settings</button>
-            <button class="action-btn" onclick="window.webkit.messageHandlers.action.postMessage('update_app')">Update</button>
-            <button class="action-btn danger" onclick="window.webkit.messageHandlers.action.postMessage('quit')">Quit</button>
+            <div class="export-group" id="exportGroup">
+                <div class="action-btn export-toggle split-action">
+                    <button class="export-primary" onclick="toggleExportMenu(event)">Export CSV</button>
+                </div>
+                <div class="export-menu" id="exportMenu" {export_menu_data_attrs}>
+                    <div class="export-stage" id="exportStage1">
+                        <div class="export-stage-title">Choose project</div>
+                        {export_items_html}
+                    </div>
+                    <div class="export-stage" id="exportStage2" style="display:none;">
+                        <div class="export-stage-header">
+                            <button class="export-back" onclick="exportBackToProjects(event)" aria-label="Back">←</button>
+                            <span class="export-stage-title" id="exportStage2Title">Project</span>
+                        </div>
+                        <button class="export-preset" id="exportPresetLbd" style="display:none;" onclick="exportPickPreset(this)">
+                            <span class="export-preset-name">Since last billed</span>
+                            <span class="export-preset-range" id="exportPresetLbdRange"></span>
+                        </button>
+                        <button class="export-preset" data-start="{_last_week_start.isoformat()}" data-end="{_last_week_end.isoformat()}" onclick="exportPickPreset(this)">
+                            <span class="export-preset-name">Last week</span>
+                            <span class="export-preset-range">{_esc(last_week_label)}</span>
+                        </button>
+                        <button class="export-preset" data-start="{_last_month_start.isoformat()}" data-end="{_last_month_end.isoformat()}" onclick="exportPickPreset(this)">
+                            <span class="export-preset-name">Last month</span>
+                            <span class="export-preset-range">{_esc(last_month_label)}</span>
+                        </button>
+                        <button class="export-preset" data-start="{_ytd_start.isoformat()}" data-end="{_ytd_end.isoformat()}" onclick="exportPickPreset(this)">
+                            <span class="export-preset-name">Year to date</span>
+                            <span class="export-preset-range">{_esc(ytd_label)}</span>
+                        </button>
+                        <button class="export-preset export-custom-toggle" onclick="exportToggleCustomForm(event)">
+                            <span class="export-preset-name">Custom range…</span>
+                            <span class="export-preset-range">▾</span>
+                        </button>
+                        <div class="export-custom-form" id="exportCustomForm" style="display:none;">
+                            <label class="export-custom-row">
+                                <span>Start</span>
+                                <input type="date" id="exportCustomStart" value="{_last_month_start.isoformat()}">
+                            </label>
+                            <label class="export-custom-row">
+                                <span>End</span>
+                                <input type="date" id="exportCustomEnd" value="{_last_month_end.isoformat()}">
+                            </label>
+                            <button class="export-custom-submit" onclick="exportSubmitCustom(event)">Export</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="more-group" id="moreGroup">
+                <button class="action-btn more-toggle" onclick="toggleMoreMenu(event)" aria-label="More actions">⋯</button>
+                <div class="more-menu" id="moreMenu">
+                    <button class="more-option" onclick="runMoreAction('settings')">Settings</button>
+                    <button class="more-option" onclick="runMoreAction('update_app')">Update</button>
+                    <button class="more-option danger" onclick="runMoreAction('quit')">Quit</button>
+                </div>
+            </div>
         </div>
 
         <div class="update-time">{_esc(update_time_text)}</div>
@@ -1169,6 +1544,26 @@ html, body {{
         }}
     }}
 
+    function closeExportMenu() {{
+        var group = document.getElementById('exportGroup');
+        if (group) {{
+            group.classList.remove('open');
+        }}
+    }}
+
+    function closeMoreMenu() {{
+        var group = document.getElementById('moreGroup');
+        if (group) {{
+            group.classList.remove('open');
+        }}
+    }}
+
+    function closeAllPopupMenus() {{
+        closeRefreshMenu();
+        closeExportMenu();
+        closeMoreMenu();
+    }}
+
     function toggleRefreshMenu(event) {{
         if (event) {{
             event.preventDefault();
@@ -1176,11 +1571,163 @@ html, body {{
         }}
         var group = document.getElementById('refreshGroup');
         if (!group) return;
+        closeExportMenu();
+        closeMoreMenu();
+        group.classList.toggle('open');
+    }}
+
+    function toggleExportMenu(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var group = document.getElementById('exportGroup');
+        if (!group) return;
+        closeRefreshMenu();
+        closeMoreMenu();
+        var willOpen = !group.classList.contains('open');
+        group.classList.toggle('open');
+        if (willOpen) {{
+            // Always reset to project list when reopening
+            exportShowStage1();
+        }}
+    }}
+
+    function exportShowStage1() {{
+        var s1 = document.getElementById('exportStage1');
+        var s2 = document.getElementById('exportStage2');
+        if (s1) s1.style.display = '';
+        if (s2) s2.style.display = 'none';
+        var form = document.getElementById('exportCustomForm');
+        if (form) form.style.display = 'none';
+    }}
+
+    function exportBackToProjects(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        exportShowStage1();
+    }}
+
+    function selectExportProject(btn) {{
+        if (!btn) return;
+        var pid = btn.getAttribute('data-project-id');
+        var name = btn.getAttribute('data-project-name');
+        var lbd = btn.getAttribute('data-last-billed');
+
+        var stage2 = document.getElementById('exportStage2');
+        var title = document.getElementById('exportStage2Title');
+        if (title) title.textContent = name;
+        if (stage2) stage2.setAttribute('data-project-id', pid);
+
+        var lbdBtn = document.getElementById('exportPresetLbd');
+        var lbdRangeSpan = document.getElementById('exportPresetLbdRange');
+        if (lbdBtn && lbdRangeSpan) {{
+            if (lbd) {{
+                var lbdStart = addDays(lbd, 1);
+                var menu = document.getElementById('exportMenu');
+                var today = menu ? menu.getAttribute('data-today') : null;
+                if (today) {{
+                    lbdBtn.setAttribute('data-start', lbdStart);
+                    lbdBtn.setAttribute('data-end', today);
+                    lbdRangeSpan.textContent = formatRange(lbdStart, today);
+                    lbdBtn.style.display = '';
+                }} else {{
+                    lbdBtn.style.display = 'none';
+                }}
+            }} else {{
+                lbdBtn.style.display = 'none';
+            }}
+        }}
+
+        document.getElementById('exportStage1').style.display = 'none';
+        stage2.style.display = '';
+        var form = document.getElementById('exportCustomForm');
+        if (form) form.style.display = 'none';
+    }}
+
+    function addDays(isoDate, days) {{
+        // Parse YYYY-MM-DD as a local date and add days
+        var parts = isoDate.split('-');
+        var d = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, parseInt(parts[2],10));
+        d.setDate(d.getDate() + days);
+        var y = d.getFullYear();
+        var m = String(d.getMonth()+1).padStart(2,'0');
+        var day = String(d.getDate()).padStart(2,'0');
+        return y + '-' + m + '-' + day;
+    }}
+
+    function formatRange(startIso, endIso) {{
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        function fmt(iso) {{
+            var p = iso.split('-');
+            return months[parseInt(p[1],10)-1] + ' ' + parseInt(p[2],10);
+        }}
+        return fmt(startIso) + ' \u2013 ' + fmt(endIso);
+    }}
+
+    function exportPickPreset(btn) {{
+        if (!btn) return;
+        var start = btn.getAttribute('data-start');
+        var end = btn.getAttribute('data-end');
+        if (!start || !end) return;
+        var stage2 = document.getElementById('exportStage2');
+        var pid = stage2 ? stage2.getAttribute('data-project-id') : null;
+        if (!pid) return;
+        closeExportMenu();
+        postAction('export_csv:' + pid + ':' + start + ':' + end);
+    }}
+
+    function exportToggleCustomForm(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var form = document.getElementById('exportCustomForm');
+        if (!form) return;
+        form.style.display = (form.style.display === 'none' || !form.style.display) ? '' : 'none';
+    }}
+
+    function exportSubmitCustom(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var stage2 = document.getElementById('exportStage2');
+        var pid = stage2 ? stage2.getAttribute('data-project-id') : null;
+        var start = document.getElementById('exportCustomStart').value;
+        var end = document.getElementById('exportCustomEnd').value;
+        if (!pid || !start || !end) return;
+        if (start > end) {{ var t = start; start = end; end = t; }}
+        closeExportMenu();
+        postAction('export_csv:' + pid + ':' + start + ':' + end);
+    }}
+
+    function toggleMoreMenu(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var group = document.getElementById('moreGroup');
+        if (!group) return;
+        closeRefreshMenu();
+        closeExportMenu();
         group.classList.toggle('open');
     }}
 
     function runRefreshAction(action) {{
         closeRefreshMenu();
+        postAction(action);
+    }}
+
+    function runExportAction(projectId) {{
+        closeExportMenu();
+        postAction('export_csv:' + projectId);
+    }}
+
+    function runMoreAction(action) {{
+        closeMoreMenu();
         postAction(action);
     }}
 
@@ -1242,12 +1789,16 @@ html, body {{
         startHeightObserver();
         scheduleReportHeight();
     }});
-    document.addEventListener('click', function() {{
-        closeRefreshMenu();
+    document.addEventListener('click', function(event) {{
+        var target = event.target;
+        if (target && target.closest && target.closest('#refreshGroup, #exportGroup, #moreGroup')) {{
+            return;
+        }}
+        closeAllPopupMenus();
     }});
     document.addEventListener('keydown', function(event) {{
         if (event.key === 'Escape') {{
-            closeRefreshMenu();
+            closeAllPopupMenus();
         }}
     }});
     window.addEventListener('load', function() {{

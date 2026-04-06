@@ -93,6 +93,7 @@ class FreelanceTrackerApp(rumps.App):
                 'settings': self._dashboard_preferences,
                 'update_app': self._dashboard_update_app,
                 'quit': self._dashboard_quit,
+                'export_csv': self._dashboard_export_csv,
             })
         else:
             _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
@@ -165,6 +166,126 @@ class FreelanceTrackerApp(rumps.App):
             self.dashboard.hide()
         self.update_app(None)
 
+    def _build_exportable_projects(self):
+        """Return list of {'id', 'name', 'last_billed_date'} for projects with a billable rate."""
+        from toggl_data import get_projects, get_effective_project_rate
+        prefs = load_preferences()
+        retainer_rates = prefs.get('retainer_hourly_rates', {})
+        projects_config = prefs.get('projects', {})
+        out = []
+        try:
+            projects = get_projects()
+        except Exception as exc:
+            _debug(f"_build_exportable_projects: get_projects failed: {exc}")
+            return out
+        for pid, info in projects.items():
+            rate, _src = get_effective_project_rate(info, retainer_rates, projects_config)
+            if rate is None or rate <= 0:
+                continue
+            name = info.get('name', 'Unknown')
+            defn = projects_config.get(name, {})
+            lbd = defn.get('last_billed_date') if defn.get('billing_type') == 'hourly_with_cap' else None
+            out.append({
+                'id': str(pid),
+                'name': name,
+                'last_billed_date': lbd or '',
+            })
+        out.sort(key=lambda p: p['name'].lower())
+        return out
+
+    def _dashboard_export_csv(self, project_id, start_iso, end_iso):
+        """Export hours CSV for one project given explicit ISO dates from the dashboard."""
+        from datetime import date as _date
+        try:
+            start_d = _date.fromisoformat(start_iso)
+            end_d = _date.fromisoformat(end_iso)
+        except ValueError as exc:
+            _debug(f"Export failed: bad dates {start_iso}/{end_iso}: {exc}")
+            rumps.alert("Export failed", f"Invalid date range: {start_iso} to {end_iso}")
+            return
+        self._run_export(project_id, start_d, end_d)
+
+    def _fallback_export_csv(self, project_id):
+        """Used by the rumps fallback menu when WebKit isn't available.
+
+        Auto-resolves the range for hourly_with_cap+last_billed_date projects;
+        otherwise prompts via the native NSAlert date dialog.
+        """
+        from toggl_data import get_projects
+        from datetime import date as _date, timedelta as _td
+
+        info = get_projects().get(str(project_id))
+        if not info:
+            rumps.alert("Export failed", f"Unknown project id {project_id}")
+            return
+        project_name = info.get('name', 'Unknown')
+
+        prefs = load_preferences()
+        projects_config = prefs.get('projects', {})
+        defn = projects_config.get(project_name, {})
+
+        start_d = end_d = None
+        if defn.get('billing_type') == 'hourly_with_cap' and defn.get('last_billed_date'):
+            try:
+                last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
+                start_d = last_billed + _td(days=1)
+                end_d = _date.today()
+            except (TypeError, ValueError):
+                pass
+
+        if start_d is None:
+            from hours_csv_export import previous_month_range
+            from date_range_dialog import prompt_date_range
+            default_start, default_end = previous_month_range()
+            picked = prompt_date_range(
+                default_start, default_end,
+                message_text=f"Export hours: {project_name}",
+            )
+            if picked is None:
+                return
+            start_d, end_d = picked
+
+        self._run_export(project_id, start_d, end_d)
+
+    def _run_export(self, project_id, start_d, end_d):
+        """Shared export pipeline used by both the dashboard and fallback paths."""
+        from toggl_data import get_projects, get_effective_project_rate
+        import hours_csv_export
+
+        if self.dashboard is not None:
+            self.dashboard.hide()
+
+        try:
+            info = get_projects().get(str(project_id))
+            if not info:
+                rumps.alert("Export failed", f"Unknown project id {project_id}")
+                return
+
+            prefs = load_preferences()
+            rate, _ = get_effective_project_rate(
+                info,
+                prefs.get('retainer_hourly_rates', {}),
+                prefs.get('projects', {}),
+            )
+            if not rate:
+                rumps.alert("Export failed", f"No billable rate for {info.get('name')}")
+                return
+
+            project_name = info.get('name', 'Unknown')
+            path = hours_csv_export.export_project_range(
+                project_id, project_name, rate, start_d, end_d
+            )
+            subprocess.run(["open", "-R", str(path)], check=False)
+            try:
+                rumps.notification("Exported hours CSV", project_name, str(path))
+            except Exception:
+                pass
+        except Exception as exc:
+            _debug(f"Export failed: {exc}")
+            import traceback
+            _debug(traceback.format_exc())
+            rumps.alert("Export failed", str(exc))
+
     def calculate_api_calls(self, force_refresh=False):
         from preferences import CACHE_DIR, load_preferences
 
@@ -213,6 +334,7 @@ class FreelanceTrackerApp(rumps.App):
                 self.dashboard.set_last_updated(self.last_update)
                 self.dashboard.set_rate_limited(is_rate_limited())
                 self.dashboard.set_error_message(None)
+                self.dashboard.set_exportable_projects(self._build_exportable_projects())
                 self.dashboard.update_data(daily, weekly, monthly)
             else:
                 self._update_fallback_menu(daily, weekly, monthly, next_refresh_calls)
@@ -363,11 +485,30 @@ class FreelanceTrackerApp(rumps.App):
         self.menu.add(rumps.MenuItem(f"🔄 Refresh Now ({next_refresh_calls} API calls)", callback=self.refresh))
         self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
         self.menu.add(rumps.separator)
+        export_menu = self._build_export_fallback_menu()
+        if export_menu is not None:
+            self.menu.add(export_menu)
         self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
         self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
         self.menu.add(rumps.MenuItem("🆕 Update App", callback=self.update_app))
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
+
+    def _build_export_fallback_menu(self):
+        """Build the rumps submenu used when WebKit dashboard is unavailable."""
+        projects = self._build_exportable_projects()
+        if not projects:
+            return None
+        parent = rumps.MenuItem("📤 Export Hours CSV")
+        for p in projects:
+            pid = p['id']
+            name = p['name']
+            item = rumps.MenuItem(
+                name,
+                callback=lambda _, pid=pid: self._fallback_export_csv(pid),
+            )
+            parent.add(item)
+        return parent
 
     def _show_fallback_error_menu(self, error):
         """Show a usable dropdown menu when refresh fails in fallback mode."""
