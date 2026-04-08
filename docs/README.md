@@ -1,5 +1,7 @@
 # Toggl Menu Bar App Documentation
 
+> ⚠️ **HISTORICAL INDEX — DO NOT TREAT AS CURRENT.** This index and the planning documents it links to (`menubar-app-plan.md`, `architecture.md`) are pre-implementation drafts. They describe a rumps dropdown menu as the primary interface and reference files that do not exist in the actual codebase. The shipped app uses a WebKit dashboard popover (`dashboard_panel.py`) as the canonical UI. For current docs see `../README.md`, `./SOT.md`, and `../AGENTS.md`. Kept here only for historical reference.
+
 Welcome to the Toggl Menu Bar App documentation! This collection of documents will guide you through building a native macOS menu bar application to track your freelance earnings in real-time.
 
 ## 📚 Documentation Index

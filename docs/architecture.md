@@ -1,5 +1,7 @@
 # Menu Bar App Architecture
 
+> ⚠️ **HISTORICAL — DO NOT TREAT AS CURRENT.** This document is the original pre-implementation design from before the project was built. It describes a hypothetical file layout (`app.py`, `menu_builder.py`, `earnings_calculator.py`, etc.) that does not exist, and a rumps dropdown as the primary interface — the actual app uses a WebKit dashboard popover (`dashboard_panel.py`) as the canonical UI. For the current architecture and feature set, see `docs/SOT.md`, `README.md`, and `AGENTS.md`. Kept here only for historical reference.
+
 ## High-Level Architecture
 
 ```

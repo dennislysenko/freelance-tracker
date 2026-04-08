@@ -136,43 +136,11 @@ Shows: running status, memory usage, uptime, logs, cache size.
 ./uninstall_service.sh
 ```
 
-## Menu Bar Display
+## User Interface
 
-```
-💰 $400  ← Always visible
+The 💰 menu bar title is always visible. Clicking it opens the **dashboard popover** — a WebKit-rendered panel implemented in `dashboard_panel.py`. This is the canonical UI: TODAY / This Week / THIS MONTH sections (each collapsible with persisted state), monthly project progress bars with pacing markers, month projection, the footer Refresh / Settings / Update / Quit / Export CSV controls, and the rate-limit / refresh-error inline states.
 
-Click to see:
-┌─────────────────────────────────────┐
-│ 📅 TODAY - $400.00 (5.25h)          │
-│ ─────────────────────────────────── │
-│   Client A: $225 (1.5h)             │
-│   Client B: $150 (1.25h)            │
-│   Client C: $25 (0.25h)             │
-│                                     │
-│ 📊 This Week: $1,200.00             │
-│ ─────────────────────────────────── │
-│ 📊 THIS MONTH - $4,800.00           │
-│ ─────────────────────────────────── │
-│    Monthly Hours by Project:        │
-│      Client A: 45.2h / 80h (57%)    │
-│      Client B: 32.0h / 40h (80%)    │
-│      Client C: 8.5h ($425)          │
-│ ─────────────────────────────────── │
-│ 📈 Month Projection: $4,800         │
-│    Worked 8/16 workable days        │
-│    (4 vacation days excluded)       │
-│    Daily average: $600              │
-│ ─────────────────────────────────── │
-│ 🕐 Last updated: 04:30 PM           │
-│ ─────────────────────────────────── │
-│ ⟳ Refresh Now (1 API call)          │
-│ 🔄 Refresh Projects (1 API call)    │
-│ ─────────────────────────────────── │
-│ 📋 View API Audit Log               │
-│ ─────────────────────────────────── │
-│ Quit                                │
-└─────────────────────────────────────┘
-```
+If the WebKit bridge is unavailable on a given machine (missing PyObjC, etc.), the app falls back to a minimal rumps dropdown menu so it still launches. The fallback is intentionally bare-bones and is **not** where new features live — see `CLAUDE.md` for the policy.
 
 ### Month Projection
 

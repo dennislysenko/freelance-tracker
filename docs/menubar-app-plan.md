@@ -1,5 +1,7 @@
 # Toggl Earnings Menu Bar App - Simplified Implementation Plan
 
+> ⚠️ **HISTORICAL — DO NOT TREAT AS CURRENT.** This is the original pre-implementation plan. It describes a rumps dropdown menu as the primary UI and references files that do not exist in the shipped codebase. The actual app uses a WebKit dashboard popover (`dashboard_panel.py`) as the canonical interface. For current docs see `../README.md`, `./SOT.md`, and `../AGENTS.md`. Kept here only for historical reference.
+
 ## Overview
 
 Build a macOS menu bar app that displays your daily Toggl earnings. We'll build it incrementally: first the UI with mock data, then hook in the real logic.

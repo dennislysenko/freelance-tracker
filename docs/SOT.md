@@ -8,7 +8,11 @@ Master reference for all features and benefits. Agents must update this file whe
 
 ## What It Does
 
-Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at a glance. Click the menu bar icon to see detailed breakdowns of today, this week, this month, and projected monthly earnings.
+Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at a glance. Click the menu bar icon to open the dashboard popover with detailed breakdowns of today, this week, this month, and projected monthly earnings.
+
+## Primary Interface
+
+The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user interface — every user-facing feature documented in this file lives there. The rumps dropdown menu in `menubar_app.py` is a degraded fallback that only renders when the WebKit bridge is unavailable, and is intentionally feature-incomplete. New features must be added to the dashboard popover, not the fallback menu.
 
 ---
 

@@ -2,6 +2,20 @@
 
 Quick reference for AI agents working on this project.
 
+> **Note on this file:** `AGENTS.md` is the real file. `CLAUDE.md` is a symlink to it (`CLAUDE.md -> AGENTS.md`). Edit `AGENTS.md` and both Claude Code and other agentic tooling will see the same content. Do not replace the symlink with a separate copy or the two will drift out of sync.
+
+## CRITICAL: Primary Interface
+
+**The WebKit dashboard popover in `dashboard_panel.py` is the canonical user interface.** It is what the user actually sees and interacts with.
+
+When adding or changing any user-facing UI:
+- All net-new UI work goes in `dashboard_panel.py` (the WebKit popover with embedded HTML/CSS/JS)
+- Do NOT add features to the rumps fallback menu in `menubar_app.py` (`_update_fallback_menu`, `_show_fallback_error_menu`, `_build_export_fallback_menu`)
+- The fallback menu exists ONLY as an emergency path when WebKit/PyObjC is unavailable, and must remain a minimal degraded view — never the place to ship new features
+- The menu bar title (the `💰 $X` string set via `self.title`) is fine to update for status; that is not the same as adding UI
+
+If a feature needs to surface in both for accessibility reasons, ask the user first — default is dashboard-only.
+
 ## CRITICAL: Source of Truth
 
 **Before making any feature changes, READ `docs/SOT.md` first.**
@@ -93,10 +107,12 @@ rm -rf ~/Library/Caches/TogglMenuBar/*    # Clear cache
 
 ## Key Files
 
-- `menubar_app.py` - Main menu bar app
-- `toggl_data.py` - API integration
+- `dashboard_panel.py` - **Canonical UI**: WebKit popover with embedded HTML/CSS/JS (the dashboard the user actually sees)
+- `menubar_app.py` - Menu bar host process; owns the 💰 status item, refresh loop, and a minimal rumps fallback menu used only when WebKit is unavailable
+- `toggl_data.py` - Toggl API integration (GET/POST/PUT, caching, audit logging)
 - `toggl_earnings.py` - CLI version
 - `preferences.py` - Settings
+- `preferences_window.py` - Native preferences UI
 - `.env` - API credentials (never commit!)
 
 ## File Locations
