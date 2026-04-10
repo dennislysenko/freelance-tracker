@@ -143,6 +143,128 @@ def get_projects():
         raise
 
 
+def create_time_entry(start, duration_seconds, description, project_id=None, billable=True, tags=None):
+    """
+    Create a new time entry in Toggl.
+
+    Args:
+        start: timezone-aware datetime for the entry start
+        duration_seconds: positive int for a completed entry's duration
+        description: entry description/label
+        project_id: optional Toggl project id
+        billable: whether the entry is billable
+        tags: optional list of tag names
+
+    Returns the created entry dict on success.
+    """
+    global _rate_limited
+    if WORKSPACE_ID is None:
+        raise ValueError("TOGGL_WORKSPACE_ID not found in environment variables.")
+
+    if start.tzinfo is None:
+        raise ValueError("start datetime must be timezone-aware")
+
+    start_utc = start.astimezone(timezone.utc)
+    payload = {
+        "created_with": "freelance-tracker",
+        "description": description,
+        "workspace_id": int(WORKSPACE_ID),
+        "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "duration": int(duration_seconds),
+        "billable": billable,
+    }
+    if project_id is not None:
+        payload["project_id"] = int(project_id)
+    if tags:
+        payload["tags"] = list(tags)
+
+    url = f"{BASE_URL}/workspaces/{WORKSPACE_ID}/time_entries"
+    endpoint = f"/workspaces/{WORKSPACE_ID}/time_entries"
+
+    try:
+        response = requests.post(
+            url,
+            auth=(API_TOKEN, "api_token"),
+            json=payload,
+            timeout=10,
+        )
+
+        if response.status_code == 402:
+            _rate_limited = True
+            log_api_request(endpoint, "POST", status_code=402, rate_limited=True)
+            raise RuntimeError("Toggl API is rate limited (402); time entry not created.")
+
+        response.raise_for_status()
+        _rate_limited = False
+        log_api_request(endpoint, "POST", status_code=response.status_code)
+        return response.json()
+
+    except requests.exceptions.RequestException as e:
+        log_api_request(endpoint, "POST", error=str(e))
+        raise
+
+
+def update_time_entry(entry_id, **fields):
+    """
+    Update an existing time entry. Pass any subset of:
+        description, project_id, billable, tags,
+        start (tz-aware datetime), duration_seconds (int),
+        stop (tz-aware datetime).
+
+    Returns the updated entry dict on success.
+    """
+    global _rate_limited
+    if WORKSPACE_ID is None:
+        raise ValueError("TOGGL_WORKSPACE_ID not found in environment variables.")
+
+    payload = {}
+    for key in ("description", "billable", "tags"):
+        if key in fields:
+            payload[key] = fields[key]
+    if "project_id" in fields and fields["project_id"] is not None:
+        payload["project_id"] = int(fields["project_id"])
+    if "duration_seconds" in fields:
+        payload["duration"] = int(fields["duration_seconds"])
+    if "start" in fields:
+        start = fields["start"]
+        if start.tzinfo is None:
+            raise ValueError("start datetime must be timezone-aware")
+        payload["start"] = start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if "stop" in fields:
+        stop = fields["stop"]
+        if stop.tzinfo is None:
+            raise ValueError("stop datetime must be timezone-aware")
+        payload["stop"] = stop.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if not payload:
+        raise ValueError("update_time_entry requires at least one field to update")
+
+    url = f"{BASE_URL}/workspaces/{WORKSPACE_ID}/time_entries/{entry_id}"
+    endpoint = f"/workspaces/{WORKSPACE_ID}/time_entries/{entry_id}"
+
+    try:
+        response = requests.put(
+            url,
+            auth=(API_TOKEN, "api_token"),
+            json=payload,
+            timeout=10,
+        )
+
+        if response.status_code == 402:
+            _rate_limited = True
+            log_api_request(endpoint, "PUT", status_code=402, rate_limited=True)
+            raise RuntimeError("Toggl API is rate limited (402); time entry not updated.")
+
+        response.raise_for_status()
+        _rate_limited = False
+        log_api_request(endpoint, "PUT", status_code=response.status_code)
+        return response.json()
+
+    except requests.exceptions.RequestException as e:
+        log_api_request(endpoint, "PUT", error=str(e))
+        raise
+
+
 def get_cached_entries(cache_key, start_date, end_date):
     """Get cached time entries if they exist and are valid."""
     cache_file = CACHE_DIR / f"{cache_key}.json"
@@ -452,6 +574,25 @@ def calculate_period_earnings(period):
             "hours": hours,
             "billable": has_earnings
         }
+
+        if period == "daily":
+            time_blocks = []
+            for e in data["entries"]:
+                if e.get("duration", 0) <= 0 or not e.get("start"):
+                    continue
+                try:
+                    start_dt = datetime.fromisoformat(e["start"].replace("Z", "+00:00")).astimezone()
+                except ValueError:
+                    continue
+                stop_dt = start_dt + timedelta(seconds=e["duration"])
+                time_blocks.append({
+                    "start": start_dt,
+                    "stop": stop_dt,
+                    "duration": e["duration"],
+                    "description": e.get("description") or "",
+                })
+            time_blocks.sort(key=lambda b: b["start"])
+            project_entry["time_blocks"] = time_blocks
 
         all_projects_list.append(project_entry)
 

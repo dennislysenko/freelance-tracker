@@ -475,22 +475,47 @@ class DashboardPanelController:
 
         daily_rows = ""
         for p in all_daily_projects:
+            blocks = p.get('time_blocks') or []
             if p.get('billable', True):
+                value_html = (
+                    f'<span class="money">${p["earnings"]:.0f}</span>'
+                    f'<span class="hours">({p["hours"]:.1f}h)</span>'
+                )
+            else:
+                value_html = f'<span class="hours">{p["hours"]:.1f}h</span>'
+
+            if blocks:
+                project_key = _esc(p['name'])
+                blocks_html = ""
+                for block in blocks:
+                    start_s = self._format_block_time(block["start"])
+                    stop_s = self._format_block_time(block["stop"])
+                    mins = max(1, round(block["duration"] / 60))
+                    desc = block.get("description") or "(no description)"
+                    blocks_html += f"""
+                    <div class="time-block">
+                        <span class="time-block-range">{start_s}\u2013{stop_s}</span>
+                        <span class="time-block-duration">({mins}m)</span>
+                        <span class="time-block-desc">{_esc(desc)}</span>
+                    </div>"""
                 daily_rows += f"""
-                <div class="project-row">
-                    <span class="project-name">{_esc(p['name'])}</span>
-                    <span class="project-value">
-                        <span class="money">${p['earnings']:.0f}</span>
-                        <span class="hours">({p['hours']:.1f}h)</span>
-                    </span>
+                <div class="project-row expandable" data-project-key="{project_key}">
+                    <div class="project-row-header" role="button" tabindex="0"
+                         onclick="toggleProject(this)"
+                         onkeydown="handleProjectKey(event, this)">
+                        <span class="project-name">
+                            <span class="row-chevron">\u25b8</span>{_esc(p['name'])}
+                        </span>
+                        <span class="project-value">{value_html}</span>
+                    </div>
+                    <div class="time-blocks">{blocks_html}
+                    </div>
                 </div>"""
             else:
                 daily_rows += f"""
                 <div class="project-row">
                     <span class="project-name">{_esc(p['name'])}</span>
-                    <span class="project-value">
-                        <span class="hours">{p['hours']:.1f}h</span>
-                    </span>
+                    <span class="project-value">{value_html}</span>
                 </div>"""
 
         if not all_daily_projects:
@@ -862,6 +887,83 @@ html, body {{
 
 .project-row:hover {{
     background: rgba(255,255,255,0.04);
+}}
+
+.project-row.expandable {{
+    display: block;
+    padding: 0;
+}}
+
+.project-row.expandable:hover {{
+    background: transparent;
+}}
+
+.project-row-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+}}
+
+.project-row-header:hover {{
+    background: rgba(255,255,255,0.04);
+}}
+
+.project-row-header:focus {{
+    outline: none;
+    background: rgba(255,255,255,0.06);
+}}
+
+.row-chevron {{
+    display: inline-block;
+    width: 12px;
+    color: #6e7781;
+    font-size: 10px;
+    margin-right: 4px;
+    transition: transform 0.15s ease;
+}}
+
+.project-row.expanded .row-chevron {{
+    transform: rotate(90deg);
+}}
+
+.time-blocks {{
+    display: none;
+    padding: 2px 6px 4px 22px;
+}}
+
+.project-row.expanded .time-blocks {{
+    display: block;
+}}
+
+.time-block {{
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 12px;
+    color: #8b949e;
+    padding: 2px 0;
+    font-variant-numeric: tabular-nums;
+}}
+
+.time-block-range {{
+    color: #b0b8c1;
+    flex-shrink: 0;
+}}
+
+.time-block-duration {{
+    color: #6e7781;
+    flex-shrink: 0;
+}}
+
+.time-block-desc {{
+    color: #8b949e;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }}
 
 .project-name {{
@@ -1756,6 +1858,61 @@ html, body {{
         }}
     }}
 
+    var EXPANDED_PROJECTS_KEY = 'dashboard.todayExpandedProjects';
+
+    function loadExpandedProjects() {{
+        try {{
+            var raw = localStorage.getItem(EXPANDED_PROJECTS_KEY);
+            if (!raw) return {{}};
+            var parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object') ? parsed : {{}};
+        }} catch (e) {{
+            return {{}};
+        }}
+    }}
+
+    function saveExpandedProjects(state) {{
+        try {{
+            localStorage.setItem(EXPANDED_PROJECTS_KEY, JSON.stringify(state));
+        }} catch (e) {{}}
+    }}
+
+    function toggleProject(headerEl) {{
+        var row = headerEl.closest('.project-row.expandable');
+        if (!row) return;
+        var key = row.getAttribute('data-project-key');
+        var willExpand = !row.classList.contains('expanded');
+        row.classList.toggle('expanded', willExpand);
+
+        var state = loadExpandedProjects();
+        if (willExpand) {{
+            state[key] = true;
+        }} else {{
+            delete state[key];
+        }}
+        saveExpandedProjects(state);
+
+        scheduleReportHeight();
+    }}
+
+    function handleProjectKey(event, headerEl) {{
+        if (event.key === 'Enter' || event.key === ' ') {{
+            event.preventDefault();
+            toggleProject(headerEl);
+        }}
+    }}
+
+    function applyExpandedProjectsState() {{
+        var state = loadExpandedProjects();
+        var rows = document.querySelectorAll('.project-row.expandable');
+        for (var i = 0; i < rows.length; i++) {{
+            var key = rows[i].getAttribute('data-project-key');
+            if (key && state[key]) {{
+                rows[i].classList.add('expanded');
+            }}
+        }}
+    }}
+
     function reportHeight() {{
         var wrapper = document.querySelector('.wrapper');
         if (!wrapper || !document.body || !document.documentElement) return;
@@ -1787,6 +1944,7 @@ html, body {{
 
     document.addEventListener('DOMContentLoaded', function() {{
         startHeightObserver();
+        applyExpandedProjectsState();
         scheduleReportHeight();
     }});
     document.addEventListener('click', function(event) {{
@@ -1810,6 +1968,18 @@ html, body {{
 </html>"""
 
         return html
+
+    @staticmethod
+    def _format_block_time(dt):
+        """Format a datetime as 'h:mma' / 'ha' (top-of-hour collapsed)."""
+        s = dt.strftime("%-I:%M%p").lower()
+        if s.endswith(":00am"):
+            s = s[:-5] + "a"
+        elif s.endswith(":00pm"):
+            s = s[:-5] + "p"
+        else:
+            s = s.replace("am", "a").replace("pm", "p")
+        return s
 
     def _render_section(self, section_key, title, total, body_html, expanded):
         """Render a dashboard section with persisted collapse state."""
