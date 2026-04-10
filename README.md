@@ -288,6 +288,8 @@ Client A: 45.2h / 80h (57%)
 Globex: 22.5h / 30h (75%)
 ```
 
+Projects with configured monthly hour targets stay visible in the dashboard's "This Month" tracked-hours section even when they are still at `0.0h`, so you can see outstanding retainers before logging the first entry.
+
 ### Retainer Dollar Tracking
 
 If a retainer project in Toggl has no billable hourly rate, add it to `retainer_hourly_rates`:

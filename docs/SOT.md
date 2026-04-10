@@ -131,6 +131,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Visual progress bars with Unicode blocks on separate line
 - Progress tracking with percentages inline with hours
 - Example: "Client A: 45.2h / 80h (57%)" followed by "[██████░░░░░░]" on next line
+- In the dashboard month section, target-bearing projects stay visible at `0.0h / target` even before any hours are logged that month
 - For `fixed_monthly / required` and `hourly_with_cap`, the target denominator is adjusted by carryover balance
 
 #### Legacy: Retainer Hourly Overrides

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+import dashboard_panel
 from dashboard_panel import DashboardPanelController
 
 
@@ -114,3 +115,51 @@ def test_preferred_height_uses_last_measured_value():
     preferred = controller._preferred_panel_height({}, {}, {})
 
     assert preferred == 386
+
+
+def test_month_section_includes_zero_hour_projects_with_targets(monkeypatch):
+    """Tracked projects should stay visible before any time has been logged this month."""
+    controller = _make_controller()
+
+    monkeypatch.setattr(
+        dashboard_panel,
+        "load_preferences",
+        lambda: {
+            "project_targets": {
+                "Bench Project": 12,
+            },
+            "projects": {
+                "Retainer Client": {
+                    "billing_type": "fixed_monthly",
+                    "monthly_amount": 2400,
+                    "hour_tracking": "required",
+                    "target_hours": 20,
+                },
+            },
+            "dashboard_sections": {
+                "today": True,
+                "week": True,
+                "month": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_panel,
+        "get_previous_month_balance",
+        lambda name: (0.0, "Mar"),
+    )
+
+    html = controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {
+            "total": 0,
+            "all_projects": [
+                {"name": "Worked Client", "earnings": 500, "hours": 3.0, "billable": True},
+            ],
+            "projection": {},
+        },
+    )
+
+    assert "Bench Project: 0.0h / 12.0h (0%)" in html
+    assert "Retainer Client: 0.0h / 20.0h (0%)" in html

@@ -392,6 +392,58 @@ class DashboardPanelController:
         prefs['dashboard_sections'] = current
         save_preferences(prefs)
 
+    @staticmethod
+    def _resolve_monthly_target(name, project_targets, projects_config):
+        """Return the configured monthly target/cap for a project, if any."""
+        proj_def = projects_config.get(name, {})
+        billing_type = proj_def.get('billing_type')
+        hour_tracking = proj_def.get('hour_tracking')
+
+        target = project_targets.get(name)
+        if not target and billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft'):
+            target = proj_def.get('target_hours')
+        elif not target and billing_type == 'hourly_with_cap':
+            target = proj_def.get('cap_hours')
+
+        return target, proj_def, billing_type, hour_tracking
+
+    @classmethod
+    def _monthly_projects_for_display(cls, monthly_projects, project_targets, projects_config):
+        """
+        Include zero-hour projects that still have an active monthly target/cap.
+        This keeps the tracked-hours section visible even before the first entry lands.
+        """
+        display_projects = [dict(project) for project in monthly_projects]
+        seen_names = {
+            project.get("name")
+            for project in display_projects
+            if project.get("name")
+        }
+
+        candidate_names = []
+        for name, target in project_targets.items():
+            if isinstance(target, (int, float)) and target > 0 and name not in seen_names:
+                candidate_names.append(name)
+                seen_names.add(name)
+
+        for name in projects_config:
+            target, _proj_def, _billing_type, _hour_tracking = cls._resolve_monthly_target(
+                name, project_targets, projects_config
+            )
+            if target and name not in seen_names:
+                candidate_names.append(name)
+                seen_names.add(name)
+
+        for name in candidate_names:
+            proj_def = projects_config.get(name, {})
+            display_projects.append({
+                "name": name,
+                "hours": 0.0,
+                "billable": proj_def.get("billing_type") in ("fixed_monthly", "hourly_with_cap"),
+            })
+
+        return display_projects
+
     def _estimate_panel_height(self, daily, weekly, monthly):
         """Estimate the height needed for the current dashboard content."""
         prefs = load_preferences()
@@ -413,28 +465,26 @@ class DashboardPanelController:
             weekly_rows = weekly.get('all_projects', weekly.get('projects', []))
             height += max(1, len(weekly_rows)) * 28
 
-        monthly_rows = monthly.get('all_projects', monthly.get('projects', []))
+        monthly_rows = self._monthly_projects_for_display(
+            monthly.get('all_projects', monthly.get('projects', [])),
+            project_targets,
+            projects_config,
+        )
         if section_states.get('month', True):
             for project in monthly_rows:
-                if project['hours'] <= 0:
-                    continue
-
                 name = project['name']
                 is_billable = project.get('billable', True)
-                proj_def = projects_config.get(name, {})
-                billing_type = proj_def.get('billing_type')
-                hour_tracking = proj_def.get('hour_tracking')
+                target, proj_def, billing_type, hour_tracking = self._resolve_monthly_target(
+                    name, project_targets, projects_config
+                )
                 has_target = name in project_targets
                 has_def = name in projects_config
 
                 if not (is_billable or has_target or has_def):
                     continue
 
-                target = project_targets.get(name)
-                if not target and billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft'):
-                    target = proj_def.get('target_hours')
-                elif not target and billing_type == 'hourly_with_cap':
-                    target = proj_def.get('cap_hours')
+                if project['hours'] <= 0 and not target:
+                    continue
 
                 if target:
                     height += 52  # header + progress bar + status
@@ -550,25 +600,29 @@ class DashboardPanelController:
 
         # === THIS MONTH section ===
         month_total = monthly.get('total', 0)
-        all_monthly_projects = monthly.get('all_projects', monthly.get('projects', []))
+        all_monthly_projects = self._monthly_projects_for_display(
+            monthly.get('all_projects', monthly.get('projects', [])),
+            project_targets,
+            projects_config,
+        )
 
         # Collect projects into two groups: tracked (with targets) and untracked
         tracked_projects = []   # (percentage, html)
         untracked_projects = [] # (html,)
 
         for p in all_monthly_projects:
-            if p['hours'] <= 0:
-                continue
-
             name = p['name']
             is_billable = p.get('billable', True)
-            proj_def = projects_config.get(name, {})
-            billing_type = proj_def.get('billing_type')
-            hour_tracking = proj_def.get('hour_tracking')
+            target, proj_def, billing_type, hour_tracking = self._resolve_monthly_target(
+                name, project_targets, projects_config
+            )
             has_target = name in project_targets
             has_def = name in projects_config
 
             if not (is_billable or has_target or has_def):
+                continue
+
+            if p['hours'] <= 0 and not target:
                 continue
 
             # Determine target
@@ -577,13 +631,6 @@ class DashboardPanelController:
             if (billing_type == 'fixed_monthly' and hour_tracking == 'required') or \
                billing_type == 'hourly_with_cap':
                 carryover_balance, prev_month_label = get_previous_month_balance(name)
-
-            target = project_targets.get(name)
-            if not target and billing_type == 'fixed_monthly' and \
-               hour_tracking in ('required', 'soft'):
-                target = proj_def.get('target_hours')
-            elif not target and billing_type == 'hourly_with_cap':
-                target = proj_def.get('cap_hours')
 
             if target:
                 effective_target = max(0.1, target - carryover_balance)
