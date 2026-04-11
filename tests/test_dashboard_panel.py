@@ -74,7 +74,8 @@ def test_dashboard_html_measures_document_height():
     assert "Retry" in html
     assert "document.body.scrollHeight" in html
     assert "document.documentElement.scrollHeight" in html
-    assert "window.addEventListener('resize', scheduleReportHeight)" in html
+    assert "window.addEventListener('resize', function()" in html
+    assert "syncFooterClearance();" in html
     assert "Last updated: 05:04 PM" in html
 
 

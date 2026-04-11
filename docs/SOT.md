@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-04-10
+**Last Updated:** 2026-04-11
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -115,7 +115,7 @@ Every project can have an optional definition in the `projects` preference key. 
 
 #### Carryover
 
-Carryover applies to `hourly_with_cap` and `fixed_monthly / hour_tracking: required`. Balance is stored in `~/Library/Application Support/TogglMenuBar/retainer_carryover.json` and displayed in the monthly hours progress bar. Auto-calculated from cached time entries at end of month; can also be manually set or overridden via the Projects tab in preferences (the "Feb carryover h" field shown for applicable billing types):
+Carryover applies to `hourly_with_cap` and `fixed_monthly / hour_tracking: required`. Balance is stored in `~/Library/Application Support/TogglMenuBar/retainer_carryover.json` and displayed in the monthly hours progress bar. Auto-calculated from the shared cached Toggl entry data for the previous month; can also be manually set or overridden via the Projects tab in preferences (the "Feb carryover h" field shown for applicable billing types). Manual overrides are preserved and are not overwritten by auto recomputation:
 
 ```
 Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
@@ -143,10 +143,13 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 
 ### Smart Caching
 - Minimizes API calls to respect Toggl rate limits
-- Historical data cached permanently
-- Today's data refreshed intelligently
-- Manual `Refresh Now` invalidates only the active dashboard period caches: today (always), current week historical range when applicable, current month historical range when applicable, and one `last_billed_date` range per configured capped project
-- Typically 2-4 API calls per day
+- Raw Toggl time entries are cached once in shared day-based shards under `~/Library/Caches/TogglMenuBar/entries/by_day/`
+- Dashboard, CSV export, Stripe draft invoices, capped `last_billed_date` calculations, and auto carryover all read from the same shared entry cache
+- Historical day shards remain cached until explicitly refreshed; today's shard still uses the configurable `cache_ttl_today`
+- Manual `Refresh Now` invalidates the visible dashboard ranges, active capped-project billing-cycle ranges, and the previous-month range needed for auto carryover when applicable, so dashboard and billing outputs stay in sync after Toggl edits
+- Typical API call cost:
+  - background / on-demand reads: 0-1 calls when required day shards are already cached, otherwise one call per missing merged range
+  - manual `Refresh Now`: typically 2-5 calls depending on overlapping dashboard, billing-cycle, and carryover ranges
 - Running Toggl entries and any non-positive durations are excluded from earnings/hour totals so live timers cannot corrupt dashboard totals
 
 ### System Service
@@ -190,7 +193,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Hourly rate uses the project's effective rate from `get_effective_project_rate` (the same rate used everywhere else in the app)
 - Output saved to `~/Downloads/{project_slug}_{range}_hours.csv`, then revealed in Finder; a notification confirms the export
 - Also available as a submenu in the fallback dropdown menu when the WebKit dashboard is unavailable
-- API call cost: 1 call per export at most (the entries for the range are cached, so back-to-back exports for different projects in the same range hit the cache)
+- API call cost: 0-1 calls per export range. Exports reuse the same shared day-based entry cache as the dashboard, so exporting right after a refresh or a prior export usually hits cached day shards only
 
 ### Stripe Draft Invoice Creation
 - Footer `Export/Invoice` drop-up includes a `Create Stripe Invoice` workflow that mirrors the CSV flow: choose a project, choose a billing range, and create a Stripe draft invoice
@@ -204,7 +207,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - The draft invoice footer contains an hours breakdown line for each billed Toggl entry in the selected range
 - Output creates one Stripe draft invoice plus one attached invoice item for the selected project/range
 - API call cost:
-  - Toggl: 1 call per invoice at most (reuses the same cached range fetch as CSV export)
+  - Toggl: 0-1 calls per invoice range (reuses the same shared day-based entry cache as the dashboard and CSV export)
   - Stripe: 1 customer-list call only when associating an unmapped project, then 2 write calls per invoice (draft invoice + invoice item)
 
 ---

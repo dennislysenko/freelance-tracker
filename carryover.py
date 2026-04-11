@@ -1,7 +1,7 @@
 """Carryover balance state management for hourly_with_cap and fixed_monthly/required projects."""
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from preferences import APP_SUPPORT_DIR
 
 CARRYOVER_FILE = APP_SUPPORT_DIR / "retainer_carryover.json"
@@ -27,10 +27,49 @@ def save_carryover(data):
         json.dump(data, f, indent=2)
 
 
+def _normalize_balance_record(value):
+    """Normalize legacy scalar or new object records into one shape."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        hours = value.get("hours", 0.0)
+        source = value.get("source") or "manual"
+        if source not in {"manual", "auto"}:
+            source = "manual"
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError):
+            hours = 0.0
+        return {
+            "hours": hours,
+            "source": source,
+            "updated_at": value.get("updated_at"),
+        }
+
+    # Legacy format stored raw numbers only. Treat them as manual overrides so
+    # existing user-entered values are never overwritten by auto recomputation.
+    try:
+        hours = float(value)
+    except (TypeError, ValueError):
+        hours = 0.0
+    return {
+        "hours": hours,
+        "source": "manual",
+        "updated_at": None,
+    }
+
+
+def get_balance_record(project_name, year_month):
+    """Return the normalized carryover record for a project/month, or None."""
+    data = load_carryover()
+    raw = data.get(project_name, {}).get(year_month)
+    return _normalize_balance_record(raw)
+
+
 def get_balance(project_name, year_month):
     """Get carryover balance for a project in a given month (YYYY-MM). Returns 0.0 if not set."""
-    data = load_carryover()
-    return data.get(project_name, {}).get(year_month, 0.0)
+    record = get_balance_record(project_name, year_month)
+    return record["hours"] if record else 0.0
 
 
 def has_balance(project_name, year_month):
@@ -39,12 +78,16 @@ def has_balance(project_name, year_month):
     return project_name in data and year_month in data[project_name]
 
 
-def set_balance(project_name, year_month, hours):
+def set_balance(project_name, year_month, hours, source="manual"):
     """Store carryover balance for a project in a given month."""
     data = load_carryover()
     if project_name not in data:
         data[project_name] = {}
-    data[project_name][year_month] = hours
+    data[project_name][year_month] = {
+        "hours": float(hours),
+        "source": source,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
     save_carryover(data)
 
 

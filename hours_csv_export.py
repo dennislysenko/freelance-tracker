@@ -10,9 +10,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from toggl_data import (
-    cache_entries,
-    get_cached_entries,
-    get_time_entries,
+    get_entries_for_range,
 )
 
 CSV_HEADER = [
@@ -159,15 +157,11 @@ def export_project_range(
 
 
 def get_project_entries_for_range(project_id, project_name, start_d, end_d):
-    """Fetch cached-or-live time entries for one project within [start_d, end_d]."""
+    """Fetch time entries for one project within [start_d, end_d] via the shared cache."""
     start_dt = datetime.combine(start_d, datetime.min.time()).astimezone()
     end_dt = datetime.combine(end_d, datetime.max.time()).astimezone()
 
-    cache_key = f"export_{start_d.isoformat()}_to_{end_d.isoformat()}"
-    entries = get_cached_entries(cache_key, start_dt, end_dt)
-    if entries is None:
-        entries = get_time_entries(start_dt, end_dt)
-        cache_entries(cache_key, entries, start_dt, end_dt)
+    entries = get_entries_for_range(start_dt, end_dt)
 
     project_entries = [
         e for e in entries

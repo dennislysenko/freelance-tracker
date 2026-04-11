@@ -19,7 +19,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV` or `Create Stripe Invoice`, then pick a project and range. Presets now include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
 - 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, and Stripe API key after installation
 - 💾 **Smart caching** to minimize Toggl API calls
-  Manual refresh only invalidates the current dashboard period caches instead of wiping all historical entry caches
+  Dashboard, CSV export, Stripe draft invoices, capped billing-cycle calculations, and auto carryover all reuse the same shared day-based Toggl entry cache
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)
 - 📍 **Standard macOS storage** locations
 
@@ -141,6 +141,8 @@ Shows: running status, memory usage, uptime, logs, cache size.
 
 The 💰 menu bar title is always visible. Clicking it opens the **dashboard popover** — a WebKit-rendered panel implemented in `dashboard_panel.py`. This is the canonical UI: TODAY / This Week / THIS MONTH sections (each collapsible with persisted state), monthly project progress bars with pacing markers, month projection, the footer Refresh / Settings / Update / Quit / Export/Invoice controls, and the rate-limit / refresh-error inline states. The footer is rendered as a bottom drawer flush with the sheet while the rest of the content continues to scroll.
 
+`Refresh` keeps the dashboard and billing outputs in sync: it invalidates the shared day-based Toggl entry shards for the visible dashboard ranges plus active capped billing-cycle ranges, so exporting or invoicing after a refresh uses the same underlying entry data the dashboard just rendered.
+
 If the WebKit bridge is unavailable on a given machine (missing PyObjC, etc.), the app falls back to a minimal rumps dropdown menu so it still launches. The fallback is intentionally bare-bones and is **not** where new features live — see `CLAUDE.md` for the policy.
 
 ### Month Projection
@@ -213,7 +215,8 @@ Following macOS conventions:
 └── freelance_tracker.db        # SQLite database (stress events, time entries)
 
 ~/Library/Caches/TogglMenuBar/
-└── *.json                      # Cached API data
+├── entries/by_day/*.json       # Shared cached Toggl time-entry shards by local day
+└── *.json                      # Cached API metadata / legacy compatibility files
 
 ~/Library/Logs/
 ├── freelancetracker-output.log # App output

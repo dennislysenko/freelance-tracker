@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from preferences import CACHE_DIR, load_preferences
 from api_audit import log_api_request, is_currently_rate_limited
-from carryover import get_balance, has_balance, set_balance, get_previous_month_str
+from carryover import get_balance, get_balance_record, set_balance, get_previous_month_str
 from integrations import load_integration_settings
 
 # Configuration
@@ -17,6 +17,9 @@ BASE_URL = "https://api.track.toggl.com/api/v9"
 
 # Rate limit state
 _rate_limited = False
+ENTRY_CACHE_VERSION = 1
+ENTRY_CACHE_DIR = CACHE_DIR / "entries" / "by_day"
+ENTRY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 def _get_api_token():
     token = load_integration_settings().get("TOGGL_API_TOKEN") or os.getenv("TOGGL_API_TOKEN")
@@ -35,10 +38,215 @@ def is_rate_limited():
     return _rate_limited
 
 
+def _entry_cache_file_for_day(day):
+    ENTRY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return ENTRY_CACHE_DIR / f"{day.isoformat()}.json"
+
+
+def _local_day_bounds(day):
+    return (
+        datetime.combine(day, datetime.min.time()).astimezone(),
+        datetime.combine(day, datetime.max.time()).astimezone(),
+    )
+
+
+def _list_days_in_range(start_date, end_date):
+    start_day = start_date.astimezone().date()
+    end_day = end_date.astimezone().date()
+    days = []
+    current = start_day
+    while current <= end_day:
+        days.append(current)
+        current += timedelta(days=1)
+    return days
+
+
+def _partition_entries_by_local_start_day(entries):
+    grouped = defaultdict(list)
+    for entry in entries:
+        start_iso = entry.get("start")
+        if not start_iso:
+            continue
+        try:
+            local_day = datetime.fromisoformat(start_iso.replace("Z", "+00:00")).astimezone().date()
+        except ValueError:
+            continue
+        grouped[local_day].append(entry)
+    return grouped
+
+
+def _entry_in_range(entry, start_date, end_date):
+    start_iso = entry.get("start")
+    if not start_iso:
+        return False
+    try:
+        entry_start = datetime.fromisoformat(start_iso.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return False
+    return start_date <= entry_start <= end_date
+
+
+def _load_entry_day_payload(day):
+    cache_file = _entry_cache_file_for_day(day)
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'r') as f:
+                payload = json.load(f)
+            if payload.get("version") == ENTRY_CACHE_VERSION and payload.get("day") == day.isoformat():
+                return payload
+        except Exception:
+            pass
+
+    # Upgrade path: reuse legacy full-day daily cache files if present.
+    start_dt, end_dt = _local_day_bounds(day)
+    legacy_entries = get_cached_entries(f"daily_{day.isoformat()}", start_dt, end_dt)
+    if legacy_entries is None:
+        return None
+    _store_entry_day_payload(day, legacy_entries)
+    try:
+        with open(cache_file, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _store_entry_day_payload(day, entries):
+    cache_file = _entry_cache_file_for_day(day)
+    with open(cache_file, 'w') as f:
+        json.dump({
+            "version": ENTRY_CACHE_VERSION,
+            "day": day.isoformat(),
+            "fetched_at": datetime.now().isoformat(),
+            "entries": entries,
+        }, f)
+
+
+def _store_entries_for_range(start_date, end_date, entries):
+    grouped = _partition_entries_by_local_start_day(entries)
+    for day in _list_days_in_range(start_date, end_date):
+        _store_entry_day_payload(day, grouped.get(day, []))
+
+
+def _day_cache_is_fresh(day):
+    cache_file = _entry_cache_file_for_day(day)
+    if not cache_file.exists():
+        return False
+
+    today = datetime.now().astimezone().date()
+    if day != today:
+        return True
+
+    prefs = load_preferences()
+    cache_ttl = prefs.get('cache_ttl_today', 1800)
+    cache_age = datetime.now().timestamp() - cache_file.stat().st_mtime
+    return cache_age < cache_ttl
+
+
+def _read_cached_entries_from_day_shards(start_date, end_date, ignore_today_ttl=False):
+    all_entries = []
+    for day in _list_days_in_range(start_date, end_date):
+        payload = _load_entry_day_payload(day)
+        if payload is None:
+            return None
+        if not ignore_today_ttl and not _day_cache_is_fresh(day):
+            return None
+        all_entries.extend(payload.get("entries", []))
+    return [entry for entry in all_entries if _entry_in_range(entry, start_date, end_date)]
+
+
+def merge_ranges(ranges):
+    """Merge overlapping or touching datetime ranges."""
+    normalized = []
+    for start_date, end_date in ranges:
+        if start_date is None or end_date is None:
+            continue
+        start_local = start_date.astimezone()
+        end_local = end_date.astimezone()
+        if end_local < start_local:
+            start_local, end_local = end_local, start_local
+        normalized.append((start_local, end_local))
+
+    if not normalized:
+        return []
+
+    normalized.sort(key=lambda pair: pair[0])
+    merged = [normalized[0]]
+    for start_date, end_date in normalized[1:]:
+        last_start, last_end = merged[-1]
+        if start_date <= last_end + timedelta(seconds=1):
+            merged[-1] = (last_start, max(last_end, end_date))
+        else:
+            merged.append((start_date, end_date))
+    return merged
+
+
+def _day_ranges_within(start_date, end_date, days):
+    ranges = []
+    sorted_days = sorted(set(days))
+    if not sorted_days:
+        return ranges
+
+    run_start = run_end = sorted_days[0]
+    for day in sorted_days[1:]:
+        if day == run_end + timedelta(days=1):
+            run_end = day
+            continue
+        start_bound, _ = _local_day_bounds(run_start)
+        _, end_bound = _local_day_bounds(run_end)
+        ranges.append((max(start_date, start_bound), min(end_date, end_bound)))
+        run_start = run_end = day
+
+    start_bound, _ = _local_day_bounds(run_start)
+    _, end_bound = _local_day_bounds(run_end)
+    ranges.append((max(start_date, start_bound), min(end_date, end_bound)))
+    return ranges
+
+
+def _missing_entry_ranges(start_date, end_date):
+    missing_days = [
+        day for day in _list_days_in_range(start_date, end_date)
+        if not _day_cache_is_fresh(day)
+    ]
+    return _day_ranges_within(start_date, end_date, missing_days)
+
+
+def refresh_entry_ranges(ranges):
+    """Fetch fresh Toggl entries for each merged range and populate day shards."""
+    for start_date, end_date in merge_ranges(ranges):
+        entries = get_time_entries(start_date, end_date)
+        _store_entries_for_range(start_date, end_date, entries)
+
+
+def invalidate_entry_days(days):
+    """Delete shared day shards for the given days."""
+    for day in set(days):
+        _entry_cache_file_for_day(day).unlink(missing_ok=True)
+
+
+def get_entries_for_range(start_date, end_date, force_refresh=False):
+    """Return raw Toggl entries for a date range using shared day-sharded caches."""
+    start_local = start_date.astimezone()
+    end_local = end_date.astimezone()
+    if end_local < start_local:
+        start_local, end_local = end_local, start_local
+
+    if force_refresh:
+        refresh_entry_ranges([(start_local, end_local)])
+    else:
+        missing_ranges = _missing_entry_ranges(start_local, end_local)
+        if missing_ranges:
+            refresh_entry_ranges(missing_ranges)
+
+    cached_entries = _read_cached_entries_from_day_shards(
+        start_local, end_local, ignore_today_ttl=True
+    )
+    return cached_entries or []
+
+
 def get_time_entries(start_date, end_date):
     """
     Fetch time entries for a date range.
-    Returns cached data if rate limited (402).
+    Returns cached data if rate limited (402) or the request fails.
     """
     global _rate_limited
     url = f"{BASE_URL}/me/time_entries"
@@ -57,8 +265,12 @@ def get_time_entries(start_date, end_date):
             log_api_request("/me/time_entries", "GET", status_code=402, rate_limited=True, cached=True)
 
             # Try to return cached data
-            cache_key = f"daily_{start_date.date().isoformat()}"
-            cached_data = get_cached_entries(cache_key, start_date, end_date)
+            cached_data = _read_cached_entries_from_day_shards(
+                start_date, end_date, ignore_today_ttl=True
+            )
+            if cached_data is None:
+                cache_key = f"daily_{start_date.date().isoformat()}"
+                cached_data = get_cached_entries(cache_key, start_date, end_date)
             if cached_data is not None:
                 return cached_data
             else:
@@ -73,8 +285,12 @@ def get_time_entries(start_date, end_date):
     except requests.exceptions.RequestException as e:
         log_api_request("/me/time_entries", "GET", error=str(e))
         # Try to return cached data on any error
-        cache_key = f"daily_{start_date.date().isoformat()}"
-        cached_data = get_cached_entries(cache_key, start_date, end_date)
+        cached_data = _read_cached_entries_from_day_shards(
+            start_date, end_date, ignore_today_ttl=True
+        )
+        if cached_data is None:
+            cache_key = f"daily_{start_date.date().isoformat()}"
+            cached_data = get_cached_entries(cache_key, start_date, end_date)
         if cached_data is not None:
             log_api_request("/me/time_entries", "GET", cached=True)
             return cached_data
@@ -302,121 +518,32 @@ def cache_entries(cache_key, entries, start_date, end_date):
 
 
 def get_entries_with_cache(period):
-    """
-    Fetch entries for the given period with smart caching.
-    For daily: check cache TTL before fetching.
-    For weekly/monthly: cache everything before today, fetch today separately.
-    """
-    now = datetime.now().astimezone()  # Use local timezone
-    today = now.date()
+    """Fetch entries for the given dashboard period via the shared entry cache."""
+    today = datetime.now().astimezone().date()
 
     if period == "daily":
         start_date = datetime.combine(today, datetime.min.time()).astimezone()
         end_date = datetime.combine(today, datetime.max.time()).astimezone()
-
-        # Check if we have valid cached daily data
-        cache_key = f"daily_{today.isoformat()}"
-        cache_file = CACHE_DIR / f"{cache_key}.json"
-        prefs = load_preferences()
-        cache_ttl = prefs.get('cache_ttl_today', 1800)  # Default 30 minutes
-
-        if cache_file.exists():
-            cache_age = datetime.now().timestamp() - cache_file.stat().st_mtime
-            if cache_age < cache_ttl:
-                # Cache is still fresh
-                cached_entries = get_cached_entries(cache_key, start_date, end_date)
-                if cached_entries is not None:
-                    log_api_request("/me/time_entries", "GET", cached=True)
-                    return cached_entries
-
-        # Cache is stale or doesn't exist, fetch fresh data
-        entries = get_time_entries(start_date, end_date)
-        # Cache the fresh data
-        cache_entries(cache_key, entries, start_date, end_date)
-        return entries
-
     elif period == "weekly":
-        # Monday to Sunday
         start_of_week = today - timedelta(days=today.weekday())
-        end_of_week = start_of_week + timedelta(days=6)
-
+        start_date = datetime.combine(start_of_week, datetime.min.time()).astimezone()
+        end_date = datetime.combine(today, datetime.max.time()).astimezone()
     elif period == "monthly":
-        # First day to last day of current month
         start_of_month = today.replace(day=1)
-        last_day = calendar.monthrange(today.year, today.month)[1]
-        end_of_month = today.replace(day=last_day)
-        start_of_week = start_of_month
-        end_of_week = end_of_month
+        start_date = datetime.combine(start_of_month, datetime.min.time()).astimezone()
+        end_date = datetime.combine(today, datetime.max.time()).astimezone()
+    else:
+        raise ValueError(f"Unsupported period: {period}")
 
-    # For weekly/monthly: fetch historical and today separately
-    all_entries = []
-
-    # Historical entries (before today) - cached
-    if start_of_week < today:
-        historical_start = datetime.combine(start_of_week, datetime.min.time()).astimezone()
-        historical_end = datetime.combine(today - timedelta(days=1), datetime.max.time()).astimezone()
-
-        cache_key = f"{period}_{start_of_week.isoformat()}_to_{(today - timedelta(days=1)).isoformat()}"
-        cached_entries = get_cached_entries(cache_key, historical_start, historical_end)
-
-        if cached_entries is not None:
-            all_entries.extend(cached_entries)
-        else:
-            historical_entries = get_time_entries(historical_start, historical_end)
-            cache_entries(cache_key, historical_entries, historical_start, historical_end)
-            all_entries.extend(historical_entries)
-
-    # Today's entries (use cache if fresh)
-    if today <= end_of_week:
-        today_start = datetime.combine(today, datetime.min.time()).astimezone()
-        today_end = datetime.combine(today, datetime.max.time()).astimezone()
-
-        # Check cache for today's data
-        today_cache_key = f"daily_{today.isoformat()}"
-        today_cache_file = CACHE_DIR / f"{today_cache_key}.json"
-        prefs = load_preferences()
-        cache_ttl = prefs.get('cache_ttl_today', 1800)
-
-        if today_cache_file.exists():
-            cache_age = datetime.now().timestamp() - today_cache_file.stat().st_mtime
-            if cache_age < cache_ttl:
-                # Use cached today's data
-                today_cached = get_cached_entries(today_cache_key, today_start, today_end)
-                if today_cached is not None:
-                    log_api_request("/me/time_entries", "GET", cached=True)
-                    all_entries.extend(today_cached)
-                    return all_entries
-
-        # Fetch fresh today's data
-        today_entries = get_time_entries(today_start, today_end)
-        # Cache it
-        cache_entries(today_cache_key, today_entries, today_start, today_end)
-        all_entries.extend(today_entries)
-
-    return all_entries
+    return get_entries_for_range(start_date, end_date)
 
 
 def get_entries_since_date(start_date):
-    """
-    Get time entries from start_date to today (inclusive).
-    Uses a dedicated range cache; falls back to an API call if missing.
-    Used for last_billed_date unbilled hour calculations.
-    """
+    """Get time entries from start_date to today (inclusive) via the shared cache."""
     today = datetime.now().date()
     start_dt = datetime.combine(start_date, datetime.min.time()).astimezone()
     end_dt = datetime.combine(today, datetime.max.time()).astimezone()
-
-    # Try range cache (invalidated daily since end_date changes)
-    cache_key = f"lbd_{start_date.isoformat()}_to_{today.isoformat()}"
-    cached = get_cached_entries(cache_key, start_dt, end_dt)
-    if cached is not None:
-        log_api_request("/me/time_entries", "GET", cached=True)
-        return cached
-
-    # Fetch from API (single call for the whole range)
-    entries = get_time_entries(start_dt, end_dt)
-    cache_entries(cache_key, entries, start_dt, end_dt)
-    return entries
+    return get_entries_for_range(start_dt, end_dt)
 
 
 def _calculate_cap_fill_date(hours_by_day, cap_hours):
@@ -723,17 +850,89 @@ def calculate_period_earnings(period):
 
 def force_refresh_entries():
     """
-    Force refresh the caches used by the current dashboard periods.
+    Force refresh the shared entry shards used by the current dashboard periods.
     Used for manual "Refresh Now" button.
-    Invalidates today's cache plus the current week/month historical ranges
-    so back-dated entries in the active dashboard periods show up on refresh.
+    Invalidates the visible dashboard ranges plus active billing-cycle ranges so
+    edits in Toggl are reflected consistently across dashboard, export, and invoice.
     """
+    ranges = _get_manual_refresh_ranges()
+    days = []
+    for start_date, end_date in merge_ranges(ranges):
+        days.extend(_list_days_in_range(start_date, end_date))
+    invalidate_entry_days(days)
+
+    # Legacy cleanup for old feature-specific cache namespaces.
     for cache_file in _get_manual_refresh_cache_files():
         cache_file.unlink(missing_ok=True)
 
 
+def _get_manual_refresh_ranges(today=None):
+    """Return the date ranges manual refresh should invalidate."""
+    if today is None:
+        today = datetime.now().astimezone().date()
+
+    yesterday = today - timedelta(days=1)
+    ranges = [(
+        datetime.combine(today, datetime.min.time()).astimezone(),
+        datetime.combine(today, datetime.max.time()).astimezone(),
+    )]
+
+    start_of_week = today - timedelta(days=today.weekday())
+    if start_of_week < today:
+        ranges.append((
+            datetime.combine(start_of_week, datetime.min.time()).astimezone(),
+            datetime.combine(yesterday, datetime.max.time()).astimezone(),
+        ))
+
+    start_of_month = today.replace(day=1)
+    if start_of_month < today:
+        ranges.append((
+            datetime.combine(start_of_month, datetime.min.time()).astimezone(),
+            datetime.combine(yesterday, datetime.max.time()).astimezone(),
+        ))
+
+    projects_config = load_preferences().get('projects', {})
+    for project_name, defn in projects_config.items():
+        if defn.get('billing_type') != 'hourly_with_cap':
+            continue
+        last_billed_date = defn.get('last_billed_date')
+        if last_billed_date:
+            try:
+                start_date = datetime.strptime(last_billed_date, '%Y-%m-%d').date() + timedelta(days=1)
+            except ValueError:
+                continue
+            ranges.append((
+                datetime.combine(start_date, datetime.min.time()).astimezone(),
+                datetime.combine(today, datetime.max.time()).astimezone(),
+            ))
+
+    prev_month_str, _ = get_previous_month_str(today)
+    prev_record_month = prev_month_str
+    year, month = map(int, prev_record_month.split('-'))
+    prev_month_start = datetime(year, month, 1).date()
+    prev_month_end = datetime(year, month, calendar.monthrange(year, month)[1]).date()
+
+    for project_name, defn in projects_config.items():
+        needs_carryover = (
+            (defn.get('billing_type') == 'fixed_monthly' and defn.get('hour_tracking') == 'required')
+            or defn.get('billing_type') == 'hourly_with_cap'
+        )
+        if not needs_carryover:
+            continue
+        record = get_balance_record(project_name, prev_record_month)
+        if record and record.get("source") == "manual":
+            continue
+        ranges.append((
+            datetime.combine(prev_month_start, datetime.min.time()).astimezone(),
+            datetime.combine(prev_month_end, datetime.max.time()).astimezone(),
+        ))
+        break
+
+    return merge_ranges(ranges)
+
+
 def _get_manual_refresh_cache_files(today=None):
-    """Return the cache files that manual refresh should invalidate."""
+    """Return legacy cache files that manual refresh should invalidate during migration."""
     if today is None:
         today = datetime.now().astimezone().date()
 
@@ -753,42 +952,18 @@ def _get_manual_refresh_cache_files(today=None):
         )
 
     cache_files.extend(sorted(CACHE_DIR.glob(f"lbd_*_to_{today.isoformat()}.json")))
+    cache_files.extend(sorted(CACHE_DIR.glob("export_*.json")))
     return cache_files
 
 
 def estimate_manual_refresh_entry_api_calls(today=None):
     """
     Estimate entry API calls triggered by manual refresh.
-    Counts today's refetch, current week/month historical refetches, and
-    one range refetch per valid hourly_with_cap project using last_billed_date.
+    Counts merged dashboard, billing-cycle, and carryover refresh spans.
     """
     if today is None:
         today = datetime.now().astimezone().date()
-
-    calls = 1  # today's entries are always invalidated
-
-    start_of_week = today - timedelta(days=today.weekday())
-    if start_of_week < today:
-        calls += 1
-
-    start_of_month = today.replace(day=1)
-    if start_of_month < today:
-        calls += 1
-
-    projects_config = load_preferences().get('projects', {})
-    for defn in projects_config.values():
-        if defn.get('billing_type') != 'hourly_with_cap':
-            continue
-        last_billed_date = defn.get('last_billed_date')
-        if not last_billed_date:
-            continue
-        try:
-            datetime.strptime(last_billed_date, '%Y-%m-%d')
-        except ValueError:
-            continue
-        calls += 1
-
-    return calls
+    return len(_get_manual_refresh_ranges(today=today))
 
 
 def get_daily_earnings():
@@ -806,8 +981,9 @@ def get_weekly_earnings():
 
 def _try_calculate_last_month_carryover(projects_config):
     """
-    Attempt to auto-calculate and store last month's carryover balances from cached entries.
-    Silently skips projects where cached data is unavailable.
+    Auto-calculate and store last month's carryover balances from the shared entry cache.
+    Manual overrides are preserved; auto-derived values are recomputed from the shared
+    raw-entry cache so prior-month Toggl edits can flow into current-month carryover.
     """
     today = datetime.now().date()
     prev_month_str, _ = get_previous_month_str(today)
@@ -816,6 +992,15 @@ def _try_calculate_last_month_carryover(projects_config):
 
     prev_start = datetime(year, month, 1).date()
     prev_end = datetime(year, month, last_day).date()
+    prev_start_dt = datetime.combine(prev_start, datetime.min.time()).astimezone()
+    prev_end_dt = datetime.combine(prev_end, datetime.max.time()).astimezone()
+
+    try:
+        prev_month_entries = get_entries_for_range(prev_start_dt, prev_end_dt)
+    except Exception:
+        return
+
+    projects_map = get_projects()
 
     for project_name, defn in projects_config.items():
         billing_type = defn.get('billing_type')
@@ -828,30 +1013,13 @@ def _try_calculate_last_month_carryover(projects_config):
         if not needs_carryover:
             continue
 
-        # Skip if already calculated (has_balance distinguishes stored 0.0 from unset)
-        if has_balance(project_name, prev_month_str):
+        record = get_balance_record(project_name, prev_month_str)
+        if record and record.get("source") == "manual":
             continue
 
-        # Reconstruct last month's entries from individual daily cache files.
-        # (A full-month cache file never exists for past months — the monthly cache
-        # is written as "month-start to current day" and resets when a new month starts.)
-        cached_entries = []
-        for day_offset in range(last_day):
-            day = prev_start + timedelta(days=day_offset)
-            daily_cache = CACHE_DIR / f"daily_{day.isoformat()}.json"
-            if daily_cache.exists():
-                try:
-                    with open(daily_cache) as f:
-                        cached_entries.extend(json.load(f).get('entries', []))
-                except Exception:
-                    pass
-        if not cached_entries:
-            continue  # No daily data available for this project, skip
-
-        projects_map = get_projects()
         total_hours = sum(
             e["duration"] / 3600
-            for e in cached_entries
+            for e in prev_month_entries
             if projects_map.get(str(e.get("project_id")), {}).get("name") == project_name
                and e.get("duration", 0) > 0
         )
@@ -867,7 +1035,7 @@ def _try_calculate_last_month_carryover(projects_config):
             effective_target = defn.get('target_hours', 0) - prior_carryover
             balance = total_hours - effective_target
 
-        set_balance(project_name, prev_month_str, balance)
+        set_balance(project_name, prev_month_str, balance, source="auto")
 
 
 def _month_before(year_month_str):
