@@ -20,7 +20,7 @@ from toggl_data import (
     clear_all_caches,
     estimate_manual_refresh_entry_api_calls,
 )
-from preferences import load_preferences, save_preferences
+from preferences import CACHE_DIR, load_preferences, save_preferences
 from preferences_window import PreferencesWindowController
 from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
@@ -92,6 +92,7 @@ class FreelanceTrackerApp(rumps.App):
                 'refresh': self._dashboard_refresh,
                 'refresh_projects': self._dashboard_refresh_projects,
                 'clear_all_caches': self._dashboard_clear_all_caches,
+                'open_cache_folder': self._dashboard_open_cache_folder,
                 'settings': self._dashboard_preferences,
                 'update_app': self._dashboard_update_app,
                 'quit': self._dashboard_quit,
@@ -158,6 +159,10 @@ class FreelanceTrackerApp(rumps.App):
         """Called from dashboard cache-clear action — wipe caches and repopulate current data."""
         clear_all_caches()
         self.update_display()
+
+    def _dashboard_open_cache_folder(self):
+        """Called from dashboard cache action — reveal the cache folder in Finder."""
+        subprocess.run(["open", str(CACHE_DIR)], check=False)
 
     def _dashboard_preferences(self):
         """Called from dashboard Settings button."""

@@ -1778,6 +1778,7 @@ html, body {{
                     <button class="refresh-option" onclick="runRefreshAction('refresh')">Refresh Data</button>
                     <button class="refresh-option" onclick="runRefreshAction('refresh_projects')">Refresh Projects</button>
                     <button class="refresh-option" onclick="runRefreshAction('clear_all_caches')">Clear All Caches</button>
+                    <button class="refresh-option" onclick="runRefreshAction('open_cache_folder')">Open Cache Folder</button>
                 </div>
             </div>
             <div class="export-group" id="exportGroup">

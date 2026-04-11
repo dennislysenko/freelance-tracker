@@ -25,7 +25,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - Dashboard popover auto-sizes to the current content for short project lists, while preserving scrolling for taller dashboards
 - `This Week` is collapsed by default; section collapse state is then persisted per user across launches
 - Preferences window no longer exposes dashboard collapse-state defaults; its fourth tab is `Advanced` and currently only exposes the API audit log
-- Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, or `Clear All Caches`), `Settings`, `Update`, and `Quit`
+- Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, `Clear All Caches`, or `Open Cache Folder`), `Settings`, `Update`, and `Quit`
 - Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV` or `Create Stripe Invoice`
 - Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
 - Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
@@ -148,6 +148,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Historical day shards remain cached until explicitly refreshed; today's shard still uses the configurable `cache_ttl_today`
 - Manual `Refresh Now` invalidates the visible dashboard ranges, active capped-project billing-cycle ranges, and the previous-month range needed for auto carryover when applicable, so dashboard and billing outputs stay in sync after Toggl edits
 - `Clear All Caches` removes all cached Toggl entry shards, project metadata, and legacy cache files, then immediately repopulates the currently needed data. This is a heavier recovery action than `Refresh Data` and can cost additional API calls on the next reload
+- `Open Cache Folder` reveals `~/Library/Caches/TogglMenuBar/` in Finder for manual inspection or cleanup
 - Typical API call cost:
   - background / on-demand reads: 0-1 calls when required day shards are already cached, otherwise one call per missing merged range
   - manual `Refresh Now`: typically 2-5 calls depending on overlapping dashboard, billing-cycle, and carryover ranges
