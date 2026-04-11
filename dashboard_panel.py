@@ -57,6 +57,27 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
                 if callback:
                     callback(project_id, start_iso, end_iso)
             return
+        if action.startswith("stripe_invoice_prepare:"):
+            parts = action.split(":")
+            if len(parts) >= 4:
+                project_id = parts[1]
+                start_iso = parts[2]
+                end_iso = parts[3]
+                callback = self._callbacks.get("stripe_invoice_prepare")
+                if callback:
+                    callback(project_id, start_iso, end_iso)
+            return
+        if action.startswith("stripe_invoice_create:"):
+            parts = action.split(":")
+            if len(parts) >= 5:
+                project_id = parts[1]
+                start_iso = parts[2]
+                end_iso = parts[3]
+                customer_id = parts[4]
+                callback = self._callbacks.get("stripe_invoice_create")
+                if callback:
+                    callback(project_id, start_iso, end_iso, customer_id)
+            return
         callback = self._callbacks.get(action)
         if callback:
             callback()
@@ -174,10 +195,23 @@ class DashboardPanelController:
         self._last_measured_height = None
         self._current_panel_height = None
         self._exportable_projects = []
+        self._stripe_invoice_state = None
 
     def set_exportable_projects(self, projects):
         """List of {'id': str, 'name': str} dicts the user can export."""
         self._exportable_projects = list(projects or [])
+
+    def set_stripe_invoice_state(self, state):
+        """Store the active Stripe invoice workflow state for dashboard rendering."""
+        self._stripe_invoice_state = dict(state) if state else None
+
+    def get_stripe_invoice_state(self):
+        """Return the current Stripe invoice workflow state."""
+        return dict(self._stripe_invoice_state) if self._stripe_invoice_state else None
+
+    def clear_stripe_invoice_state(self):
+        """Clear any active Stripe invoice workflow state."""
+        self._stripe_invoice_state = None
 
     def set_callbacks(self, callbacks):
         """Set action callbacks for dashboard buttons/menu items."""
@@ -777,6 +811,8 @@ class DashboardPanelController:
         from datetime import date as _date, timedelta as _td
         from hours_csv_export import previous_month_range
         _today = _date.today()
+        _this_week_start = _today - _td(days=_today.weekday())
+        _this_week_end = _today
         _last_week_start = _today - _td(days=_today.weekday() + 7)
         _last_week_end = _last_week_start + _td(days=6)
         _last_month_start, _last_month_end = previous_month_range(_today)
@@ -791,9 +827,16 @@ class DashboardPanelController:
 
         if self._exportable_projects:
             project_buttons = []
+            invoice_project_buttons = []
             for p in self._exportable_projects:
                 lbd = p.get('last_billed_date') or ''
                 lbd_attr = f' data-last-billed="{_esc(lbd)}"' if lbd else ''
+                stripe_customer_id = p.get('stripe_customer_id') or ''
+                stripe_customer_attr = (
+                    f' data-stripe-customer="{_esc(stripe_customer_id)}"'
+                    if stripe_customer_id else
+                    ''
+                )
                 project_buttons.append(
                     f'<button class="export-option" '
                     f'data-project-id="{_esc(p["id"])}" '
@@ -801,12 +844,29 @@ class DashboardPanelController:
                     f'{lbd_attr} '
                     f'onclick="selectExportProject(this)">{_esc(p["name"])}</button>'
                 )
+                invoice_badge = (
+                    '<span class="invoice-option-meta">Linked</span>'
+                    if stripe_customer_id else
+                    '<span class="invoice-option-meta muted">Needs customer</span>'
+                )
+                invoice_project_buttons.append(
+                    f'<button class="export-option invoice-option" '
+                    f'data-project-id="{_esc(p["id"])}" '
+                    f'data-project-name="{_esc(p["name"])}"'
+                    f'{lbd_attr}{stripe_customer_attr} '
+                    f'onclick="selectInvoiceProject(this)">'
+                    f'<span>{_esc(p["name"])}</span>{invoice_badge}</button>'
+                )
             export_items_html = "".join(project_buttons)
+            invoice_items_html = "".join(invoice_project_buttons)
         else:
             export_items_html = '<div class="export-empty">No exportable projects</div>'
+            invoice_items_html = '<div class="export-empty">No invoiceable projects</div>'
 
         export_menu_data_attrs = (
             f'data-today="{_today.isoformat()}" '
+            f'data-this-week-start="{_this_week_start.isoformat()}" '
+            f'data-this-week-end="{_this_week_end.isoformat()}" '
             f'data-last-week-start="{_last_week_start.isoformat()}" '
             f'data-last-week-end="{_last_week_end.isoformat()}" '
             f'data-last-month-start="{_last_month_start.isoformat()}" '
@@ -814,9 +874,11 @@ class DashboardPanelController:
             f'data-ytd-start="{_ytd_start.isoformat()}" '
             f'data-ytd-end="{_ytd_end.isoformat()}"'
         )
+        this_week_label = _short_range(_this_week_start, _this_week_end)
         last_week_label = _short_range(_last_week_start, _last_week_end)
         last_month_label = _short_range(_last_month_start, _last_month_end)
         ytd_label = _short_range(_ytd_start, _ytd_end)
+        stripe_state_html = self._render_stripe_invoice_state_html()
 
         html = f"""<!DOCTYPE html>
 <html>
@@ -836,6 +898,7 @@ html, body {{
 
 .wrapper {{
     padding: 10px 12px 12px;
+    padding-bottom: 132px;
 }}
 
 .section-list {{
@@ -845,9 +908,18 @@ html, body {{
 }}
 
 .footer {{
-    margin-top: 12px;
-    padding-top: 8px;
-    border-top: 1px solid rgba(255,255,255,0.06);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 11;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    background:
+        linear-gradient(180deg, rgba(28,28,30,0.22) 0%, rgba(28,28,30,0.9) 18%, #1c1c1e 100%);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 -10px 24px rgba(0,0,0,0.28);
 }}
 
 .section {{
@@ -1295,22 +1367,26 @@ html, body {{
     width: 100%;
     padding: 0;
     overflow: hidden;
+    display: block;
 }}
 
 .export-primary {{
-    flex: 1 1 auto;
-    min-width: 0;
+    display: block;
+    width: 100%;
     padding: 7px 10px;
     border: 0;
     background: transparent;
     color: inherit;
     font: inherit;
+    text-align: center;
     cursor: pointer;
     -webkit-appearance: none;
 }}
 
-.export-primary:hover {{
+.export-toggle:hover {{
     background: rgba(255,255,255,0.08);
+    color: #c9d1d9;
+    border-color: rgba(255,255,255,0.18);
 }}
 
 .export-menu {{
@@ -1346,6 +1422,22 @@ html, body {{
 
 .export-option:hover {{
     background: rgba(255,255,255,0.08);
+}}
+
+.invoice-option {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}}
+
+.invoice-option-meta {{
+    font-size: 11px;
+    color: #3fb950;
+}}
+
+.invoice-option-meta.muted {{
+    color: #6e7681;
 }}
 
 .export-empty {{
@@ -1559,6 +1651,91 @@ html, body {{
     background: rgba(255,255,255,0.08);
 }}
 
+.stripe-state-overlay {{
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 12, 16, 0.74);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    z-index: 50;
+}}
+
+.stripe-state-card {{
+    width: 100%;
+    max-width: 360px;
+    border-radius: 14px;
+    background: #161b22;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+    padding: 16px;
+}}
+
+.stripe-state-card.success {{
+    border-color: rgba(63,185,80,0.28);
+}}
+
+.stripe-state-card.error {{
+    border-color: rgba(248,81,73,0.28);
+}}
+
+.stripe-state-title {{
+    font-size: 15px;
+    font-weight: 700;
+    color: #f0f6fc;
+}}
+
+.stripe-state-detail {{
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(201,209,217,0.92);
+}}
+
+.stripe-state-note {{
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(201,209,217,0.72);
+}}
+
+.stripe-state-actions {{
+    margin-top: 14px;
+    display: flex;
+    gap: 8px;
+}}
+
+.stripe-state-btn {{
+    flex: 1;
+    border: 0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: rgba(88,166,255,0.95);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+}}
+
+.stripe-state-btn.secondary {{
+    background: rgba(255,255,255,0.08);
+    color: #c9d1d9;
+}}
+
+.stripe-state-btn.success {{
+    background: rgba(63,185,80,0.92);
+}}
+
+.stripe-customer-picker {{
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: #f0f6fc;
+}}
+
 .empty-state {{
     font-size: 12px;
     color: #6e7681;
@@ -1601,11 +1778,16 @@ html, body {{
                 </div>
             </div>
             <div class="export-group" id="exportGroup">
-                <div class="action-btn export-toggle split-action">
-                    <button class="export-primary" onclick="toggleExportMenu(event)">Export CSV</button>
+                <div class="action-btn export-toggle">
+                    <button class="export-primary" onclick="toggleExportMenu(event)">Export/Invoice</button>
                 </div>
                 <div class="export-menu" id="exportMenu" {export_menu_data_attrs}>
-                    <div class="export-stage" id="exportStage1">
+                    <div class="export-stage" id="exportStage0">
+                        <div class="export-stage-title">Choose action</div>
+                        <button class="export-option" onclick="exportChooseWorkflow('csv')">Export CSV</button>
+                        <button class="export-option" onclick="exportChooseWorkflow('invoice')">Create Stripe Invoice</button>
+                    </div>
+                    <div class="export-stage" id="exportStage1" style="display:none;">
                         <div class="export-stage-title">Choose project</div>
                         {export_items_html}
                     </div>
@@ -1617,6 +1799,10 @@ html, body {{
                         <button class="export-preset" id="exportPresetLbd" style="display:none;" onclick="exportPickPreset(this)">
                             <span class="export-preset-name">Since last billed</span>
                             <span class="export-preset-range" id="exportPresetLbdRange"></span>
+                        </button>
+                        <button class="export-preset" data-start="{_this_week_start.isoformat()}" data-end="{_this_week_end.isoformat()}" onclick="exportPickPreset(this)">
+                            <span class="export-preset-name">This week</span>
+                            <span class="export-preset-range">{_esc(this_week_label)}</span>
                         </button>
                         <button class="export-preset" data-start="{_last_week_start.isoformat()}" data-end="{_last_week_end.isoformat()}" onclick="exportPickPreset(this)">
                             <span class="export-preset-name">Last week</span>
@@ -1646,6 +1832,51 @@ html, body {{
                             <button class="export-custom-submit" onclick="exportSubmitCustom(event)">Export</button>
                         </div>
                     </div>
+                    <div class="export-stage" id="invoiceStage1" style="display:none;">
+                        <div class="export-stage-title">Choose project</div>
+                        {invoice_items_html}
+                    </div>
+                    <div class="export-stage" id="invoiceStage2" style="display:none;">
+                        <div class="export-stage-header">
+                            <button class="export-back" onclick="invoiceBackToProjects(event)" aria-label="Back">←</button>
+                            <span class="export-stage-title" id="invoiceStage2Title">Project</span>
+                        </div>
+                        <button class="export-preset" id="invoicePresetLbd" style="display:none;" onclick="invoicePickPreset(this)">
+                            <span class="export-preset-name">Since last billed</span>
+                            <span class="export-preset-range" id="invoicePresetLbdRange"></span>
+                        </button>
+                        <button class="export-preset" data-start="{_this_week_start.isoformat()}" data-end="{_this_week_end.isoformat()}" onclick="invoicePickPreset(this)">
+                            <span class="export-preset-name">This week</span>
+                            <span class="export-preset-range">{_esc(this_week_label)}</span>
+                        </button>
+                        <button class="export-preset" data-start="{_last_week_start.isoformat()}" data-end="{_last_week_end.isoformat()}" onclick="invoicePickPreset(this)">
+                            <span class="export-preset-name">Last week</span>
+                            <span class="export-preset-range">{_esc(last_week_label)}</span>
+                        </button>
+                        <button class="export-preset" data-start="{_last_month_start.isoformat()}" data-end="{_last_month_end.isoformat()}" onclick="invoicePickPreset(this)">
+                            <span class="export-preset-name">Last month</span>
+                            <span class="export-preset-range">{_esc(last_month_label)}</span>
+                        </button>
+                        <button class="export-preset" data-start="{_ytd_start.isoformat()}" data-end="{_ytd_end.isoformat()}" onclick="invoicePickPreset(this)">
+                            <span class="export-preset-name">Year to date</span>
+                            <span class="export-preset-range">{_esc(ytd_label)}</span>
+                        </button>
+                        <button class="export-preset export-custom-toggle" onclick="invoiceToggleCustomForm(event)">
+                            <span class="export-preset-name">Custom range…</span>
+                            <span class="export-preset-range">▾</span>
+                        </button>
+                        <div class="export-custom-form" id="invoiceCustomForm" style="display:none;">
+                            <label class="export-custom-row">
+                                <span>Start</span>
+                                <input type="date" id="invoiceCustomStart" value="{_last_month_start.isoformat()}">
+                            </label>
+                            <label class="export-custom-row">
+                                <span>End</span>
+                                <input type="date" id="invoiceCustomEnd" value="{_last_month_end.isoformat()}">
+                            </label>
+                            <button class="export-custom-submit" onclick="invoiceSubmitCustom(event)">Continue</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="more-group" id="moreGroup">
@@ -1659,6 +1890,14 @@ html, body {{
         </div>
 
         <div class="update-time">{_esc(update_time_text)}</div>
+    </div>
+</div>
+{stripe_state_html}
+<div class="stripe-state-overlay" id="stripeInlineLoading" style="display:none;">
+    <div class="stripe-state-card">
+        <div class="stripe-state-title">Creating draft invoice…</div>
+        <div class="stripe-state-detail" id="stripeInlineLoadingDetail">Preparing Stripe invoice details.</div>
+        <div class="stripe-state-note">This creates a draft only. You will still review and send it from Stripe.</div>
     </div>
 </div>
 
@@ -1737,18 +1976,49 @@ html, body {{
         var willOpen = !group.classList.contains('open');
         group.classList.toggle('open');
         if (willOpen) {{
-            // Always reset to project list when reopening
-            exportShowStage1();
+            exportShowStage0();
         }}
     }}
 
+    function exportShowStage0() {{
+        var ids = ['exportStage0', 'exportStage1', 'exportStage2', 'invoiceStage1', 'invoiceStage2'];
+        for (var i = 0; i < ids.length; i++) {{
+            var el = document.getElementById(ids[i]);
+            if (el) {{
+                el.style.display = (ids[i] === 'exportStage0') ? '' : 'none';
+            }}
+        }}
+        var exportForm = document.getElementById('exportCustomForm');
+        if (exportForm) exportForm.style.display = 'none';
+        var invoiceForm = document.getElementById('invoiceCustomForm');
+        if (invoiceForm) invoiceForm.style.display = 'none';
+    }}
+
+    function exportChooseWorkflow(kind) {{
+        var stage0 = document.getElementById('exportStage0');
+        if (stage0) stage0.style.display = 'none';
+        if (kind === 'csv') {{
+            exportShowStage1();
+            return;
+        }}
+        invoiceShowStage1();
+    }}
+
     function exportShowStage1() {{
+        var s0 = document.getElementById('exportStage0');
         var s1 = document.getElementById('exportStage1');
         var s2 = document.getElementById('exportStage2');
+        var i1 = document.getElementById('invoiceStage1');
+        var i2 = document.getElementById('invoiceStage2');
+        if (s0) s0.style.display = 'none';
         if (s1) s1.style.display = '';
         if (s2) s2.style.display = 'none';
+        if (i1) i1.style.display = 'none';
+        if (i2) i2.style.display = 'none';
         var form = document.getElementById('exportCustomForm');
         if (form) form.style.display = 'none';
+        var invoiceForm = document.getElementById('invoiceCustomForm');
+        if (invoiceForm) invoiceForm.style.display = 'none';
     }}
 
     function exportBackToProjects(event) {{
@@ -1851,6 +2121,132 @@ html, body {{
         if (start > end) {{ var t = start; start = end; end = t; }}
         closeExportMenu();
         postAction('export_csv:' + pid + ':' + start + ':' + end);
+    }}
+
+    function invoiceShowStage1() {{
+        var s0 = document.getElementById('exportStage0');
+        var s1 = document.getElementById('invoiceStage1');
+        var s2 = document.getElementById('invoiceStage2');
+        var e1 = document.getElementById('exportStage1');
+        var e2 = document.getElementById('exportStage2');
+        if (s0) s0.style.display = 'none';
+        if (s1) s1.style.display = '';
+        if (s2) s2.style.display = 'none';
+        if (e1) e1.style.display = 'none';
+        if (e2) e2.style.display = 'none';
+        var form = document.getElementById('invoiceCustomForm');
+        if (form) form.style.display = 'none';
+        var exportForm = document.getElementById('exportCustomForm');
+        if (exportForm) exportForm.style.display = 'none';
+    }}
+
+    function invoiceBackToProjects(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        invoiceShowStage1();
+    }}
+
+    function selectInvoiceProject(btn) {{
+        if (!btn) return;
+        var pid = btn.getAttribute('data-project-id');
+        var name = btn.getAttribute('data-project-name');
+        var lbd = btn.getAttribute('data-last-billed');
+
+        var stage2 = document.getElementById('invoiceStage2');
+        var title = document.getElementById('invoiceStage2Title');
+        if (title) title.textContent = name;
+        if (stage2) stage2.setAttribute('data-project-id', pid);
+
+        var lbdBtn = document.getElementById('invoicePresetLbd');
+        var lbdRangeSpan = document.getElementById('invoicePresetLbdRange');
+        if (lbdBtn && lbdRangeSpan) {{
+            if (lbd) {{
+                var lbdStart = addDays(lbd, 1);
+                var menu = document.getElementById('invoiceMenu');
+                var today = menu ? menu.getAttribute('data-today') : null;
+                if (today) {{
+                    lbdBtn.setAttribute('data-start', lbdStart);
+                    lbdBtn.setAttribute('data-end', today);
+                    lbdRangeSpan.textContent = formatRange(lbdStart, today);
+                    lbdBtn.style.display = '';
+                }} else {{
+                    lbdBtn.style.display = 'none';
+                }}
+            }} else {{
+                lbdBtn.style.display = 'none';
+            }}
+        }}
+
+        document.getElementById('invoiceStage1').style.display = 'none';
+        stage2.style.display = '';
+        var form = document.getElementById('invoiceCustomForm');
+        if (form) form.style.display = 'none';
+    }}
+
+    function showStripeInlineLoading(message) {{
+        closeAllPopupMenus();
+        var detail = document.getElementById('stripeInlineLoadingDetail');
+        if (detail && message) {{
+            detail.textContent = message;
+        }}
+        var overlay = document.getElementById('stripeInlineLoading');
+        if (overlay) {{
+            overlay.style.display = 'flex';
+        }}
+    }}
+
+    function invoiceSubmitRange(start, end) {{
+        var stage2 = document.getElementById('invoiceStage2');
+        var pid = stage2 ? stage2.getAttribute('data-project-id') : null;
+        if (!pid || !start || !end) return;
+        showStripeInlineLoading('Checking Stripe customer and creating a draft invoice.');
+        window.requestAnimationFrame(function() {{
+            postAction('stripe_invoice_prepare:' + pid + ':' + start + ':' + end);
+        }});
+    }}
+
+    function invoicePickPreset(btn) {{
+        if (!btn) return;
+        var start = btn.getAttribute('data-start');
+        var end = btn.getAttribute('data-end');
+        if (!start || !end) return;
+        invoiceSubmitRange(start, end);
+    }}
+
+    function invoiceToggleCustomForm(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var form = document.getElementById('invoiceCustomForm');
+        if (!form) return;
+        form.style.display = (form.style.display === 'none' || !form.style.display) ? '' : 'none';
+    }}
+
+    function invoiceSubmitCustom(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var start = document.getElementById('invoiceCustomStart').value;
+        var end = document.getElementById('invoiceCustomEnd').value;
+        if (!start || !end) return;
+        if (start > end) {{ var t = start; start = end; end = t; }}
+        invoiceSubmitRange(start, end);
+    }}
+
+    function submitStripeCustomerSelection() {{
+        var select = document.getElementById('stripeCustomerSelect');
+        if (!select || !select.value) return;
+        var pid = select.getAttribute('data-project-id');
+        var start = select.getAttribute('data-start');
+        var end = select.getAttribute('data-end');
+        showStripeInlineLoading('Creating a draft invoice in Stripe.');
+        window.requestAnimationFrame(function() {{
+            postAction('stripe_invoice_create:' + pid + ':' + start + ':' + end + ':' + select.value);
+        }});
     }}
 
     function toggleMoreMenu(event) {{
@@ -1996,7 +2392,7 @@ html, body {{
     }});
     document.addEventListener('click', function(event) {{
         var target = event.target;
-        if (target && target.closest && target.closest('#refreshGroup, #exportGroup, #moreGroup')) {{
+        if (target && target.closest && target.closest('#refreshGroup, #exportGroup, #moreGroup, .stripe-state-overlay')) {{
             return;
         }}
         closeAllPopupMenus();
@@ -2015,6 +2411,76 @@ html, body {{
 </html>"""
 
         return html
+
+    def _render_stripe_invoice_state_html(self):
+        """Render the current Stripe invoice workflow overlay, if any."""
+        state = self._stripe_invoice_state or {}
+        status = state.get('status')
+        if not status:
+            return ""
+
+        title = _esc(state.get('title') or '')
+        detail = _esc(state.get('detail') or '')
+        note = '<div class="stripe-state-note">This creates a draft only. Review it in Stripe before sending.</div>'
+
+        if status == 'choose_customer':
+            options_html = []
+            for customer in state.get('customers', []):
+                options_html.append(
+                    f'<option value="{_esc(customer.get("id") or "")}">{_esc(customer.get("display_name") or customer.get("id") or "")}</option>'
+                )
+            return f"""
+            <div class="stripe-state-overlay">
+                <div class="stripe-state-card">
+                    <div class="stripe-state-title">Attach Stripe customer</div>
+                    <div class="stripe-state-detail">
+                        { _esc(state.get('project_name') or 'Project') } · { _esc(state.get('date_range_label') or '') }
+                    </div>
+                    <div class="stripe-state-note">Pick the Stripe customer now. The project will be linked for future invoices.</div>
+                    <select class="stripe-customer-picker" id="stripeCustomerSelect"
+                            data-project-id="{_esc(state.get('project_id') or '')}"
+                            data-start="{_esc(state.get('start_iso') or '')}"
+                            data-end="{_esc(state.get('end_iso') or '')}">
+                        {"".join(options_html)}
+                    </select>
+                    <div class="stripe-state-actions">
+                        <button class="stripe-state-btn" onclick="submitStripeCustomerSelection()">Create draft</button>
+                        <button class="stripe-state-btn secondary" onclick="postAction('stripe_invoice_dismiss')">Cancel</button>
+                    </div>
+                </div>
+            </div>"""
+
+        if status == 'success':
+            summary = state.get('summary')
+            summary_html = (
+                f'<div class="stripe-state-note">{_esc(summary)}</div>'
+                if summary else
+                ''
+            )
+            return f"""
+            <div class="stripe-state-overlay">
+                <div class="stripe-state-card success">
+                    <div class="stripe-state-title">{title}</div>
+                    <div class="stripe-state-detail">{detail}</div>
+                    {summary_html}
+                    {note}
+                    <div class="stripe-state-actions">
+                        <button class="stripe-state-btn success" onclick="postAction('stripe_invoice_open')">Open in Stripe</button>
+                        <button class="stripe-state-btn secondary" onclick="postAction('stripe_invoice_dismiss')">Done</button>
+                    </div>
+                </div>
+            </div>"""
+
+        return f"""
+        <div class="stripe-state-overlay">
+            <div class="stripe-state-card error">
+                <div class="stripe-state-title">{title or 'Draft invoice failed'}</div>
+                <div class="stripe-state-detail">{detail}</div>
+                <div class="stripe-state-actions">
+                    <button class="stripe-state-btn secondary" onclick="postAction('stripe_invoice_dismiss')">Close</button>
+                </div>
+            </div>
+        </div>"""
 
     @staticmethod
     def _format_block_time(dt):

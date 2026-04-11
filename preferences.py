@@ -20,6 +20,7 @@ DEFAULT_PREFERENCES = {
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
     "projects": {},  # Project definitions by name: see docs/SOT.md for schema
+    "stripe_project_customers": {},  # Optional Stripe customer ids by project name
     "dashboard_sections": {
         "today": True,
         "week": False,
@@ -233,6 +234,29 @@ def validate_preferences(prefs):
                             errors.append(
                                 f"{prefix}: 'target_hours' must be a positive number when hour_tracking is '{hour_tracking}'"
                             )
+
+    # Optional field: stripe_project_customers
+    if 'stripe_project_customers' in prefs:
+        stripe_project_customers = prefs['stripe_project_customers']
+
+        if not isinstance(stripe_project_customers, dict):
+            errors.append("'stripe_project_customers': must be an object/dictionary")
+        else:
+            for project_name, customer_id in stripe_project_customers.items():
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'stripe_project_customers': key '{project_name}' must be a string"
+                    )
+                    continue
+                if not isinstance(customer_id, str):
+                    errors.append(
+                        f"'stripe_project_customers.{project_name}': must be a string"
+                    )
+                    continue
+                if customer_id.strip() and not customer_id.startswith('cus_'):
+                    errors.append(
+                        f"'stripe_project_customers.{project_name}': must start with 'cus_'"
+                    )
 
     # Optional field: dashboard_sections
     if 'dashboard_sections' in prefs:

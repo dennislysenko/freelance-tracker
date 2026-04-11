@@ -141,6 +141,25 @@ def export_project_range(
 
     Returns the resolved output Path. Raises RuntimeError if no entries match.
     """
+    project_entries = get_project_entries_for_range(project_id, project_name, start_d, end_d)
+
+    rows = build_rows(project_entries, hourly_rate)
+    if not rows:
+        range_label = _format_range_label(start_d, end_d)
+        raise RuntimeError(f"No billable entries found for {project_name} ({range_label})")
+
+    if output_dir is None:
+        output_dir = Path.home() / "Downloads"
+    else:
+        output_dir = Path(output_dir)
+
+    filename = _build_filename(project_name, start_d, end_d)
+    output_path = output_dir / filename
+    return write_csv(rows, output_path)
+
+
+def get_project_entries_for_range(project_id, project_name, start_d, end_d):
+    """Fetch cached-or-live time entries for one project within [start_d, end_d]."""
     start_dt = datetime.combine(start_d, datetime.min.time()).astimezone()
     end_dt = datetime.combine(end_d, datetime.max.time()).astimezone()
 
@@ -154,23 +173,10 @@ def export_project_range(
         e for e in entries
         if str(e.get("project_id")) == str(project_id)
     ]
-
-    range_label = _format_range_label(start_d, end_d)
     if not project_entries:
+        range_label = _format_range_label(start_d, end_d)
         raise RuntimeError(f"No entries found for {project_name} ({range_label})")
-
-    rows = build_rows(project_entries, hourly_rate)
-    if not rows:
-        raise RuntimeError(f"No billable entries found for {project_name} ({range_label})")
-
-    if output_dir is None:
-        output_dir = Path.home() / "Downloads"
-    else:
-        output_dir = Path(output_dir)
-
-    filename = _build_filename(project_name, start_d, end_d)
-    output_path = output_dir / filename
-    return write_csv(rows, output_path)
+    return project_entries
 
 
 def _format_range_label(start_d, end_d):

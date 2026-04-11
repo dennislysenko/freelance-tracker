@@ -16,7 +16,8 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly
 - 🔁 **Carryover tracking** for capped and fixed-monthly projects across months
 - 🕐 **Last update timestamp**
-- 📤 **Hours CSV export** from the dashboard footer — pick a project, get a billing-ready CSV. Capped projects with `last_billed_date` use the unbilled cycle automatically; everything else opens a date picker defaulted to last month
+- 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV` or `Create Stripe Invoice`, then pick a project and range. Presets now include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
+- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, and Stripe API key after installation
 - 💾 **Smart caching** to minimize Toggl API calls
   Manual refresh only invalidates the current dashboard period caches instead of wiping all historical entry caches
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)
@@ -138,7 +139,7 @@ Shows: running status, memory usage, uptime, logs, cache size.
 
 ## User Interface
 
-The 💰 menu bar title is always visible. Clicking it opens the **dashboard popover** — a WebKit-rendered panel implemented in `dashboard_panel.py`. This is the canonical UI: TODAY / This Week / THIS MONTH sections (each collapsible with persisted state), monthly project progress bars with pacing markers, month projection, the footer Refresh / Settings / Update / Quit / Export CSV controls, and the rate-limit / refresh-error inline states.
+The 💰 menu bar title is always visible. Clicking it opens the **dashboard popover** — a WebKit-rendered panel implemented in `dashboard_panel.py`. This is the canonical UI: TODAY / This Week / THIS MONTH sections (each collapsible with persisted state), monthly project progress bars with pacing markers, month projection, the footer Refresh / Settings / Update / Quit / Export/Invoice controls, and the rate-limit / refresh-error inline states. The footer is rendered as a bottom drawer flush with the sheet while the rest of the content continues to scroll.
 
 If the WebKit bridge is unavailable on a given machine (missing PyObjC, etc.), the app falls back to a minimal rumps dropdown menu so it still launches. The fallback is intentionally bare-bones and is **not** where new features live — see `CLAUDE.md` for the policy.
 
@@ -158,6 +159,15 @@ To adjust vacation days, edit preferences:
   "vacation_days_per_month": 4  // Change this to your typical vacation days
 }
 ```
+
+### Integrations
+
+Open **Settings → Integrations** to update credentials after install:
+- `TOGGL_API_TOKEN`
+- `TOGGL_WORKSPACE_ID`
+- `STRIPE_API_KEY`
+
+The same tab also lets you map Toggl projects to Stripe customers by picking from the live Stripe customer list by name. If you try to create a Stripe invoice for an unmapped project, the dashboard will ask you to pick a customer right after you choose the date range, then save that association for next time.
 
 ### Reordering Menu Bar Icons
 

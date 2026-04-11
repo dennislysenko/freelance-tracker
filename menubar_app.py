@@ -19,7 +19,7 @@ from toggl_data import (
     force_refresh_entries,
     estimate_manual_refresh_entry_api_calls,
 )
-from preferences import load_preferences
+from preferences import load_preferences, save_preferences
 from preferences_window import PreferencesWindowController
 from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
@@ -94,6 +94,10 @@ class FreelanceTrackerApp(rumps.App):
                 'update_app': self._dashboard_update_app,
                 'quit': self._dashboard_quit,
                 'export_csv': self._dashboard_export_csv,
+                'stripe_invoice_prepare': self._dashboard_prepare_stripe_invoice,
+                'stripe_invoice_create': self._dashboard_create_stripe_invoice,
+                'stripe_invoice_open': self._dashboard_open_stripe_invoice,
+                'stripe_invoice_dismiss': self._dashboard_dismiss_stripe_invoice,
             })
         else:
             _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
@@ -167,11 +171,12 @@ class FreelanceTrackerApp(rumps.App):
         self.update_app(None)
 
     def _build_exportable_projects(self):
-        """Return list of {'id', 'name', 'last_billed_date'} for projects with a billable rate."""
+        """Return list of projects eligible for CSV export or Stripe invoicing."""
         from toggl_data import get_projects, get_effective_project_rate
         prefs = load_preferences()
         retainer_rates = prefs.get('retainer_hourly_rates', {})
         projects_config = prefs.get('projects', {})
+        stripe_project_customers = prefs.get('stripe_project_customers', {})
         out = []
         try:
             projects = get_projects()
@@ -189,6 +194,7 @@ class FreelanceTrackerApp(rumps.App):
                 'id': str(pid),
                 'name': name,
                 'last_billed_date': lbd or '',
+                'stripe_customer_id': stripe_project_customers.get(name, ''),
             })
         out.sort(key=lambda p: p['name'].lower())
         return out
@@ -204,6 +210,178 @@ class FreelanceTrackerApp(rumps.App):
             rumps.alert("Export failed", f"Invalid date range: {start_iso} to {end_iso}")
             return
         self._run_export(project_id, start_d, end_d)
+
+    def _dashboard_prepare_stripe_invoice(self, project_id, start_iso, end_iso):
+        """Resolve customer mapping or prompt the dashboard to associate one before invoicing."""
+        from datetime import date as _date
+        from toggl_data import get_projects, get_effective_project_rate
+        from stripe_invoice import list_customers
+
+        try:
+            start_d = _date.fromisoformat(start_iso)
+            end_d = _date.fromisoformat(end_iso)
+        except ValueError as exc:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"Invalid date range: {start_iso} to {end_iso}",
+            })
+            self.dashboard.refresh_contents()
+            _debug(f"Stripe invoice prepare failed: {exc}")
+            return
+
+        prefs = load_preferences()
+        projects = get_projects()
+        info = projects.get(str(project_id))
+        if not info:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"Unknown project id {project_id}",
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        project_name = info.get('name', 'Unknown')
+        rate, _ = get_effective_project_rate(
+            info,
+            prefs.get('retainer_hourly_rates', {}),
+            prefs.get('projects', {}),
+        )
+        if not rate:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"No billable rate configured for {project_name}",
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        customer_id = prefs.get('stripe_project_customers', {}).get(project_name, '')
+        if customer_id:
+            self._dashboard_create_stripe_invoice(project_id, start_iso, end_iso, customer_id)
+            return
+
+        try:
+            customers = list_customers()
+        except Exception as exc:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Stripe customer lookup failed',
+                'detail': str(exc),
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        if not customers:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Stripe customer lookup failed',
+                'detail': 'No Stripe customers were found for the configured Stripe API key.',
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        self.dashboard.set_stripe_invoice_state({
+            'status': 'choose_customer',
+            'project_id': str(project_id),
+            'project_name': project_name,
+            'start_iso': start_d.isoformat(),
+            'end_iso': end_d.isoformat(),
+            'date_range_label': f"{start_d.strftime('%b %-d, %Y')} to {end_d.strftime('%b %-d, %Y')}",
+            'customers': customers,
+        })
+        self.dashboard.refresh_contents()
+
+    def _dashboard_create_stripe_invoice(self, project_id, start_iso, end_iso, customer_id=None):
+        """Create a Stripe draft invoice for a project and explicit date range."""
+        from datetime import date as _date
+        from toggl_data import get_projects, get_effective_project_rate
+        from stripe_invoice import create_draft_invoice_for_project_range
+
+        try:
+            start_d = _date.fromisoformat(start_iso)
+            end_d = _date.fromisoformat(end_iso)
+        except ValueError as exc:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"Invalid date range: {start_iso} to {end_iso}",
+            })
+            self.dashboard.refresh_contents()
+            _debug(f"Stripe invoice failed: {exc}")
+            return
+
+        try:
+            projects = get_projects()
+            info = projects.get(str(project_id))
+            if not info:
+                raise RuntimeError(f"Unknown project id {project_id}")
+
+            prefs = load_preferences()
+            project_name = info.get('name', 'Unknown')
+            rate, _ = get_effective_project_rate(
+                info,
+                prefs.get('retainer_hourly_rates', {}),
+                prefs.get('projects', {}),
+            )
+            if not rate:
+                raise RuntimeError(f"No billable rate configured for {project_name}")
+
+            chosen_customer_id = customer_id or prefs.get('stripe_project_customers', {}).get(project_name, '')
+            if not chosen_customer_id:
+                raise RuntimeError(f"No Stripe customer configured for {project_name}")
+
+            created = create_draft_invoice_for_project_range(
+                project_id=project_id,
+                project_name=project_name,
+                customer_id=chosen_customer_id,
+                hourly_rate=rate,
+                start_d=start_d,
+                end_d=end_d,
+            )
+            self._save_stripe_customer_mapping(project_name, chosen_customer_id)
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'success',
+                'title': 'Draft invoice created',
+                'detail': (
+                    f"{project_name} · {created['date_range_label']} · "
+                    f"{created['total_hours']:.2f}h · ${created['amount_usd']:.2f}"
+                ),
+                'summary': created['summary'],
+                'dashboard_url': created['dashboard_url'],
+            })
+            self.dashboard.refresh_contents()
+        except Exception as exc:
+            _debug(f"Stripe invoice failed: {exc}")
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': str(exc),
+            })
+            self.dashboard.refresh_contents()
+
+    def _dashboard_open_stripe_invoice(self):
+        """Open the dashboard URL from the current Stripe invoice success state."""
+        state = self.dashboard.get_stripe_invoice_state()
+        url = (state or {}).get('dashboard_url')
+        if url:
+            subprocess.run(["open", url], check=False)
+
+    def _dashboard_dismiss_stripe_invoice(self):
+        """Clear any active Stripe invoice status overlay in the dashboard."""
+        self.dashboard.clear_stripe_invoice_state()
+        self.dashboard.refresh_contents()
+
+    def _save_stripe_customer_mapping(self, project_name, customer_id):
+        """Persist a discovered Stripe customer mapping so future invoices skip re-selection."""
+        prefs = load_preferences()
+        stripe_project_customers = dict(prefs.get('stripe_project_customers', {}))
+        if stripe_project_customers.get(project_name) == customer_id:
+            return
+        stripe_project_customers[project_name] = customer_id
+        prefs['stripe_project_customers'] = stripe_project_customers
+        save_preferences(prefs)
 
     def _fallback_export_csv(self, project_id):
         """Used by the rumps fallback menu when WebKit isn't available.

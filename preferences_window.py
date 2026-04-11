@@ -15,6 +15,7 @@ NSBoxSeparator = 2
 from preferences import (
     load_preferences, save_preferences, validate_preferences, DEFAULT_PREFERENCES
 )
+from integrations import load_integration_settings, save_integration_settings
 import rumps
 
 
@@ -28,6 +29,7 @@ class PreferencesWindowController:
     PROJECT_TARGET_ROWS = 5
     RETAINER_RATE_ROWS = 5
     PROJECT_DEFINITION_ROWS = 5
+    STRIPE_PROJECT_ROWS = 5
 
     # Maps UI type label → (billing_type, hour_tracking)
     BILLING_TYPE_OPTIONS = [
@@ -51,6 +53,8 @@ class PreferencesWindowController:
         self.window = None
         self.widgets = {}
         self.current_prefs = load_preferences()
+        self.current_integrations = load_integration_settings()
+        self._stripe_customers = []
 
     def show_window(self):
         """Show preferences window (create if needed)."""
@@ -100,12 +104,14 @@ class PreferencesWindowController:
         self._create_caching_tab(tab_view)
         self._create_work_planning_tab(tab_view)
         self._create_projects_tab(tab_view)
+        self._create_integrations_tab(tab_view)
         self._create_advanced_tab(tab_view)
 
         content_view.addSubview_(tab_view)
 
         # Create bottom buttons
         self._create_bottom_buttons(content_view)
+        self._load_current_values()
 
     def _create_bottom_buttons(self, parent_view):
         """Create Reset, Cancel, and Save buttons at bottom."""
@@ -384,6 +390,89 @@ class PreferencesWindowController:
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
 
+    def _create_integrations_tab(self, tab_view):
+        """Tab: Integrations credentials and Stripe customer mappings."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("integrations")
+        tab.setLabel_("Integrations")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
+
+        y = 510
+
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        header.setStringValue_("Integration Credentials")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(header)
+        y -= 32
+
+        self.widgets['toggl_api_token'] = self._create_secure_field(
+            view, "Toggl API Token:", 20, y, self.current_integrations.get('TOGGL_API_TOKEN', '')
+        )
+        y -= 40
+
+        self.widgets['toggl_workspace_id'] = self._create_text_field(
+            view, "Toggl Workspace ID:", 20, y, self.current_integrations.get('TOGGL_WORKSPACE_ID', '')
+        )
+        y -= 40
+
+        self.widgets['stripe_api_key'] = self._create_secure_field(
+            view, "Stripe API Key:", 20, y, self.current_integrations.get('STRIPE_API_KEY', '')
+        )
+        y -= 52
+
+        map_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 360, 20))
+        map_header.setStringValue_("Stripe Customer Mapping")
+        map_header.setBezeled_(False)
+        map_header.setDrawsBackground_(False)
+        map_header.setEditable_(False)
+        map_header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(map_header)
+
+        refresh_btn = NSButton.alloc().initWithFrame_(NSMakeRect(400, y - 4, 140, 28))
+        refresh_btn.setTitle_("Refresh Customers")
+        refresh_btn.setBezelStyle_(1)
+        refresh_btn.setTarget_(self)
+        refresh_btn.setAction_("handleRefreshStripeCustomers:")
+        view.addSubview_(refresh_btn)
+        y -= 28
+
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 32))
+        help_text.setStringValue_(
+            "Pick projects and existing Stripe customers by name. Unmapped projects can also be associated during invoice creation."
+        )
+        help_text.setBezeled_(False)
+        help_text.setDrawsBackground_(False)
+        help_text.setEditable_(False)
+        help_text.setFont_(NSFont.systemFontOfSize_(11))
+        view.addSubview_(help_text)
+        y -= 44
+
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            row_y = y - i * 50
+            if i > 0:
+                sep = NSBox.alloc().initWithFrame_(NSMakeRect(5, row_y + 31, 545, 1))
+                sep.setBoxType_(NSBoxSeparator)
+                view.addSubview_(sep)
+
+            project_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(10, row_y, 230, 24), False
+            )
+            project_popup.addItemWithTitle_("—")
+            view.addSubview_(project_popup)
+            self.widgets[f'stripe_project_name_{i}'] = project_popup
+
+            customer_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(255, row_y, 285, 24), False
+            )
+            customer_popup.addItemWithTitle_("—")
+            view.addSubview_(customer_popup)
+            self.widgets[f'stripe_customer_{i}'] = customer_popup
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
     def _create_advanced_tab(self, tab_view):
         """Tab: Advanced utilities."""
         tab = NSTabViewItem.alloc().initWithIdentifier_("advanced")
@@ -508,6 +597,81 @@ class PreferencesWindowController:
 
         return field
 
+    def _create_secure_field(self, parent, label_text, x, y, default_value):
+        """Helper: create labeled credentials field."""
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, 220, 20))
+        label.setStringValue_(label_text)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        parent.addSubview_(label)
+
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(x + 230, y - 3, 250, 25))
+        field.setStringValue_(default_value)
+        parent.addSubview_(field)
+        return field
+
+    def _load_stripe_customers(self, api_key=None):
+        """Fetch Stripe customers for both settings and invoice flows."""
+        from stripe_invoice import list_customers
+
+        key = api_key if api_key is not None else self.current_integrations.get('STRIPE_API_KEY', '')
+        try:
+            self._stripe_customers = list_customers(api_key=key)
+        except Exception:
+            self._stripe_customers = []
+        return self._stripe_customers
+
+    def _stripe_customer_popup_title(self, customer):
+        """Compact customer picker label with id suffix for disambiguation."""
+        base = customer.get('display_name') or customer.get('id') or "Unknown customer"
+        return f"{base} ({customer.get('id', '')})"
+
+    def _populate_stripe_project_popups(self):
+        """Refresh project dropdown options from cached Toggl projects."""
+        toggl_names = self._get_toggl_project_names()
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets.get(f'stripe_project_name_{i}')
+            if popup is None:
+                continue
+            current = popup.titleOfSelectedItem()
+            popup.removeAllItems()
+            popup.addItemWithTitle_("—")
+            for name in toggl_names:
+                popup.addItemWithTitle_(name)
+            if current and popup.indexOfItemWithTitle_(current) != -1:
+                popup.selectItemWithTitle_(current)
+            else:
+                popup.selectItemWithTitle_("—")
+
+    def _populate_stripe_customer_popups(self, selected_ids=None):
+        """Load Stripe customer choices into every customer popup."""
+        selected_ids = selected_ids or {}
+        choices = [("—", "")]
+        choices.extend(
+            (self._stripe_customer_popup_title(customer), customer['id'])
+            for customer in self._stripe_customers
+        )
+
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets.get(f'stripe_customer_{i}')
+            if popup is None:
+                continue
+            selected_id = selected_ids.get(i, "")
+            popup.removeAllItems()
+            title_for_selected = "—"
+            for title, customer_id in choices:
+                popup.addItemWithTitle_(title)
+                popup.lastItem().setRepresentedObject_(customer_id)
+                if customer_id and customer_id == selected_id:
+                    title_for_selected = title
+            if selected_id and title_for_selected == "—":
+                fallback_title = selected_id
+                popup.addItemWithTitle_(fallback_title)
+                popup.lastItem().setRepresentedObject_(selected_id)
+                title_for_selected = fallback_title
+            popup.selectItemWithTitle_(title_for_selected)
+
     def _create_checkbox(self, parent, label_text, x, y, checked):
         """Helper: create checkbox."""
         checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(x, y, 400, 25))
@@ -521,6 +685,7 @@ class PreferencesWindowController:
     def _load_current_values(self):
         """Load current preferences into UI widgets."""
         self.current_prefs = load_preferences()
+        self.current_integrations = load_integration_settings()
 
         # Load cache TTL values
         self.widgets['cache_ttl_projects'].setIntValue_(self.current_prefs['cache_ttl_projects'])
@@ -528,6 +693,10 @@ class PreferencesWindowController:
 
         # Load vacation days
         self.widgets['vacation_days'].setIntValue_(self.current_prefs['vacation_days_per_month'])
+
+        self.widgets['toggl_api_token'].setStringValue_(self.current_integrations.get('TOGGL_API_TOKEN', ''))
+        self.widgets['toggl_workspace_id'].setStringValue_(self.current_integrations.get('TOGGL_WORKSPACE_ID', ''))
+        self.widgets['stripe_api_key'].setStringValue_(self.current_integrations.get('STRIPE_API_KEY', ''))
 
         # Load project targets into name/hours field pairs
         project_targets = self.current_prefs.get('project_targets', {})
@@ -585,6 +754,23 @@ class PreferencesWindowController:
             self.widgets[f'pd_lbl_carryover_{i}'].setStringValue_(f"{_ml} carryover h")
             self.widgets[f'pd_carryover_{i}'].setStringValue_(_fmt_carry(carry_val))
             self._update_project_row_visibility(i)
+
+        self._populate_stripe_project_popups()
+        self._load_stripe_customers(self.current_integrations.get('STRIPE_API_KEY', ''))
+        stripe_project_customers = self.current_prefs.get('stripe_project_customers', {})
+        selected_customer_ids = {}
+        stripe_items = list(stripe_project_customers.items())
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets[f'stripe_project_name_{i}']
+            if i < len(stripe_items):
+                name, customer_id = stripe_items[i]
+                if popup.indexOfItemWithTitle_(name) == -1:
+                    popup.addItemWithTitle_(name)
+                popup.selectItemWithTitle_(name)
+                selected_customer_ids[i] = customer_id
+            else:
+                popup.selectItemWithTitle_("—")
+        self._populate_stripe_customer_popups(selected_customer_ids)
 
     def handleSave_(self, sender):
         """Save button clicked."""
@@ -644,6 +830,15 @@ class PreferencesWindowController:
                         except ValueError:
                             pass
 
+        stripe_project_customers = {}
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            project_name = self.widgets[f'stripe_project_name_{i}'].titleOfSelectedItem()
+            customer_popup = self.widgets[f'stripe_customer_{i}']
+            selected_item = customer_popup.selectedItem()
+            customer_id = str(selected_item.representedObject() or "").strip() if selected_item else ""
+            if project_name and project_name != "—" and customer_id:
+                stripe_project_customers[project_name] = customer_id
+
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
         new_prefs.update({
@@ -652,10 +847,25 @@ class PreferencesWindowController:
             'vacation_days_per_month': self.widgets['vacation_days'].intValue(),
             'project_targets': project_targets,
             'projects': projects_config,
+            'stripe_project_customers': stripe_project_customers,
         })
+
+        integration_settings = {
+            'TOGGL_API_TOKEN': self.widgets['toggl_api_token'].stringValue().strip(),
+            'TOGGL_WORKSPACE_ID': self.widgets['toggl_workspace_id'].stringValue().strip(),
+            'STRIPE_API_KEY': self.widgets['stripe_api_key'].stringValue().strip(),
+        }
+
+        integration_errors = []
+        if not integration_settings['TOGGL_API_TOKEN']:
+            integration_errors.append("Toggl API Token is required")
+        stripe_key = integration_settings['STRIPE_API_KEY']
+        if stripe_key and not stripe_key.startswith('sk_'):
+            integration_errors.append("Stripe API Key must start with 'sk_'")
 
         # Validate using existing function
         errors = validate_preferences(new_prefs)
+        errors.extend(integration_errors)
 
         if errors:
             # Show error dialog
@@ -672,6 +882,8 @@ class PreferencesWindowController:
 
         # Save
         save_preferences(new_prefs)
+        save_integration_settings(integration_settings)
+        self.current_integrations = integration_settings
 
         # Flash "Saved ✓" on the Save button briefly
         save_btn = self.widgets.get('save_btn')
@@ -690,6 +902,19 @@ class PreferencesWindowController:
             NSApp.delegate().app.update_display()
         except:
             pass  # Gracefully handle if app not available
+
+    def handleRefreshStripeCustomers_(self, sender):
+        """Reload customer options from Stripe using the currently entered API key."""
+        api_key = self.widgets['stripe_api_key'].stringValue().strip()
+        selected_ids = {}
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets.get(f'stripe_customer_{i}')
+            if popup is None:
+                continue
+            item = popup.selectedItem()
+            selected_ids[i] = str(item.representedObject() or "") if item else ""
+        self._load_stripe_customers(api_key)
+        self._populate_stripe_customer_popups(selected_ids)
 
     def handleCancel_(self, sender):
         """Cancel button clicked."""
@@ -722,11 +947,15 @@ class PreferencesWindowController:
         if response == NSAlertFirstButtonReturn:
             # Keep in-memory state aligned with defaults for fields not shown in UI.
             self.current_prefs = DEFAULT_PREFERENCES.copy()
+            self.current_integrations = load_integration_settings()
 
             # Load defaults into widgets
             self.widgets['cache_ttl_projects'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_projects'])
             self.widgets['cache_ttl_today'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_today'])
             self.widgets['vacation_days'].setIntValue_(DEFAULT_PREFERENCES['vacation_days_per_month'])
+            self.widgets['toggl_api_token'].setStringValue_("")
+            self.widgets['toggl_workspace_id'].setStringValue_("")
+            self.widgets['stripe_api_key'].setStringValue_("")
 
             # Clear all project target fields
             for i in range(self.PROJECT_TARGET_ROWS):
@@ -744,3 +973,9 @@ class PreferencesWindowController:
                 self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
                 self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
                 self.widgets[f'pd_carryover_{i}'].setStringValue_("")
+
+            self._stripe_customers = []
+            self._populate_stripe_project_popups()
+            self._populate_stripe_customer_popups()
+            for i in range(self.STRIPE_PROJECT_ROWS):
+                self.widgets[f'stripe_project_name_{i}'].selectItemWithTitle_("—")

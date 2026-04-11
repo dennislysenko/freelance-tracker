@@ -7,23 +7,26 @@ import calendar
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from pathlib import Path
-from dotenv import load_dotenv
 from preferences import CACHE_DIR, load_preferences
 from api_audit import log_api_request, is_currently_rate_limited
 from carryover import get_balance, has_balance, set_balance, get_previous_month_str
-
-load_dotenv()
+from integrations import load_integration_settings
 
 # Configuration
-API_TOKEN = os.getenv("TOGGL_API_TOKEN")
-WORKSPACE_ID = os.getenv("TOGGL_WORKSPACE_ID")
 BASE_URL = "https://api.track.toggl.com/api/v9"
 
 # Rate limit state
 _rate_limited = False
 
-if not API_TOKEN:
-    raise ValueError("TOGGL_API_TOKEN not found in environment variables. Please check your .env file.")
+def _get_api_token():
+    token = load_integration_settings().get("TOGGL_API_TOKEN") or os.getenv("TOGGL_API_TOKEN")
+    if not token:
+        raise ValueError("TOGGL_API_TOKEN not found. Add it in Settings > Integrations.")
+    return token
+
+
+def _get_workspace_id():
+    return load_integration_settings().get("TOGGL_WORKSPACE_ID") or os.getenv("TOGGL_WORKSPACE_ID")
 
 
 def is_rate_limited():
@@ -39,13 +42,14 @@ def get_time_entries(start_date, end_date):
     """
     global _rate_limited
     url = f"{BASE_URL}/me/time_entries"
+    api_token = _get_api_token()
     params = {
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat()
     }
 
     try:
-        response = requests.get(url, auth=(API_TOKEN, "api_token"), params=params, timeout=10)
+        response = requests.get(url, auth=(api_token, "api_token"), params=params, timeout=10)
 
         # Check for rate limiting (402)
         if response.status_code == 402:
@@ -97,9 +101,10 @@ def get_projects():
 
     # Fetch fresh data
     url = f"{BASE_URL}/me/projects"
+    api_token = _get_api_token()
 
     try:
-        response = requests.get(url, auth=(API_TOKEN, "api_token"), timeout=10)
+        response = requests.get(url, auth=(api_token, "api_token"), timeout=10)
 
         # Check for rate limiting (402)
         if response.status_code == 402:
@@ -158,8 +163,10 @@ def create_time_entry(start, duration_seconds, description, project_id=None, bil
     Returns the created entry dict on success.
     """
     global _rate_limited
-    if WORKSPACE_ID is None:
-        raise ValueError("TOGGL_WORKSPACE_ID not found in environment variables.")
+    workspace_id = _get_workspace_id()
+    if workspace_id is None:
+        raise ValueError("TOGGL_WORKSPACE_ID not found. Add it in Settings > Integrations.")
+    api_token = _get_api_token()
 
     if start.tzinfo is None:
         raise ValueError("start datetime must be timezone-aware")
@@ -168,7 +175,7 @@ def create_time_entry(start, duration_seconds, description, project_id=None, bil
     payload = {
         "created_with": "freelance-tracker",
         "description": description,
-        "workspace_id": int(WORKSPACE_ID),
+        "workspace_id": int(workspace_id),
         "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "duration": int(duration_seconds),
         "billable": billable,
@@ -178,13 +185,13 @@ def create_time_entry(start, duration_seconds, description, project_id=None, bil
     if tags:
         payload["tags"] = list(tags)
 
-    url = f"{BASE_URL}/workspaces/{WORKSPACE_ID}/time_entries"
-    endpoint = f"/workspaces/{WORKSPACE_ID}/time_entries"
+    url = f"{BASE_URL}/workspaces/{workspace_id}/time_entries"
+    endpoint = f"/workspaces/{workspace_id}/time_entries"
 
     try:
         response = requests.post(
             url,
-            auth=(API_TOKEN, "api_token"),
+            auth=(api_token, "api_token"),
             json=payload,
             timeout=10,
         )
@@ -214,8 +221,10 @@ def update_time_entry(entry_id, **fields):
     Returns the updated entry dict on success.
     """
     global _rate_limited
-    if WORKSPACE_ID is None:
-        raise ValueError("TOGGL_WORKSPACE_ID not found in environment variables.")
+    workspace_id = _get_workspace_id()
+    if workspace_id is None:
+        raise ValueError("TOGGL_WORKSPACE_ID not found. Add it in Settings > Integrations.")
+    api_token = _get_api_token()
 
     payload = {}
     for key in ("description", "billable", "tags"):
@@ -239,13 +248,13 @@ def update_time_entry(entry_id, **fields):
     if not payload:
         raise ValueError("update_time_entry requires at least one field to update")
 
-    url = f"{BASE_URL}/workspaces/{WORKSPACE_ID}/time_entries/{entry_id}"
-    endpoint = f"/workspaces/{WORKSPACE_ID}/time_entries/{entry_id}"
+    url = f"{BASE_URL}/workspaces/{workspace_id}/time_entries/{entry_id}"
+    endpoint = f"/workspaces/{workspace_id}/time_entries/{entry_id}"
 
     try:
         response = requests.put(
             url,
-            auth=(API_TOKEN, "api_token"),
+            auth=(api_token, "api_token"),
             json=payload,
             timeout=10,
         )
@@ -546,6 +555,8 @@ def calculate_period_earnings(period):
     project_data = defaultdict(lambda: {"duration": 0, "entries": []})
 
     for entry in entries:
+        if entry.get("duration", 0) <= 0:
+            continue
         project_id = str(entry.get("project_id"))
         if project_id and project_id != "None":
             project_data[project_id]["duration"] += entry["duration"]

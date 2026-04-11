@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-04-02
+**Last Updated:** 2026-04-10
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -26,6 +26,8 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - `This Week` is collapsed by default; section collapse state is then persisted per user across launches
 - Preferences window no longer exposes dashboard collapse-state defaults; its fourth tab is `Advanced` and currently only exposes the API audit log
 - Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data` or one-off `Refresh Projects`), `Settings`, `Update`, and `Quit`
+- Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV` or `Create Stripe Invoice`
+- Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
 - Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
 - Auto-refresh every 30 minutes
 - Manual refresh available
@@ -145,6 +147,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Today's data refreshed intelligently
 - Manual `Refresh Now` invalidates only the active dashboard period caches: today (always), current week historical range when applicable, current month historical range when applicable, and one `last_billed_date` range per configured capped project
 - Typically 2-4 API calls per day
+- Running Toggl entries and any non-positive durations are excluded from earnings/hour totals so live timers cannot corrupt dashboard totals
 
 ### System Service
 - Runs as macOS LaunchAgent
@@ -160,6 +163,8 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Vacation day settings
 - Cache TTL controls
 - Project definitions with billing types (`projects` key)
+- Integrations tab lets the user update the Toggl API token, Toggl workspace id, and Stripe API key after installation
+- Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
 - `fixed_monthly` projects are always fixed in projections — no toggle needed
 - Legacy `retainer_hourly_rates` still supported
 
@@ -175,16 +180,30 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Works independently of menu bar app
 
 ### Hours CSV Export
-- Footer `Export CSV` split button in the dashboard popover lists every project that has a resolvable billing rate
+- Footer `Export/Invoice` drop-up in the dashboard popover includes an `Export CSV` path that lists every project that has a resolvable billing rate
 - Click a project to export a billing-ready CSV with columns: `Description, Start date, Start time, End date, End time, Duration, Time Billed (hours), Hourly Rate (USD), Money Billed (USD)` plus a `---- Total ----` row
 - Output format is byte-compatible with the standalone `process_toggl_hours.py` script (per-project, one CSV per export)
 - Range selection respects the project's billing cycle:
   - `hourly_with_cap` projects with `last_billed_date` set: range is automatically `last_billed_date + 1` through today (the same unbilled cycle the dashboard cap progress bar tracks)
-  - All other projects: a native date-range picker opens, defaulted to the previous calendar month
+  - All other projects: presets include `This week`, `Last week`, `Last month`, `Year to date`, plus a custom range
 - Hourly rate uses the project's effective rate from `get_effective_project_rate` (the same rate used everywhere else in the app)
 - Output saved to `~/Downloads/{project_slug}_{range}_hours.csv`, then revealed in Finder; a notification confirms the export
 - Also available as a submenu in the fallback dropdown menu when the WebKit dashboard is unavailable
 - API call cost: 1 call per export at most (the entries for the range are cached, so back-to-back exports for different projects in the same range hit the cache)
+
+### Stripe Draft Invoice Creation
+- Footer `Export/Invoice` drop-up includes a `Create Stripe Invoice` workflow that mirrors the CSV flow: choose a project, choose a billing range, and create a Stripe draft invoice
+- Uses the same project/range presets as CSV export:
+  - `hourly_with_cap` projects with `last_billed_date` set: `last_billed_date + 1` through today
+  - All other projects: this week, last week, last month, year to date, or a custom date range
+- If the project has not been linked to a Stripe customer yet, the dashboard fetches Stripe customers and prompts the user to pick one by name immediately after date selection; the mapping is then saved for future invoices
+- While creating the invoice, the dashboard shows an in-place loading state instead of silently dismissing
+- Success state is explicit that the app created a **draft** invoice only, and offers an `Open in Stripe` button so the user can review and send it manually
+- The draft invoice footer contains an hours breakdown line for each billed Toggl entry in the selected range
+- Output creates one Stripe draft invoice plus one attached invoice item for the selected project/range
+- API call cost:
+  - Toggl: 1 call per invoice at most (reuses the same cached range fetch as CSV export)
+  - Stripe: 1 customer-list call only when associating an unmapped project, then 2 write calls per invoice (draft invoice + invoice item)
 
 ---
 
