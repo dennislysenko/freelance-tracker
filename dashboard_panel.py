@@ -898,13 +898,13 @@ html, body {{
 
 .wrapper {{
     padding: 10px 12px 12px;
-    padding-bottom: 132px;
 }}
 
 .section-list {{
     display: flex;
     flex-direction: column;
     gap: 10px;
+    padding-bottom: 24px;
 }}
 
 .footer {{
@@ -1925,6 +1925,14 @@ html, body {{
         }});
     }}
 
+    function syncFooterClearance() {{
+        var footer = document.querySelector('.footer');
+        var sectionList = document.querySelector('.section-list');
+        if (!footer || !sectionList) return;
+        var footerHeight = Math.ceil(footer.getBoundingClientRect().height);
+        sectionList.style.paddingBottom = String(footerHeight + 8) + 'px';
+    }}
+
     function closeRefreshMenu() {{
         var group = document.getElementById('refreshGroup');
         if (group) {{
@@ -2357,6 +2365,7 @@ html, body {{
     }}
 
     function reportHeight() {{
+        syncFooterClearance();
         var wrapper = document.querySelector('.wrapper');
         if (!wrapper || !document.body || !document.documentElement) return;
 
@@ -2374,6 +2383,7 @@ html, body {{
         }}
 
         var wrapper = document.querySelector('.wrapper');
+        var footer = document.querySelector('.footer');
         heightObserver = new ResizeObserver(function() {{
             scheduleReportHeight();
         }});
@@ -2383,9 +2393,13 @@ html, body {{
         if (wrapper) {{
             heightObserver.observe(wrapper);
         }}
+        if (footer) {{
+            heightObserver.observe(footer);
+        }}
     }}
 
     document.addEventListener('DOMContentLoaded', function() {{
+        syncFooterClearance();
         startHeightObserver();
         applyExpandedProjectsState();
         scheduleReportHeight();
@@ -2403,9 +2417,13 @@ html, body {{
         }}
     }});
     window.addEventListener('load', function() {{
+        syncFooterClearance();
         scheduleReportHeight();
     }});
-    window.addEventListener('resize', scheduleReportHeight);
+    window.addEventListener('resize', function() {{
+        syncFooterClearance();
+        scheduleReportHeight();
+    }});
 </script>
 </body>
 </html>"""
