@@ -184,7 +184,8 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Click a project to export a billing-ready CSV with columns: `Description, Start date, Start time, End date, End time, Duration, Time Billed (hours), Hourly Rate (USD), Money Billed (USD)` plus a `---- Total ----` row
 - Output format is byte-compatible with the standalone `process_toggl_hours.py` script (per-project, one CSV per export)
 - Range selection respects the project's billing cycle:
-  - `hourly_with_cap` projects with `last_billed_date` set: range is automatically `last_billed_date + 1` through today (the same unbilled cycle the dashboard cap progress bar tracks)
+  - `hourly_with_cap` projects with `last_billed_date` set and unbilled hours that exceed `cap_hours`: the "Since last billed" preset is replaced with an **"Unbilled (under cap)"** preset whose range is `last_billed_date + 1` through the project's `cap_fill_date` (the last day on which cumulative unbilled hours stay at or under the cap). The day that first pushes cumulative hours over the cap is excluded entirely — no partial-day splitting — so the exported CSV total never exceeds the cap.
+  - `hourly_with_cap` projects with `last_billed_date` set whose unbilled hours are still within the cap: the "Since last billed" preset runs from `last_billed_date + 1` through today, unchanged.
   - All other projects: presets include `This week`, `Last week`, `Last month`, `Year to date`, plus a custom range
 - Hourly rate uses the project's effective rate from `get_effective_project_rate` (the same rate used everywhere else in the app)
 - Output saved to `~/Downloads/{project_slug}_{range}_hours.csv`, then revealed in Finder; a notification confirms the export
@@ -194,7 +195,8 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 ### Stripe Draft Invoice Creation
 - Footer `Export/Invoice` drop-up includes a `Create Stripe Invoice` workflow that mirrors the CSV flow: choose a project, choose a billing range, and create a Stripe draft invoice
 - Uses the same project/range presets as CSV export:
-  - `hourly_with_cap` projects with `last_billed_date` set: `last_billed_date + 1` through today
+  - `hourly_with_cap` projects with `last_billed_date` set and unbilled hours over the cap: "Unbilled (under cap)" preset from `last_billed_date + 1` through the project's `cap_fill_date`, same cap-safe semantics as the CSV export
+  - `hourly_with_cap` projects with `last_billed_date` set and unbilled hours still under the cap: "Since last billed" preset from `last_billed_date + 1` through today
   - All other projects: this week, last week, last month, year to date, or a custom date range
 - If the project has not been linked to a Stripe customer yet, the dashboard fetches Stripe customers and prompts the user to pick one by name immediately after date selection; the mapping is then saved for future invoices
 - While creating the invoice, the dashboard shows an in-place loading state instead of silently dismissing

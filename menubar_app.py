@@ -172,7 +172,7 @@ class FreelanceTrackerApp(rumps.App):
 
     def _build_exportable_projects(self):
         """Return list of projects eligible for CSV export or Stripe invoicing."""
-        from toggl_data import get_projects, get_effective_project_rate
+        from toggl_data import get_projects, get_effective_project_rate, compute_lbd_cap_fill_date
         prefs = load_preferences()
         retainer_rates = prefs.get('retainer_hourly_rates', {})
         projects_config = prefs.get('projects', {})
@@ -190,10 +190,20 @@ class FreelanceTrackerApp(rumps.App):
             name = info.get('name', 'Unknown')
             defn = projects_config.get(name, {})
             lbd = defn.get('last_billed_date') if defn.get('billing_type') == 'hourly_with_cap' else None
+            cap_fill_date = ''
+            if lbd:
+                try:
+                    last_billed = datetime.strptime(lbd, '%Y-%m-%d').date()
+                    cap_fill_date = compute_lbd_cap_fill_date(
+                        name, last_billed, defn.get('cap_hours', 0), projects
+                    ) or ''
+                except (TypeError, ValueError) as exc:
+                    _debug(f"cap_fill_date compute failed for {name}: {exc}")
             out.append({
                 'id': str(pid),
                 'name': name,
                 'last_billed_date': lbd or '',
+                'cap_fill_date': cap_fill_date,
                 'stripe_customer_id': stripe_project_customers.get(name, ''),
             })
         out.sort(key=lambda p: p['name'].lower())
@@ -405,9 +415,16 @@ class FreelanceTrackerApp(rumps.App):
         start_d = end_d = None
         if defn.get('billing_type') == 'hourly_with_cap' and defn.get('last_billed_date'):
             try:
+                from toggl_data import compute_lbd_cap_fill_date, get_projects as _get_projects
                 last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
                 start_d = last_billed + _td(days=1)
-                end_d = _date.today()
+                cap_fill_iso = compute_lbd_cap_fill_date(
+                    project_name, last_billed, defn.get('cap_hours', 0), _get_projects()
+                )
+                if cap_fill_iso:
+                    end_d = datetime.strptime(cap_fill_iso, '%Y-%m-%d').date()
+                else:
+                    end_d = _date.today()
             except (TypeError, ValueError):
                 pass
 

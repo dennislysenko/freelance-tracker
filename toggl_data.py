@@ -447,6 +447,26 @@ def _calculate_cap_fill_date(hours_by_day, cap_hours):
     return None
 
 
+def compute_lbd_cap_fill_date(project_name, last_billed_date, cap_hours, projects_map):
+    """Compute the cap fill date for an hourly_with_cap project in last_billed_date mode.
+
+    Returns an ISO date string for the last day on which cumulative unbilled hours
+    stay at or under cap_hours, or None if total unbilled hours are within the cap.
+    Uses the same cached range fetch as the dashboard's unbilled calculation, so no
+    additional API calls in a normal refresh cycle.
+    """
+    if not last_billed_date or cap_hours <= 0:
+        return None
+    unbilled_entries = get_entries_since_date(last_billed_date + timedelta(days=1))
+    hours_by_day = defaultdict(float)
+    for e in unbilled_entries:
+        if (projects_map.get(str(e.get('project_id')), {}).get('name') == project_name
+                and e.get('duration', 0) > 0):
+            entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+            hours_by_day[entry_date] += e['duration'] / 3600
+    return _calculate_cap_fill_date(hours_by_day, cap_hours)
+
+
 def _get_monthly_project_hours(project_id, projects_map, entries_cache=None):
     """Get total hours for a project in the current month (from cache, no API calls)."""
     monthly_entries = get_entries_with_cache("monthly")

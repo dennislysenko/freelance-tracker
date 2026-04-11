@@ -831,6 +831,8 @@ class DashboardPanelController:
             for p in self._exportable_projects:
                 lbd = p.get('last_billed_date') or ''
                 lbd_attr = f' data-last-billed="{_esc(lbd)}"' if lbd else ''
+                cap_fill_date = p.get('cap_fill_date') or ''
+                cap_fill_attr = f' data-cap-fill-date="{_esc(cap_fill_date)}"' if cap_fill_date else ''
                 stripe_customer_id = p.get('stripe_customer_id') or ''
                 stripe_customer_attr = (
                     f' data-stripe-customer="{_esc(stripe_customer_id)}"'
@@ -841,7 +843,7 @@ class DashboardPanelController:
                     f'<button class="export-option" '
                     f'data-project-id="{_esc(p["id"])}" '
                     f'data-project-name="{_esc(p["name"])}"'
-                    f'{lbd_attr} '
+                    f'{lbd_attr}{cap_fill_attr} '
                     f'onclick="selectExportProject(this)">{_esc(p["name"])}</button>'
                 )
                 invoice_badge = (
@@ -853,7 +855,7 @@ class DashboardPanelController:
                     f'<button class="export-option invoice-option" '
                     f'data-project-id="{_esc(p["id"])}" '
                     f'data-project-name="{_esc(p["name"])}"'
-                    f'{lbd_attr}{stripe_customer_attr} '
+                    f'{lbd_attr}{cap_fill_attr}{stripe_customer_attr} '
                     f'onclick="selectInvoiceProject(this)">'
                     f'<span>{_esc(p["name"])}</span>{invoice_badge}</button>'
                 )
@@ -2042,6 +2044,7 @@ html, body {{
         var pid = btn.getAttribute('data-project-id');
         var name = btn.getAttribute('data-project-name');
         var lbd = btn.getAttribute('data-last-billed');
+        var capFillDate = btn.getAttribute('data-cap-fill-date');
 
         var stage2 = document.getElementById('exportStage2');
         var title = document.getElementById('exportStage2Title');
@@ -2050,15 +2053,20 @@ html, body {{
 
         var lbdBtn = document.getElementById('exportPresetLbd');
         var lbdRangeSpan = document.getElementById('exportPresetLbdRange');
+        var lbdNameSpan = lbdBtn ? lbdBtn.querySelector('.export-preset-name') : null;
         if (lbdBtn && lbdRangeSpan) {{
             if (lbd) {{
                 var lbdStart = addDays(lbd, 1);
                 var menu = document.getElementById('exportMenu');
                 var today = menu ? menu.getAttribute('data-today') : null;
-                if (today) {{
+                var lbdEnd = capFillDate || today;
+                if (lbdEnd) {{
                     lbdBtn.setAttribute('data-start', lbdStart);
-                    lbdBtn.setAttribute('data-end', today);
-                    lbdRangeSpan.textContent = formatRange(lbdStart, today);
+                    lbdBtn.setAttribute('data-end', lbdEnd);
+                    lbdRangeSpan.textContent = formatRange(lbdStart, lbdEnd);
+                    if (lbdNameSpan) {{
+                        lbdNameSpan.textContent = capFillDate ? 'Unbilled (under cap)' : 'Since last billed';
+                    }}
                     lbdBtn.style.display = '';
                 }} else {{
                     lbdBtn.style.display = 'none';
@@ -2161,6 +2169,7 @@ html, body {{
         var pid = btn.getAttribute('data-project-id');
         var name = btn.getAttribute('data-project-name');
         var lbd = btn.getAttribute('data-last-billed');
+        var capFillDate = btn.getAttribute('data-cap-fill-date');
 
         var stage2 = document.getElementById('invoiceStage2');
         var title = document.getElementById('invoiceStage2Title');
@@ -2169,15 +2178,20 @@ html, body {{
 
         var lbdBtn = document.getElementById('invoicePresetLbd');
         var lbdRangeSpan = document.getElementById('invoicePresetLbdRange');
+        var lbdNameSpan = lbdBtn ? lbdBtn.querySelector('.export-preset-name') : null;
         if (lbdBtn && lbdRangeSpan) {{
             if (lbd) {{
                 var lbdStart = addDays(lbd, 1);
                 var menu = document.getElementById('invoiceMenu');
                 var today = menu ? menu.getAttribute('data-today') : null;
-                if (today) {{
+                var lbdEnd = capFillDate || today;
+                if (lbdEnd) {{
                     lbdBtn.setAttribute('data-start', lbdStart);
-                    lbdBtn.setAttribute('data-end', today);
-                    lbdRangeSpan.textContent = formatRange(lbdStart, today);
+                    lbdBtn.setAttribute('data-end', lbdEnd);
+                    lbdRangeSpan.textContent = formatRange(lbdStart, lbdEnd);
+                    if (lbdNameSpan) {{
+                        lbdNameSpan.textContent = capFillDate ? 'Unbilled (under cap)' : 'Since last billed';
+                    }}
                     lbdBtn.style.display = '';
                 }} else {{
                     lbdBtn.style.display = 'none';
