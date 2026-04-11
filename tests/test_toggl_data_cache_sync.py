@@ -202,3 +202,21 @@ def test_manual_carryover_override_is_preserved(monkeypatch, tmp_path):
     record = carryover.get_balance_record("Client A", "2026-03")
     assert record["source"] == "manual"
     assert record["hours"] == 5.0
+
+
+def test_clear_all_caches_removes_shared_and_legacy_cache_files(monkeypatch, tmp_path):
+    cache_dir, entry_cache_dir = _configure_cache_env(monkeypatch, tmp_path)
+
+    shared_day = entry_cache_dir / "2026-04-11.json"
+    shared_day.write_text(json.dumps({"entries": []}))
+    (cache_dir / "projects.json").write_text("{}")
+    (cache_dir / "export_2026-04-01_to_2026-04-11.json").write_text("{}")
+    (cache_dir / "daily_2026-04-11.json").write_text("{}")
+
+    toggl_data.clear_all_caches()
+
+    assert entry_cache_dir.exists()
+    assert list(entry_cache_dir.iterdir()) == []
+    assert not (cache_dir / "projects.json").exists()
+    assert not (cache_dir / "export_2026-04-01_to_2026-04-11.json").exists()
+    assert not (cache_dir / "daily_2026-04-11.json").exists()

@@ -25,7 +25,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - Dashboard popover auto-sizes to the current content for short project lists, while preserving scrolling for taller dashboards
 - `This Week` is collapsed by default; section collapse state is then persisted per user across launches
 - Preferences window no longer exposes dashboard collapse-state defaults; its fourth tab is `Advanced` and currently only exposes the API audit log
-- Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data` or one-off `Refresh Projects`), `Settings`, `Update`, and `Quit`
+- Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, or `Clear All Caches`), `Settings`, `Update`, and `Quit`
 - Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV` or `Create Stripe Invoice`
 - Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
 - Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
@@ -147,9 +147,11 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Dashboard, CSV export, Stripe draft invoices, capped `last_billed_date` calculations, and auto carryover all read from the same shared entry cache
 - Historical day shards remain cached until explicitly refreshed; today's shard still uses the configurable `cache_ttl_today`
 - Manual `Refresh Now` invalidates the visible dashboard ranges, active capped-project billing-cycle ranges, and the previous-month range needed for auto carryover when applicable, so dashboard and billing outputs stay in sync after Toggl edits
+- `Clear All Caches` removes all cached Toggl entry shards, project metadata, and legacy cache files, then immediately repopulates the currently needed data. This is a heavier recovery action than `Refresh Data` and can cost additional API calls on the next reload
 - Typical API call cost:
   - background / on-demand reads: 0-1 calls when required day shards are already cached, otherwise one call per missing merged range
   - manual `Refresh Now`: typically 2-5 calls depending on overlapping dashboard, billing-cycle, and carryover ranges
+  - `Clear All Caches`: variable; the next dashboard render and any later export/invoice flows will fetch whatever data is no longer cached
 - Running Toggl entries and any non-positive durations are excluded from earnings/hour totals so live timers cannot corrupt dashboard totals
 
 ### System Service

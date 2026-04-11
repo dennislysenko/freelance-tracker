@@ -17,6 +17,7 @@ from toggl_data import (
     get_monthly_earnings,
     is_rate_limited,
     force_refresh_entries,
+    clear_all_caches,
     estimate_manual_refresh_entry_api_calls,
 )
 from preferences import load_preferences, save_preferences
@@ -90,6 +91,7 @@ class FreelanceTrackerApp(rumps.App):
             self.dashboard.set_callbacks({
                 'refresh': self._dashboard_refresh,
                 'refresh_projects': self._dashboard_refresh_projects,
+                'clear_all_caches': self._dashboard_clear_all_caches,
                 'settings': self._dashboard_preferences,
                 'update_app': self._dashboard_update_app,
                 'quit': self._dashboard_quit,
@@ -151,6 +153,11 @@ class FreelanceTrackerApp(rumps.App):
     def _dashboard_refresh_projects(self):
         """Called from dashboard Projects button — refresh project cache and update in-place."""
         self.refresh_projects(None)
+
+    def _dashboard_clear_all_caches(self):
+        """Called from dashboard cache-clear action — wipe caches and repopulate current data."""
+        clear_all_caches()
+        self.update_display()
 
     def _dashboard_preferences(self):
         """Called from dashboard Settings button."""

@@ -2,6 +2,7 @@
 
 import os
 import json
+import shutil
 import requests
 import calendar
 from datetime import datetime, timedelta, timezone
@@ -221,6 +222,22 @@ def invalidate_entry_days(days):
     """Delete shared day shards for the given days."""
     for day in set(days):
         _entry_cache_file_for_day(day).unlink(missing_ok=True)
+
+
+def clear_all_caches():
+    """Delete all cached Toggl data, including shared day shards and legacy cache files."""
+    if ENTRY_CACHE_DIR.exists():
+        shutil.rmtree(ENTRY_CACHE_DIR)
+
+    for path in CACHE_DIR.iterdir():
+        if path == ENTRY_CACHE_DIR:
+            continue
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.is_file():
+            path.unlink(missing_ok=True)
+
+    ENTRY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_entries_for_range(start_date, end_date, force_refresh=False):

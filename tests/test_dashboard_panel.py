@@ -66,6 +66,7 @@ def test_dashboard_html_measures_document_height():
     assert "refresh-arrow" in html
     assert "Refresh Data" in html
     assert "Refresh Projects" in html
+    assert "Clear All Caches" in html
     assert "Settings" in html
     assert "Advanced" not in html
     assert "Toggl rate limit reached. Showing cached data." in html
