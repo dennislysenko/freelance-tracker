@@ -21,6 +21,7 @@ DEFAULT_PREFERENCES = {
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
     "projects": {},  # Project definitions by name: see docs/SOT.md for schema
     "stripe_project_customers": {},  # Optional Stripe customer ids by project name
+    "upwork_contracts": {},  # Optional Upwork contract ids by project name
     "dashboard_sections": {
         "today": True,
         "week": False,
@@ -256,6 +257,29 @@ def validate_preferences(prefs):
                 if customer_id.strip() and not customer_id.startswith('cus_'):
                     errors.append(
                         f"'stripe_project_customers.{project_name}': must start with 'cus_'"
+                    )
+
+    # Optional field: upwork_contracts
+    if 'upwork_contracts' in prefs:
+        upwork_contracts = prefs['upwork_contracts']
+
+        if not isinstance(upwork_contracts, dict):
+            errors.append("'upwork_contracts': must be an object/dictionary")
+        else:
+            for project_name, contract_id in upwork_contracts.items():
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'upwork_contracts': key '{project_name}' must be a string"
+                    )
+                    continue
+                if not isinstance(contract_id, str):
+                    errors.append(
+                        f"'upwork_contracts.{project_name}': must be a string"
+                    )
+                    continue
+                if contract_id.strip() and not contract_id.strip().isdigit():
+                    errors.append(
+                        f"'upwork_contracts.{project_name}': must contain digits only"
                     )
 
     # Optional field: dashboard_sections

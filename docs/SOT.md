@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-04-14
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -26,7 +26,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - `This Week` is collapsed by default; section collapse state is then persisted per user across launches
 - Preferences window no longer exposes dashboard collapse-state defaults; its fourth tab is `Advanced` and currently only exposes the API audit log
 - Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, `Clear All Caches`, or `Open Cache Folder`), `Settings`, `Update`, and `Quit`
-- Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV` or `Create Stripe Invoice`
+- Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`
 - Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
 - Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
 - Auto-refresh every 30 minutes
@@ -35,6 +35,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 ### Daily View
 - Today's total earnings and hours
 - Per-project breakdown
+- In the Today section, expanded time-block descriptions can be copied to the clipboard by clicking the description text; the dashboard briefly shows `Copied` inline as feedback
 - Billable projects show earnings and hours
 - Projects with a defined `billing_type` contribute earnings even if not billable in Toggl
 
@@ -171,6 +172,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Project definitions with billing types (`projects` key)
 - Integrations tab lets the user update the Toggl API token, Toggl workspace id, and Stripe API key after installation
 - Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
+- The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
 - `fixed_monthly` projects are always fixed in projections — no toggle needed
 - Legacy `retainer_hourly_rates` still supported
 
@@ -212,6 +214,16 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - API call cost:
   - Toggl: 0-1 calls per invoice range (reuses the same shared day-based entry cache as the dashboard and CSV export)
   - Stripe: 1 customer-list call only when associating an unmapped project, then 2 write calls per invoice (draft invoice + invoice item)
+
+### Upwork Work Diary Shortcut
+- Footer `Export/Invoice` drop-up includes an `Open Upwork Diary` workflow that lists Toggl projects and shows whether each one is linked to an Upwork contract id
+- Clicking a linked project opens `https://www.upwork.com/nx/workdiary/` for **today's local date** with that project’s saved `contractId` and `tz=mine`
+- Unlinked projects remain visible with a `Needs contract` badge; clicking one opens an inline contract-id form inside the same dashboard flow, and `Save & Open Diary` persists the mapping before opening Upwork
+- Contract ids are configured in the Preferences `Integrations` tab alongside the Stripe customer mapping grid
+- Current implementation is a deep-link shortcut, not an Upwork API write path; Upwork’s documented public GraphQL docs expose work-diary reads but do not document a manual-time creation mutation
+- API call cost:
+  - Toggl: 0 calls
+  - Upwork: 0 app-side API calls; the app only opens the diary URL in the browser
 
 ---
 

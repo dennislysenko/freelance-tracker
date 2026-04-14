@@ -391,7 +391,7 @@ class PreferencesWindowController:
         tab_view.addTabViewItem_(tab)
 
     def _create_integrations_tab(self, tab_view):
-        """Tab: Integrations credentials and Stripe customer mappings."""
+        """Tab: Integrations credentials plus Stripe/Upwork project mappings."""
         tab = NSTabViewItem.alloc().initWithIdentifier_("integrations")
         tab.setLabel_("Integrations")
         view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
@@ -423,7 +423,7 @@ class PreferencesWindowController:
         y -= 52
 
         map_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 360, 20))
-        map_header.setStringValue_("Stripe Customer Mapping")
+        map_header.setStringValue_("Project Billing Mapping")
         map_header.setBezeled_(False)
         map_header.setDrawsBackground_(False)
         map_header.setEditable_(False)
@@ -440,7 +440,7 @@ class PreferencesWindowController:
 
         help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 32))
         help_text.setStringValue_(
-            "Pick projects and existing Stripe customers by name. Unmapped projects can also be associated during invoice creation."
+            "Map Toggl projects to Stripe customers and optional Upwork contract ids. Upwork ids power the dashboard shortcut that opens the matching work diary for today."
         )
         help_text.setBezeled_(False)
         help_text.setDrawsBackground_(False)
@@ -448,6 +448,20 @@ class PreferencesWindowController:
         help_text.setFont_(NSFont.systemFontOfSize_(11))
         view.addSubview_(help_text)
         y -= 44
+
+        for x, width, label_text in (
+            (10, 150, "Project"),
+            (168, 220, "Stripe Customer"),
+            (396, 150, "Upwork Contract ID"),
+        ):
+            label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, width, 16))
+            label.setStringValue_(label_text)
+            label.setBezeled_(False)
+            label.setDrawsBackground_(False)
+            label.setEditable_(False)
+            label.setFont_(NSFont.boldSystemFontOfSize_(11))
+            view.addSubview_(label)
+        y -= 26
 
         for i in range(self.STRIPE_PROJECT_ROWS):
             row_y = y - i * 50
@@ -457,18 +471,23 @@ class PreferencesWindowController:
                 view.addSubview_(sep)
 
             project_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-                NSMakeRect(10, row_y, 230, 24), False
+                NSMakeRect(10, row_y, 150, 24), False
             )
             project_popup.addItemWithTitle_("—")
             view.addSubview_(project_popup)
             self.widgets[f'stripe_project_name_{i}'] = project_popup
 
             customer_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-                NSMakeRect(255, row_y, 285, 24), False
+                NSMakeRect(168, row_y, 220, 24), False
             )
             customer_popup.addItemWithTitle_("—")
             view.addSubview_(customer_popup)
             self.widgets[f'stripe_customer_{i}'] = customer_popup
+
+            upwork_field = NSTextField.alloc().initWithFrame_(NSMakeRect(396, row_y, 144, 24))
+            upwork_field.setPlaceholderString_("12345678")
+            view.addSubview_(upwork_field)
+            self.widgets[f'upwork_contract_{i}'] = upwork_field
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
@@ -758,8 +777,12 @@ class PreferencesWindowController:
         self._populate_stripe_project_popups()
         self._load_stripe_customers(self.current_integrations.get('STRIPE_API_KEY', ''))
         stripe_project_customers = self.current_prefs.get('stripe_project_customers', {})
+        upwork_contracts = self.current_prefs.get('upwork_contracts', {})
         selected_customer_ids = {}
         stripe_items = list(stripe_project_customers.items())
+        for project_name, contract_id in upwork_contracts.items():
+            if project_name not in stripe_project_customers:
+                stripe_items.append((project_name, ""))
         for i in range(self.STRIPE_PROJECT_ROWS):
             popup = self.widgets[f'stripe_project_name_{i}']
             if i < len(stripe_items):
@@ -768,8 +791,10 @@ class PreferencesWindowController:
                     popup.addItemWithTitle_(name)
                 popup.selectItemWithTitle_(name)
                 selected_customer_ids[i] = customer_id
+                self.widgets[f'upwork_contract_{i}'].setStringValue_(upwork_contracts.get(name, ""))
             else:
                 popup.selectItemWithTitle_("—")
+                self.widgets[f'upwork_contract_{i}'].setStringValue_("")
         self._populate_stripe_customer_popups(selected_customer_ids)
 
     def handleSave_(self, sender):
@@ -831,13 +856,17 @@ class PreferencesWindowController:
                             pass
 
         stripe_project_customers = {}
+        upwork_contracts = {}
         for i in range(self.STRIPE_PROJECT_ROWS):
             project_name = self.widgets[f'stripe_project_name_{i}'].titleOfSelectedItem()
             customer_popup = self.widgets[f'stripe_customer_{i}']
             selected_item = customer_popup.selectedItem()
             customer_id = str(selected_item.representedObject() or "").strip() if selected_item else ""
+            upwork_contract_id = self.widgets[f'upwork_contract_{i}'].stringValue().strip()
             if project_name and project_name != "—" and customer_id:
                 stripe_project_customers[project_name] = customer_id
+            if project_name and project_name != "—" and upwork_contract_id:
+                upwork_contracts[project_name] = upwork_contract_id
 
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
@@ -848,6 +877,7 @@ class PreferencesWindowController:
             'project_targets': project_targets,
             'projects': projects_config,
             'stripe_project_customers': stripe_project_customers,
+            'upwork_contracts': upwork_contracts,
         })
 
         integration_settings = {
@@ -979,3 +1009,4 @@ class PreferencesWindowController:
             self._populate_stripe_customer_popups()
             for i in range(self.STRIPE_PROJECT_ROWS):
                 self.widgets[f'stripe_project_name_{i}'].selectItemWithTitle_("—")
+                self.widgets[f'upwork_contract_{i}'].setStringValue_("")

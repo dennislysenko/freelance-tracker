@@ -11,6 +11,7 @@ import subprocess
 import os
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 from toggl_data import (
     get_daily_earnings,
     get_weekly_earnings,
@@ -24,6 +25,7 @@ from preferences import CACHE_DIR, load_preferences, save_preferences
 from preferences_window import PreferencesWindowController
 from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
+from upwork_work_diary import build_work_diary_url
 
 try:
     from dashboard_panel import DashboardPanelController
@@ -35,7 +37,7 @@ except ModuleNotFoundError as exc:
     DASHBOARD_IMPORT_ERROR = exc
 
 # Hide dock icon - must be set before app creation
-from AppKit import NSBundle, NSObject
+from AppKit import NSBundle, NSObject, NSPasteboard, NSPasteboardTypeString
 bundle = NSBundle.mainBundle()
 info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
 if info:
@@ -101,6 +103,9 @@ class FreelanceTrackerApp(rumps.App):
                 'stripe_invoice_create': self._dashboard_create_stripe_invoice,
                 'stripe_invoice_open': self._dashboard_open_stripe_invoice,
                 'stripe_invoice_dismiss': self._dashboard_dismiss_stripe_invoice,
+                'open_upwork_diary': self._dashboard_open_upwork_diary,
+                'save_upwork_contract': self._dashboard_save_upwork_contract,
+                'copy_text': self._dashboard_copy_text,
             })
         else:
             _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
@@ -218,6 +223,52 @@ class FreelanceTrackerApp(rumps.App):
                 'cap_fill_date': cap_fill_date,
                 'stripe_customer_id': stripe_project_customers.get(name, ''),
             })
+        out.sort(key=lambda p: p['name'].lower())
+        return out
+
+    def _build_dashboard_projects(self):
+        """Return dashboard project capability data for CSV, Stripe, and Upwork actions."""
+        from toggl_data import get_projects, get_effective_project_rate, compute_lbd_cap_fill_date
+
+        prefs = load_preferences()
+        retainer_rates = prefs.get('retainer_hourly_rates', {})
+        projects_config = prefs.get('projects', {})
+        stripe_project_customers = prefs.get('stripe_project_customers', {})
+        upwork_contracts = prefs.get('upwork_contracts', {})
+        out = []
+        try:
+            projects = get_projects()
+        except Exception as exc:
+            _debug(f"_build_dashboard_projects: get_projects failed: {exc}")
+            return out
+
+        for pid, info in projects.items():
+            rate, _src = get_effective_project_rate(info, retainer_rates, projects_config)
+            name = info.get('name', 'Unknown')
+            defn = projects_config.get(name, {})
+            lbd = defn.get('last_billed_date') if defn.get('billing_type') == 'hourly_with_cap' else None
+            cap_fill_date = ''
+            if lbd:
+                try:
+                    last_billed = datetime.strptime(lbd, '%Y-%m-%d').date()
+                    cap_fill_date = compute_lbd_cap_fill_date(
+                        name, last_billed, defn.get('cap_hours', 0), projects
+                    ) or ''
+                except (TypeError, ValueError) as exc:
+                    _debug(f"cap_fill_date compute failed for {name}: {exc}")
+
+            can_bill = bool(rate and rate > 0)
+            out.append({
+                'id': str(pid),
+                'name': name,
+                'can_export': can_bill,
+                'can_invoice': can_bill,
+                'last_billed_date': lbd or '',
+                'cap_fill_date': cap_fill_date,
+                'stripe_customer_id': stripe_project_customers.get(name, ''),
+                'upwork_contract_id': upwork_contracts.get(name, ''),
+            })
+
         out.sort(key=lambda p: p['name'].lower())
         return out
 
@@ -395,6 +446,72 @@ class FreelanceTrackerApp(rumps.App):
         self.dashboard.clear_stripe_invoice_state()
         self.dashboard.refresh_contents()
 
+    def _dashboard_open_upwork_diary(self, project_id, entry_date_iso=None):
+        """Open Upwork work diary for the mapped contract and selected date."""
+        from datetime import date as _date
+        from toggl_data import get_projects
+
+        try:
+            entry_date = _date.fromisoformat(entry_date_iso) if entry_date_iso else _date.today()
+        except ValueError:
+            entry_date = _date.today()
+
+        try:
+            info = get_projects().get(str(project_id))
+            if not info:
+                raise RuntimeError(f"Unknown project id {project_id}")
+
+            prefs = load_preferences()
+            project_name = info.get('name', 'Unknown')
+            contract_id = prefs.get('upwork_contracts', {}).get(project_name, '')
+            if not contract_id:
+                raise RuntimeError(f"No Upwork contract id configured for {project_name}")
+
+            url = build_work_diary_url(contract_id, entry_date)
+            subprocess.run(["open", url], check=False)
+        except Exception as exc:
+            _debug(f"Upwork diary open failed: {exc}")
+            rumps.alert("Open Upwork Diary failed", str(exc))
+
+    def _dashboard_save_upwork_contract(self, project_id, contract_id, entry_date_iso=None):
+        """Persist an Upwork contract id from the dashboard flow, then open the diary."""
+        from toggl_data import get_projects
+
+        normalized_contract_id = str(contract_id or "").strip()
+        if not normalized_contract_id.isdigit():
+            rumps.alert("Save Upwork Contract failed", "Contract id must contain digits only.")
+            return
+
+        try:
+            info = get_projects().get(str(project_id))
+            if not info:
+                raise RuntimeError(f"Unknown project id {project_id}")
+
+            prefs = load_preferences()
+            project_name = info.get('name', 'Unknown')
+            upwork_contracts = dict(prefs.get('upwork_contracts', {}))
+            upwork_contracts[project_name] = normalized_contract_id
+            prefs['upwork_contracts'] = upwork_contracts
+            save_preferences(prefs)
+
+            if self.dashboard is not None:
+                self.dashboard.set_exportable_projects(self._build_dashboard_projects())
+                self.dashboard.refresh_contents()
+
+            self._dashboard_open_upwork_diary(project_id, entry_date_iso)
+        except Exception as exc:
+            _debug(f"Upwork contract save failed: {exc}")
+            rumps.alert("Save Upwork Contract failed", str(exc))
+
+    def _dashboard_copy_text(self, encoded_text):
+        """Copy arbitrary dashboard text to the macOS pasteboard."""
+        text = unquote(str(encoded_text or ""))
+        if not text:
+            return
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(text, NSPasteboardTypeString)
+
     def _save_stripe_customer_mapping(self, project_name, customer_id):
         """Persist a discovered Stripe customer mapping so future invoices skip re-selection."""
         prefs = load_preferences()
@@ -541,7 +658,7 @@ class FreelanceTrackerApp(rumps.App):
                 self.dashboard.set_last_updated(self.last_update)
                 self.dashboard.set_rate_limited(is_rate_limited())
                 self.dashboard.set_error_message(None)
-                self.dashboard.set_exportable_projects(self._build_exportable_projects())
+                self.dashboard.set_exportable_projects(self._build_dashboard_projects())
                 self.dashboard.update_data(daily, weekly, monthly)
             else:
                 self._update_fallback_menu(daily, weekly, monthly, next_refresh_calls)

@@ -183,6 +183,26 @@ class TestPreferencesValidation:
         assert "retainer_hourly_rates.Client A Retainer" in errors[0]
         assert "must be greater than 0" in errors[0]
 
+    def test_upwork_contracts_valid(self):
+        """Numeric-string Upwork contract ids should pass validation."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['upwork_contracts'] = {
+            "Pied Piper": "12345678",
+            "Another Client": "1234567890",
+        }
+        assert validate_preferences(prefs) == []
+
+    def test_upwork_contracts_invalid_value(self):
+        """Non-numeric Upwork contract ids should be rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['upwork_contracts'] = {
+            "Pied Piper": "abc-123",
+        }
+        errors = validate_preferences(prefs)
+        assert len(errors) == 1
+        assert "upwork_contracts.Pied Piper" in errors[0]
+        assert "digits only" in errors[0]
+
     def test_dashboard_sections_valid(self):
         """Dashboard section collapse state should validate as booleans."""
         prefs = DEFAULT_PREFERENCES.copy()

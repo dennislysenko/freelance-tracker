@@ -78,6 +78,31 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
                 if callback:
                     callback(project_id, start_iso, end_iso, customer_id)
             return
+        if action.startswith("open_upwork_diary:"):
+            parts = action.split(":")
+            if len(parts) >= 3:
+                project_id = parts[1]
+                entry_date_iso = parts[2]
+                callback = self._callbacks.get("open_upwork_diary")
+                if callback:
+                    callback(project_id, entry_date_iso)
+            return
+        if action.startswith("save_upwork_contract:"):
+            parts = action.split(":", 3)
+            if len(parts) >= 4:
+                project_id = parts[1]
+                contract_id = parts[2]
+                entry_date_iso = parts[3]
+                callback = self._callbacks.get("save_upwork_contract")
+                if callback:
+                    callback(project_id, contract_id, entry_date_iso)
+            return
+        if action.startswith("copy_text:"):
+            encoded_text = action.split(":", 1)[1]
+            callback = self._callbacks.get("copy_text")
+            if callback:
+                callback(encoded_text)
+            return
         callback = self._callbacks.get(action)
         if callback:
             callback()
@@ -198,7 +223,7 @@ class DashboardPanelController:
         self._stripe_invoice_state = None
 
     def set_exportable_projects(self, projects):
-        """List of {'id': str, 'name': str} dicts the user can export."""
+        """List of project capability dicts used by dashboard billing actions."""
         self._exportable_projects = list(projects or [])
 
     def set_stripe_invoice_state(self, state):
@@ -580,7 +605,9 @@ class DashboardPanelController:
                     <div class="time-block">
                         <span class="time-block-range">{start_s}\u2013{stop_s}</span>
                         <span class="time-block-duration">({mins}m)</span>
-                        <span class="time-block-desc">{_esc(desc)}</span>
+                        <button class="time-block-desc" type="button"
+                                data-copy-text="{_esc(desc)}"
+                                onclick="copyDescription(this)">{_esc(desc)}</button>
                     </div>"""
                 daily_rows += f"""
                 <div class="project-row expandable" data-project-key="{project_key}">
@@ -828,42 +855,61 @@ class DashboardPanelController:
         if self._exportable_projects:
             project_buttons = []
             invoice_project_buttons = []
+            upwork_project_buttons = []
             for p in self._exportable_projects:
                 lbd = p.get('last_billed_date') or ''
                 lbd_attr = f' data-last-billed="{_esc(lbd)}"' if lbd else ''
                 cap_fill_date = p.get('cap_fill_date') or ''
                 cap_fill_attr = f' data-cap-fill-date="{_esc(cap_fill_date)}"' if cap_fill_date else ''
                 stripe_customer_id = p.get('stripe_customer_id') or ''
-                stripe_customer_attr = (
-                    f' data-stripe-customer="{_esc(stripe_customer_id)}"'
-                    if stripe_customer_id else
-                    ''
+                upwork_contract_id = p.get('upwork_contract_id') or ''
+                if p.get('can_export'):
+                    project_buttons.append(
+                        f'<button class="export-option" '
+                        f'data-project-id="{_esc(p["id"])}" '
+                        f'data-project-name="{_esc(p["name"])}"'
+                        f'{lbd_attr}{cap_fill_attr} '
+                        f'onclick="selectExportProject(this)">{_esc(p["name"])}</button>'
+                    )
+                if p.get('can_invoice'):
+                    stripe_customer_attr = (
+                        f' data-stripe-customer="{_esc(stripe_customer_id)}"'
+                        if stripe_customer_id else
+                        ''
+                    )
+                    invoice_badge = (
+                        '<span class="export-option-meta">Linked</span>'
+                        if stripe_customer_id else
+                        '<span class="export-option-meta muted">Needs customer</span>'
+                    )
+                    invoice_project_buttons.append(
+                        f'<button class="export-option invoice-option" '
+                        f'data-project-id="{_esc(p["id"])}" '
+                        f'data-project-name="{_esc(p["name"])}"'
+                        f'{lbd_attr}{cap_fill_attr}{stripe_customer_attr} '
+                        f'onclick="selectInvoiceProject(this)">'
+                        f'<span>{_esc(p["name"])}</span>{invoice_badge}</button>'
+                    )
+                upwork_badge = (
+                    '<span class="export-option-meta">Linked</span>'
+                    if upwork_contract_id else
+                    '<span class="export-option-meta muted">Needs contract</span>'
                 )
-                project_buttons.append(
-                    f'<button class="export-option" '
-                    f'data-project-id="{_esc(p["id"])}" '
-                    f'data-project-name="{_esc(p["name"])}"'
-                    f'{lbd_attr}{cap_fill_attr} '
-                    f'onclick="selectExportProject(this)">{_esc(p["name"])}</button>'
-                )
-                invoice_badge = (
-                    '<span class="invoice-option-meta">Linked</span>'
-                    if stripe_customer_id else
-                    '<span class="invoice-option-meta muted">Needs customer</span>'
-                )
-                invoice_project_buttons.append(
+                upwork_project_buttons.append(
                     f'<button class="export-option invoice-option" '
                     f'data-project-id="{_esc(p["id"])}" '
                     f'data-project-name="{_esc(p["name"])}"'
-                    f'{lbd_attr}{cap_fill_attr}{stripe_customer_attr} '
-                    f'onclick="selectInvoiceProject(this)">'
-                    f'<span>{_esc(p["name"])}</span>{invoice_badge}</button>'
+                    f' data-upwork-contract-id="{_esc(upwork_contract_id)}"'
+                    f'onclick="upworkSelectProject(this)">'
+                    f'<span>{_esc(p["name"])}</span>{upwork_badge}</button>'
                 )
-            export_items_html = "".join(project_buttons)
-            invoice_items_html = "".join(invoice_project_buttons)
+            export_items_html = "".join(project_buttons) or '<div class="export-empty">No exportable projects</div>'
+            invoice_items_html = "".join(invoice_project_buttons) or '<div class="export-empty">No invoiceable projects</div>'
+            upwork_items_html = "".join(upwork_project_buttons) or '<div class="export-empty">No projects available</div>'
         else:
             export_items_html = '<div class="export-empty">No exportable projects</div>'
             invoice_items_html = '<div class="export-empty">No invoiceable projects</div>'
+            upwork_items_html = '<div class="export-empty">No projects available</div>'
 
         export_menu_data_attrs = (
             f'data-today="{_today.isoformat()}" '
@@ -1080,11 +1126,27 @@ html, body {{
 }}
 
 .time-block-desc {{
-    color: #8b949e;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    min-width: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #8b949e;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-appearance: none;
+}}
+
+.time-block-desc:hover {{
+    color: #c9d1d9;
+    text-decoration: underline;
+}}
+
+.time-block-desc.copied {{
+    color: #58a6ff;
 }}
 
 .project-name {{
@@ -1393,9 +1455,12 @@ html, body {{
 
 .export-menu {{
     position: absolute;
-    left: 0;
-    right: 0;
+    left: 50%;
+    right: auto;
     bottom: calc(100% + 6px);
+    width: min(280px, calc(100vw - 32px));
+    --export-menu-shift: 0px;
+    transform: translateX(calc(-50% + var(--export-menu-shift)));
     display: none;
     flex-direction: column;
     gap: 4px;
@@ -1407,6 +1472,10 @@ html, body {{
     z-index: 20;
     max-height: 280px;
     overflow-y: auto;
+}}
+
+.export-menu.wide {{
+    width: min(320px, calc(100vw - 24px));
 }}
 
 .export-option {{
@@ -1433,12 +1502,14 @@ html, body {{
     gap: 8px;
 }}
 
-.invoice-option-meta {{
+.export-option-meta {{
     font-size: 11px;
     color: #3fb950;
+    flex: 0 0 auto;
+    text-align: right;
 }}
 
-.invoice-option-meta.muted {{
+.export-option-meta.muted {{
     color: #6e7681;
 }}
 
@@ -1550,7 +1621,8 @@ html, body {{
     color: #c9d1d9;
 }}
 
-.export-custom-row input[type="date"] {{
+.export-custom-row input[type="date"],
+.export-custom-row input[type="text"] {{
     flex: 0 0 auto;
     padding: 4px 6px;
     border: 1px solid rgba(255,255,255,0.12);
@@ -1560,6 +1632,25 @@ html, body {{
     font: inherit;
     font-size: 11px;
     color-scheme: dark;
+}}
+
+.upwork-contract-form {{
+    gap: 8px;
+}}
+
+.upwork-contract-form .export-custom-row {{
+    align-items: flex-start;
+    flex-direction: column;
+}}
+
+.upwork-contract-form .export-custom-row input[type="text"] {{
+    width: 100%;
+}}
+
+.export-form-note {{
+    font-size: 11px;
+    line-height: 1.4;
+    color: #8b949e;
 }}
 
 .export-custom-submit {{
@@ -1790,6 +1881,7 @@ html, body {{
                         <div class="export-stage-title">Choose action</div>
                         <button class="export-option" onclick="exportChooseWorkflow('csv')">Export CSV</button>
                         <button class="export-option" onclick="exportChooseWorkflow('invoice')">Create Stripe Invoice</button>
+                        <button class="export-option" onclick="exportChooseWorkflow('upwork')">Open Upwork Diary</button>
                     </div>
                     <div class="export-stage" id="exportStage1" style="display:none;">
                         <div class="export-stage-title">Choose project</div>
@@ -1839,6 +1931,29 @@ html, body {{
                     <div class="export-stage" id="invoiceStage1" style="display:none;">
                         <div class="export-stage-title">Choose project</div>
                         {invoice_items_html}
+                    </div>
+                    <div class="export-stage" id="upworkStage1" style="display:none;">
+                        <div class="export-stage-header">
+                            <button class="export-back" onclick="upworkBackToActions(event)" aria-label="Back">←</button>
+                            <span class="export-stage-title">Open today&apos;s diary</span>
+                        </div>
+                        {upwork_items_html}
+                    </div>
+                    <div class="export-stage" id="upworkStage2" style="display:none;">
+                        <div class="export-stage-header">
+                            <button class="export-back" onclick="upworkBackToProjects(event)" aria-label="Back">←</button>
+                            <span class="export-stage-title" id="upworkStage2Title">Project</span>
+                        </div>
+                        <div class="export-custom-form upwork-contract-form">
+                            <label class="export-custom-row">
+                                <span>Contract ID</span>
+                                <input type="text" id="upworkContractInput" inputmode="numeric" placeholder="12345678">
+                            </label>
+                            <div class="export-form-note" id="upworkContractNote">
+                                Save the Upwork contract id once, then this shortcut can open today&apos;s work diary directly.
+                            </div>
+                            <button class="export-custom-submit" onclick="submitUpworkContract(event)">Save &amp; Open Diary</button>
+                        </div>
                     </div>
                     <div class="export-stage" id="invoiceStage2" style="display:none;">
                         <div class="export-stage-header">
@@ -1918,6 +2033,24 @@ html, body {{
         }}
     }}
 
+    function copyDescription(el) {{
+        if (!el) return;
+        var text = el.getAttribute('data-copy-text') || '';
+        if (!text) return;
+        postAction('copy_text:' + encodeURIComponent(text));
+        el.classList.add('copied');
+        var original = el.getAttribute('data-original-text');
+        if (!original) {{
+            original = el.textContent;
+            el.setAttribute('data-original-text', original);
+        }}
+        el.textContent = 'Copied';
+        window.setTimeout(function() {{
+            el.classList.remove('copied');
+            el.textContent = original;
+        }}, 900);
+    }}
+
     function scheduleReportHeight() {{
         if (heightReportQueued) {{
             return;
@@ -1949,6 +2082,7 @@ html, body {{
         if (group) {{
             group.classList.remove('open');
         }}
+        setExportMenuWide(false);
     }}
 
     function closeMoreMenu() {{
@@ -1989,11 +2123,13 @@ html, body {{
         group.classList.toggle('open');
         if (willOpen) {{
             exportShowStage0();
+            scheduleExportMenuPosition();
         }}
     }}
 
     function exportShowStage0() {{
-        var ids = ['exportStage0', 'exportStage1', 'exportStage2', 'invoiceStage1', 'invoiceStage2'];
+        setExportMenuWide(false);
+        var ids = ['exportStage0', 'exportStage1', 'exportStage2', 'invoiceStage1', 'invoiceStage2', 'upworkStage1', 'upworkStage2'];
         for (var i = 0; i < ids.length; i++) {{
             var el = document.getElementById(ids[i]);
             if (el) {{
@@ -2004,6 +2140,38 @@ html, body {{
         if (exportForm) exportForm.style.display = 'none';
         var invoiceForm = document.getElementById('invoiceCustomForm');
         if (invoiceForm) invoiceForm.style.display = 'none';
+        var upworkInput = document.getElementById('upworkContractInput');
+        if (upworkInput) upworkInput.value = '';
+        scheduleExportMenuPosition();
+    }}
+
+    function setExportMenuWide(isWide) {{
+        var menu = document.getElementById('exportMenu');
+        if (!menu) return;
+        menu.classList.toggle('wide', !!isWide);
+        scheduleExportMenuPosition();
+    }}
+
+    function scheduleExportMenuPosition() {{
+        window.requestAnimationFrame(positionExportMenu);
+    }}
+
+    function positionExportMenu() {{
+        var menu = document.getElementById('exportMenu');
+        var group = document.getElementById('exportGroup');
+        if (!menu || !group || !group.classList.contains('open')) return;
+        menu.style.setProperty('--export-menu-shift', '0px');
+        var viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+        var margin = 12;
+        var rect = menu.getBoundingClientRect();
+        var shift = 0;
+        if (rect.left < margin) {{
+            shift += (margin - rect.left);
+        }}
+        if (rect.right > (viewportWidth - margin)) {{
+            shift -= (rect.right - (viewportWidth - margin));
+        }}
+        menu.style.setProperty('--export-menu-shift', shift.toFixed(1) + 'px');
     }}
 
     function exportChooseWorkflow(kind) {{
@@ -2013,24 +2181,32 @@ html, body {{
             exportShowStage1();
             return;
         }}
+        if (kind === 'upwork') {{
+            upworkShowStage1();
+            return;
+        }}
         invoiceShowStage1();
     }}
 
     function exportShowStage1() {{
+        setExportMenuWide(false);
         var s0 = document.getElementById('exportStage0');
         var s1 = document.getElementById('exportStage1');
         var s2 = document.getElementById('exportStage2');
         var i1 = document.getElementById('invoiceStage1');
         var i2 = document.getElementById('invoiceStage2');
+        var u1 = document.getElementById('upworkStage1');
         if (s0) s0.style.display = 'none';
         if (s1) s1.style.display = '';
         if (s2) s2.style.display = 'none';
         if (i1) i1.style.display = 'none';
         if (i2) i2.style.display = 'none';
+        if (u1) u1.style.display = 'none';
         var form = document.getElementById('exportCustomForm');
         if (form) form.style.display = 'none';
         var invoiceForm = document.getElementById('invoiceCustomForm');
         if (invoiceForm) invoiceForm.style.display = 'none';
+        scheduleExportMenuPosition();
     }}
 
     function exportBackToProjects(event) {{
@@ -2142,20 +2318,121 @@ html, body {{
     }}
 
     function invoiceShowStage1() {{
+        setExportMenuWide(false);
         var s0 = document.getElementById('exportStage0');
         var s1 = document.getElementById('invoiceStage1');
         var s2 = document.getElementById('invoiceStage2');
         var e1 = document.getElementById('exportStage1');
         var e2 = document.getElementById('exportStage2');
+        var u1 = document.getElementById('upworkStage1');
         if (s0) s0.style.display = 'none';
         if (s1) s1.style.display = '';
         if (s2) s2.style.display = 'none';
         if (e1) e1.style.display = 'none';
         if (e2) e2.style.display = 'none';
+        if (u1) u1.style.display = 'none';
         var form = document.getElementById('invoiceCustomForm');
         if (form) form.style.display = 'none';
         var exportForm = document.getElementById('exportCustomForm');
         if (exportForm) exportForm.style.display = 'none';
+        scheduleExportMenuPosition();
+    }}
+
+    function upworkShowStage1() {{
+        setExportMenuWide(false);
+        var s0 = document.getElementById('exportStage0');
+        var e1 = document.getElementById('exportStage1');
+        var e2 = document.getElementById('exportStage2');
+        var i1 = document.getElementById('invoiceStage1');
+        var i2 = document.getElementById('invoiceStage2');
+        var u1 = document.getElementById('upworkStage1');
+        var u2 = document.getElementById('upworkStage2');
+        if (s0) s0.style.display = 'none';
+        if (e1) e1.style.display = 'none';
+        if (e2) e2.style.display = 'none';
+        if (i1) i1.style.display = 'none';
+        if (i2) i2.style.display = 'none';
+        if (u1) u1.style.display = '';
+        if (u2) u2.style.display = 'none';
+        var form = document.getElementById('exportCustomForm');
+        if (form) form.style.display = 'none';
+        var invoiceForm = document.getElementById('invoiceCustomForm');
+        if (invoiceForm) invoiceForm.style.display = 'none';
+        scheduleExportMenuPosition();
+    }}
+
+    function upworkBackToActions(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        exportShowStage0();
+    }}
+
+    function upworkBackToProjects(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        upworkShowStage1();
+    }}
+
+    function upworkSelectProject(btn) {{
+        if (!btn) return;
+        var pid = btn.getAttribute('data-project-id');
+        var name = btn.getAttribute('data-project-name');
+        var contractId = btn.getAttribute('data-upwork-contract-id');
+        var menu = document.getElementById('exportMenu');
+        var today = menu ? menu.getAttribute('data-today') : '';
+        if (!pid || !today) return;
+        if (contractId) {{
+            closeExportMenu();
+            postAction('open_upwork_diary:' + pid + ':' + today);
+            return;
+        }}
+        var stage1 = document.getElementById('upworkStage1');
+        var stage2 = document.getElementById('upworkStage2');
+        var title = document.getElementById('upworkStage2Title');
+        var input = document.getElementById('upworkContractInput');
+        var note = document.getElementById('upworkContractNote');
+        if (title) title.textContent = name || 'Project';
+        if (input) {{
+            input.value = '';
+            input.setAttribute('data-project-id', pid);
+            input.setAttribute('data-entry-date', today);
+            window.setTimeout(function() {{ input.focus(); }}, 0);
+        }}
+        if (note) {{
+            note.textContent = "Save the Upwork contract id once, then this shortcut can open today's work diary directly.";
+        }}
+        setExportMenuWide(true);
+        if (stage1) stage1.style.display = 'none';
+        if (stage2) stage2.style.display = '';
+        scheduleExportMenuPosition();
+    }}
+
+    function submitUpworkContract(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var input = document.getElementById('upworkContractInput');
+        if (!input) return;
+        var pid = input.getAttribute('data-project-id');
+        var entryDate = input.getAttribute('data-entry-date');
+        var contractId = (input.value || '').trim();
+        if (!pid || !entryDate || !contractId) return;
+        if (!/^\\d+$/.test(contractId)) {{
+            var note = document.getElementById('upworkContractNote');
+            if (note) {{
+                note.textContent = 'Contract ID must contain digits only.';
+            }}
+            input.focus();
+            input.select();
+            return;
+        }}
+        closeExportMenu();
+        postAction('save_upwork_contract:' + pid + ':' + contractId + ':' + entryDate);
     }}
 
     function invoiceBackToProjects(event) {{

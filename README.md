@@ -8,6 +8,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 🪟 **Resilient dashboard startup** with automatic fallback to the classic dropdown if the rich WebKit panel is unavailable
 - ↕️ **Adaptive dashboard height** so short project lists do not leave large empty space
 - 📂 **Collapsible dashboard sections** for Today, This Week, and This Month, with expanded/collapsed state saved across launches
+- 📋 **Click-to-copy today descriptions** from expanded time blocks in the Today breakdown
 - 📉 **This Week collapsed by default** to keep the dashboard tighter unless you need that breakdown
 - 🆕 **Dashboard update shortcut** in the main popover footer
 - ⚙️ **Settings button** in the main popover, with API audit log access under the Preferences `Advanced` tab
@@ -18,8 +19,8 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 🕐 **Last update timestamp**
 - 🧹 **Clear All Caches** action in the dashboard refresh menu for heavy cache recovery
 - 📂 **Open Cache Folder** action in the dashboard refresh menu for quick Finder access
-- 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV` or `Create Stripe Invoice`, then pick a project and range. Presets now include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
-- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, and Stripe API key after installation
+- 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`. CSV and Stripe flows include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
+- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, and Stripe API key after installation, plus save optional Upwork contract ids per project
 - 💾 **Smart caching** to minimize Toggl API calls
   Dashboard, CSV export, Stripe draft invoices, capped billing-cycle calculations, and auto carryover all reuse the same shared day-based Toggl entry cache
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)
@@ -143,6 +144,8 @@ Shows: running status, memory usage, uptime, logs, cache size.
 
 The 💰 menu bar title is always visible. Clicking it opens the **dashboard popover** — a WebKit-rendered panel implemented in `dashboard_panel.py`. This is the canonical UI: TODAY / This Week / THIS MONTH sections (each collapsible with persisted state), monthly project progress bars with pacing markers, month projection, the footer Refresh / Settings / Update / Quit / Export/Invoice controls, and the rate-limit / refresh-error inline states. The footer is rendered as a bottom drawer flush with the sheet while the rest of the content continues to scroll.
 
+Within the Today section, expanding a project reveals its time blocks. Clicking a time-block description copies just that description to the clipboard and briefly swaps the label to `Copied`.
+
 `Refresh` keeps the dashboard and billing outputs in sync: it invalidates the shared day-based Toggl entry shards for the visible dashboard ranges plus active capped billing-cycle ranges, so exporting or invoicing after a refresh uses the same underlying entry data the dashboard just rendered. The refresh drop-up also includes `Clear All Caches`, which removes all cached Toggl entry shards, project metadata, and legacy cache files before repopulating the current dashboard state, plus `Open Cache Folder`, which reveals `~/Library/Caches/TogglMenuBar/` in Finder.
 
 If the WebKit bridge is unavailable on a given machine (missing PyObjC, etc.), the app falls back to a minimal rumps dropdown menu so it still launches. The fallback is intentionally bare-bones and is **not** where new features live — see `CLAUDE.md` for the policy.
@@ -172,6 +175,10 @@ Open **Settings → Integrations** to update credentials after install:
 - `STRIPE_API_KEY`
 
 The same tab also lets you map Toggl projects to Stripe customers by picking from the live Stripe customer list by name. If you try to create a Stripe invoice for an unmapped project, the dashboard will ask you to pick a customer right after you choose the date range, then save that association for next time.
+
+That project-mapping grid also has an **Upwork Contract ID** column. Add the Upwork hourly contract id for any project where you want a fast work-diary shortcut. The dashboard can also save that id inline the first time you click an unmapped project from `Export/Invoice → Open Upwork Diary`, then open the diary immediately.
+
+The current Upwork integration is intentionally a deep-link shortcut, not a direct API write. Upwork’s documented GraphQL docs expose work-diary reads, but they do not document a manual-time creation mutation, so the app currently opens the contract-specific work diary URL instead of attempting an unsupported write.
 
 ### Reordering Menu Bar Icons
 

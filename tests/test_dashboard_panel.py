@@ -30,6 +30,18 @@ def _make_controller():
 def test_dashboard_html_measures_document_height():
     """Popover sizing should measure document height and observe later layout changes."""
     controller = _make_controller()
+    controller.set_exportable_projects([
+        {
+            "id": "1",
+            "name": "Pied Piper",
+            "can_export": True,
+            "can_invoice": True,
+            "stripe_customer_id": "cus_123",
+            "upwork_contract_id": "12345678",
+            "last_billed_date": "",
+            "cap_fill_date": "",
+        },
+    ])
     controller.set_last_updated(datetime(2026, 4, 6, 17, 4))
     controller.set_rate_limited(True)
     controller.set_error_message("network timeout")
@@ -37,7 +49,20 @@ def test_dashboard_html_measures_document_height():
         {
             "total": 812.5,
             "all_projects": [
-                {"name": "Acme Inc", "earnings": 562, "hours": 3.8, "billable": True},
+                {
+                    "name": "Acme Inc",
+                    "earnings": 562,
+                    "hours": 3.8,
+                    "billable": True,
+                    "time_blocks": [
+                        {
+                            "start": datetime(2026, 4, 6, 9, 0),
+                            "stop": datetime(2026, 4, 6, 9, 30),
+                            "duration": 1800,
+                            "description": "Write follow-up email",
+                        },
+                    ],
+                },
             ],
         },
         {
@@ -68,6 +93,11 @@ def test_dashboard_html_measures_document_height():
     assert "Refresh Projects" in html
     assert "Clear All Caches" in html
     assert "Open Cache Folder" in html
+    assert "Open Upwork Diary" in html
+    assert "open_upwork_diary:" in html
+    assert "save_upwork_contract:" in html
+    assert "copyDescription(this)" in html
+    assert "copy_text:" in html
     assert "Settings" in html
     assert "Advanced" not in html
     assert "Toggl rate limit reached. Showing cached data." in html
