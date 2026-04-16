@@ -22,6 +22,7 @@ DEFAULT_PREFERENCES = {
     "projects": {},  # Project definitions by name: see docs/SOT.md for schema
     "stripe_project_customers": {},  # Optional Stripe customer ids by project name
     "upwork_contracts": {},  # Optional Upwork contract ids by project name
+    "billing_reminders": [],  # Optional weekly local reminders, e.g. invoice Friday at 14:00
     "dashboard_sections": {
         "today": True,
         "week": False,
@@ -281,6 +282,64 @@ def validate_preferences(prefs):
                     errors.append(
                         f"'upwork_contracts.{project_name}': must contain digits only"
                     )
+
+    # Optional field: billing_reminders
+    if 'billing_reminders' in prefs:
+        billing_reminders = prefs['billing_reminders']
+        valid_weekdays = {
+            'monday', 'tuesday', 'wednesday', 'thursday',
+            'friday', 'saturday', 'sunday',
+        }
+        valid_tasks = {'invoice'}
+
+        if not isinstance(billing_reminders, list):
+            errors.append("'billing_reminders': must be an array/list")
+        else:
+            import re
+
+            time_pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+            for idx, reminder in enumerate(billing_reminders):
+                prefix = f"'billing_reminders[{idx}]'"
+                if not isinstance(reminder, dict):
+                    errors.append(f"{prefix}: must be an object")
+                    continue
+
+                enabled = reminder.get('enabled', True)
+                if not isinstance(enabled, bool):
+                    errors.append(f"{prefix}.enabled: must be a boolean")
+
+                project_name = reminder.get('project_name', '')
+                if not isinstance(project_name, str) or not project_name.strip():
+                    errors.append(f"{prefix}.project_name: must be a non-empty string")
+
+                task = reminder.get('task')
+                if task not in valid_tasks:
+                    errors.append(
+                        f"{prefix}.task: must be one of {sorted(valid_tasks)}, got {task!r}"
+                    )
+
+                day_of_month = reminder.get('day_of_month')
+                valid_dom = set(range(1, 29)) | {-1, -2, -3}
+                if day_of_month is not None:
+                    if (
+                        isinstance(day_of_month, bool)
+                        or not isinstance(day_of_month, int)
+                        or day_of_month not in valid_dom
+                    ):
+                        errors.append(
+                            f"{prefix}.day_of_month: must be 1-28 or -1/-2/-3, got {day_of_month!r}"
+                        )
+                else:
+                    weekday = reminder.get('weekday')
+                    if weekday not in valid_weekdays:
+                        errors.append(
+                            f"{prefix}.weekday: must be one of {sorted(valid_weekdays)} "
+                            f"(or set day_of_month), got {weekday!r}"
+                        )
+
+                reminder_time = reminder.get('time')
+                if not isinstance(reminder_time, str) or not time_pattern.match(reminder_time):
+                    errors.append(f"{prefix}.time: must be in HH:MM 24-hour format")
 
     # Optional field: dashboard_sections
     if 'dashboard_sections' in prefs:

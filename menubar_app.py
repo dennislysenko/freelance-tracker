@@ -26,6 +26,14 @@ from preferences_window import PreferencesWindowController
 from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
 from upwork_work_diary import build_work_diary_url
+from billing_reminders import (
+    collect_due_reminders,
+    load_reminder_state,
+    mark_reminder_sent,
+    reminder_key,
+    reminder_notification,
+    save_reminder_state,
+)
 
 try:
     from dashboard_panel import DashboardPanelController
@@ -86,6 +94,7 @@ class FreelanceTrackerApp(rumps.App):
         self._status_item_hooked = False
         self._dashboard_enabled = DashboardPanelController is not None
         self.dashboard = None
+        self._billing_reminder_state = load_reminder_state()
 
         if self._dashboard_enabled:
             # Set up dashboard popover with action callbacks
@@ -863,6 +872,49 @@ class FreelanceTrackerApp(rumps.App):
     @rumps.timer(1800)
     def auto_refresh(self, _):
         self.update_display()
+
+    @rumps.timer(60)
+    def check_billing_reminders(self, _):
+        """Send due weekly billing reminders without touching external APIs."""
+        prefs = load_preferences()
+        reminders = prefs.get('billing_reminders', [])
+        due_reminders = collect_due_reminders(
+            reminders,
+            state=self._billing_reminder_state,
+        )
+        if not due_reminders:
+            return
+
+        _debug(
+            "Billing reminders due: "
+            + ", ".join(reminder_key(reminder) for reminder in due_reminders)
+        )
+        delivered_on = datetime.now().date()
+        delivered_any = False
+        for reminder in due_reminders:
+            try:
+                title, subtitle, message = reminder_notification(reminder)
+                _debug(
+                    f"Calling notification for reminder {reminder_key(reminder)}: "
+                    f"title={title!r}, subtitle={subtitle!r}, message={message!r}"
+                )
+                rumps.notification(title, subtitle, message)
+                self._billing_reminder_state = mark_reminder_sent(
+                    reminder,
+                    delivered_on=delivered_on,
+                    state=self._billing_reminder_state,
+                )
+                _debug(
+                    f"Marked reminder sent for {reminder_key(reminder)} on "
+                    f"{delivered_on.isoformat()}"
+                )
+                delivered_any = True
+            except Exception as exc:
+                _debug(f"Billing reminder failed: {exc}")
+
+        if delivered_any:
+            save_reminder_state(self._billing_reminder_state)
+            _debug("Billing reminder state saved")
 
     def refresh(self, _):
         force_refresh_entries()

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from AppKit import (
     NSWindow, NSApp, NSApplication, NSTextField, NSButton, NSAlert,
-    NSMakeRect, NSPanel, NSBackingStoreBuffered, NSView, NSFont, NSScreen,
+    NSMakeRect, NSBackingStoreBuffered, NSView, NSFont, NSScreen,
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable, NSSwitchButton, NSOnState, NSOffState,
     NSNumberFormatter, NSAlertFirstButtonReturn, NSTabView, NSTabViewItem,
@@ -30,6 +30,7 @@ class PreferencesWindowController:
     RETAINER_RATE_ROWS = 5
     PROJECT_DEFINITION_ROWS = 5
     STRIPE_PROJECT_ROWS = 5
+    BILLING_REMINDER_ROWS = 4
 
     # Maps UI type label → (billing_type, hour_tracking)
     BILLING_TYPE_OPTIONS = [
@@ -39,6 +40,29 @@ class PreferencesWindowController:
         ("Fixed + soft target",    "fixed_monthly",    "soft"),
         ("Fixed flat (no tracking)", "fixed_monthly",  "none"),
     ]
+    BILLING_REMINDER_TASK_OPTIONS = [
+        ("Invoice", "invoice"),
+    ]
+    # (label, kind, value) where kind is "weekday" or "day_of_month".
+    # Positive day_of_month = nth day of month (clamps to last day when month
+    # is short). Negative = nth-to-last day (-1 = last day).
+    BILLING_REMINDER_DAY_OPTIONS = (
+        [
+            ("Monday", "weekday", "monday"),
+            ("Tuesday", "weekday", "tuesday"),
+            ("Wednesday", "weekday", "wednesday"),
+            ("Thursday", "weekday", "thursday"),
+            ("Friday", "weekday", "friday"),
+            ("Saturday", "weekday", "saturday"),
+            ("Sunday", "weekday", "sunday"),
+        ]
+        + [(f"Day {d} of month", "day_of_month", d) for d in range(1, 29)]
+        + [
+            ("Last day of month", "day_of_month", -1),
+            ("2nd-to-last day", "day_of_month", -2),
+            ("3rd-to-last day", "day_of_month", -3),
+        ]
+    )
 
     def __new__(cls):
         if cls._instance is None:
@@ -81,8 +105,9 @@ class PreferencesWindowController:
                  NSWindowStyleMaskClosable |
                  NSWindowStyleMaskMiniaturizable)
 
-        # Create window as NSPanel (stays on top)
-        self.window = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        # Use a regular NSWindow so Preferences behaves like a standard app window
+        # and stays open when the user tabs away to another app.
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame,
             style,
             NSBackingStoreBuffered,
@@ -94,9 +119,6 @@ class PreferencesWindowController:
         # Get content view
         content_view = self.window.contentView()
 
-        # Keep panel visible when app loses focus
-        self.window.setHidesOnDeactivate_(False)
-
         # Create tab view
         tab_view = NSTabView.alloc().initWithFrame_(NSMakeRect(20, 60, 560, 580))
 
@@ -104,6 +126,7 @@ class PreferencesWindowController:
         self._create_caching_tab(tab_view)
         self._create_work_planning_tab(tab_view)
         self._create_projects_tab(tab_view)
+        self._create_billing_tab(tab_view)
         self._create_integrations_tab(tab_view)
         self._create_advanced_tab(tab_view)
 
@@ -492,6 +515,126 @@ class PreferencesWindowController:
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
 
+    def _create_billing_tab(self, tab_view):
+        """Tab: Billing reminder preferences."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("billing")
+        tab.setLabel_("Billing")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
+
+        y = 512
+
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        header.setStringValue_("Billing Reminders")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(header)
+        y -= 28
+
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 62))
+        help_text.setStringValue_(
+            "Weekly local notifications sent by the app while it is running. "
+            "Use 24-hour time like 14:00 for a 2 PM Friday invoice reminder.\n"
+            "Notifications post as \"Python\" — if you use a macOS Focus, add "
+            "Python to that Focus's allowed apps, and note that full Do Not "
+            "Disturb will suppress them entirely."
+        )
+        help_text.setBezeled_(False)
+        help_text.setDrawsBackground_(False)
+        help_text.setEditable_(False)
+        help_text.setFont_(NSFont.systemFontOfSize_(11))
+        view.addSubview_(help_text)
+        y -= 72
+
+        for x, width, label_text in (
+            (10, 52, "On"),
+            (68, 180, "Project"),
+            (254, 80, "Task"),
+            (340, 140, "Day / Date"),
+            (486, 54, "Time"),
+        ):
+            label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, width, 16))
+            label.setStringValue_(label_text)
+            label.setBezeled_(False)
+            label.setDrawsBackground_(False)
+            label.setEditable_(False)
+            label.setFont_(NSFont.boldSystemFontOfSize_(11))
+            view.addSubview_(label)
+        y -= 26
+
+        for i in range(self.BILLING_REMINDER_ROWS):
+            row_y = y - i * 44
+            if i > 0:
+                sep = NSBox.alloc().initWithFrame_(NSMakeRect(5, row_y + 31, 545, 1))
+                sep.setBoxType_(NSBoxSeparator)
+                view.addSubview_(sep)
+
+            enabled = NSButton.alloc().initWithFrame_(NSMakeRect(10, row_y - 1, 44, 24))
+            enabled.setButtonType_(NSSwitchButton)
+            enabled.setTitle_("")
+            enabled.setState_(NSOffState)
+            view.addSubview_(enabled)
+            self.widgets[f'billing_reminder_enabled_{i}'] = enabled
+
+            project_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(68, row_y, 180, 24), False
+            )
+            project_popup.addItemWithTitle_("—")
+            view.addSubview_(project_popup)
+            self.widgets[f'billing_reminder_project_{i}'] = project_popup
+
+            task_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(254, row_y, 80, 24), False
+            )
+            for label_text, _task in self.BILLING_REMINDER_TASK_OPTIONS:
+                task_popup.addItemWithTitle_(label_text)
+            task_popup.selectItemAtIndex_(0)
+            view.addSubview_(task_popup)
+            self.widgets[f'billing_reminder_task_{i}'] = task_popup
+
+            weekday_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(340, row_y, 140, 24), False
+            )
+            for label_text, _kind, _value in self.BILLING_REMINDER_DAY_OPTIONS:
+                weekday_popup.addItemWithTitle_(label_text)
+            weekday_popup.selectItemWithTitle_("Friday")
+            view.addSubview_(weekday_popup)
+            self.widgets[f'billing_reminder_weekday_{i}'] = weekday_popup
+
+            time_field = NSTextField.alloc().initWithFrame_(NSMakeRect(486, row_y, 54, 24))
+            time_field.setPlaceholderString_("14:00")
+            view.addSubview_(time_field)
+            self.widgets[f'billing_reminder_time_{i}'] = time_field
+
+        test_btn_y = y - self.BILLING_REMINDER_ROWS * 44 - 16
+        test_btn = NSButton.alloc().initWithFrame_(NSMakeRect(10, test_btn_y, 200, 28))
+        test_btn.setTitle_("Send Test Notification")
+        test_btn.setBezelStyle_(1)
+        test_btn.setTarget_(self)
+        test_btn.setAction_("handleTestBillingNotification:")
+        view.addSubview_(test_btn)
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def handleTestBillingNotification_(self, sender):
+        """Post an example billing reminder notification so the user can preview it."""
+        from billing_reminders import reminder_notification
+
+        title, subtitle, message = reminder_notification({
+            "project_name": "Example Project",
+            "task": "invoice",
+        })
+        try:
+            rumps.notification(title, subtitle, message)
+        except Exception as exc:
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("Could not send test notification")
+            alert.setInformativeText_(str(exc))
+            alert.addButtonWithTitle_("OK")
+            alert.runModal()
+
     def _create_advanced_tab(self, tab_view):
         """Tab: Advanced utilities."""
         tab = NSTabViewItem.alloc().initWithIdentifier_("advanced")
@@ -663,6 +806,26 @@ class PreferencesWindowController:
             else:
                 popup.selectItemWithTitle_("—")
 
+    def _populate_billing_reminder_project_popups(self, selected_names=None):
+        """Refresh billing reminder project options from cached Toggl projects."""
+        selected_names = selected_names or {}
+        toggl_names = self._get_toggl_project_names()
+        for i in range(self.BILLING_REMINDER_ROWS):
+            popup = self.widgets.get(f'billing_reminder_project_{i}')
+            if popup is None:
+                continue
+            selected_name = selected_names.get(i, "")
+            popup.removeAllItems()
+            popup.addItemWithTitle_("—")
+            for name in toggl_names:
+                popup.addItemWithTitle_(name)
+            if selected_name:
+                if popup.indexOfItemWithTitle_(selected_name) == -1:
+                    popup.addItemWithTitle_(selected_name)
+                popup.selectItemWithTitle_(selected_name)
+            else:
+                popup.selectItemWithTitle_("—")
+
     def _populate_stripe_customer_popups(self, selected_ids=None):
         """Load Stripe customer choices into every customer popup."""
         selected_ids = selected_ids or {}
@@ -700,6 +863,40 @@ class PreferencesWindowController:
         parent.addSubview_(checkbox)
 
         return checkbox
+
+    def _billing_task_label_to_value(self, label):
+        """Convert billing reminder task label to stored value."""
+        for task_label, value in self.BILLING_REMINDER_TASK_OPTIONS:
+            if task_label == label:
+                return value
+        return "invoice"
+
+    def _billing_task_value_to_label(self, value):
+        """Convert stored billing reminder task value to UI label."""
+        for task_label, task_value in self.BILLING_REMINDER_TASK_OPTIONS:
+            if task_value == value:
+                return task_label
+        return "Invoice"
+
+    def _billing_day_label_to_fields(self, label):
+        """Convert a Day/Date popup label to a (kind, value) tuple."""
+        for lbl, kind, value in self.BILLING_REMINDER_DAY_OPTIONS:
+            if lbl == label:
+                return kind, value
+        return "weekday", "friday"
+
+    def _billing_reminder_day_label(self, reminder):
+        """Convert a stored reminder dict to its Day/Date popup label."""
+        day_of_month = reminder.get('day_of_month')
+        if day_of_month:
+            for label, kind, value in self.BILLING_REMINDER_DAY_OPTIONS:
+                if kind == "day_of_month" and value == day_of_month:
+                    return label
+        weekday = reminder.get('weekday', 'friday')
+        for label, kind, value in self.BILLING_REMINDER_DAY_OPTIONS:
+            if kind == "weekday" and value == weekday:
+                return label
+        return "Friday"
 
     def _load_current_values(self):
         """Load current preferences into UI widgets."""
@@ -797,6 +994,28 @@ class PreferencesWindowController:
                 self.widgets[f'upwork_contract_{i}'].setStringValue_("")
         self._populate_stripe_customer_popups(selected_customer_ids)
 
+        billing_reminders = list(self.current_prefs.get('billing_reminders', []))
+        selected_reminder_projects = {}
+        for i in range(self.BILLING_REMINDER_ROWS):
+            reminder = billing_reminders[i] if i < len(billing_reminders) else {}
+            selected_reminder_projects[i] = reminder.get('project_name', '')
+        self._populate_billing_reminder_project_popups(selected_reminder_projects)
+
+        for i in range(self.BILLING_REMINDER_ROWS):
+            reminder = billing_reminders[i] if i < len(billing_reminders) else {}
+            self.widgets[f'billing_reminder_enabled_{i}'].setState_(
+                NSOnState if reminder.get('enabled', False) else NSOffState
+            )
+            self.widgets[f'billing_reminder_task_{i}'].selectItemWithTitle_(
+                self._billing_task_value_to_label(reminder.get('task', 'invoice'))
+            )
+            self.widgets[f'billing_reminder_weekday_{i}'].selectItemWithTitle_(
+                self._billing_reminder_day_label(reminder)
+            )
+            self.widgets[f'billing_reminder_time_{i}'].setStringValue_(
+                reminder.get('time', '')
+            )
+
     def handleSave_(self, sender):
         """Save button clicked."""
         # Build project_targets dict from 5 name/hours field pairs
@@ -868,6 +1087,33 @@ class PreferencesWindowController:
             if project_name and project_name != "—" and upwork_contract_id:
                 upwork_contracts[project_name] = upwork_contract_id
 
+        billing_reminders = []
+        for i in range(self.BILLING_REMINDER_ROWS):
+            enabled = self.widgets[f'billing_reminder_enabled_{i}'].state() == NSOnState
+            project_name = self.widgets[f'billing_reminder_project_{i}'].titleOfSelectedItem().strip()
+            reminder_time = self.widgets[f'billing_reminder_time_{i}'].stringValue().strip()
+            task_label = self.widgets[f'billing_reminder_task_{i}'].titleOfSelectedItem()
+            day_label = self.widgets[f'billing_reminder_weekday_{i}'].titleOfSelectedItem()
+
+            if project_name == "—":
+                project_name = ""
+
+            if not project_name and not reminder_time and not enabled:
+                continue
+
+            day_kind, day_value = self._billing_day_label_to_fields(day_label)
+            entry = {
+                'enabled': enabled,
+                'project_name': project_name,
+                'task': self._billing_task_label_to_value(task_label),
+                'time': reminder_time,
+            }
+            if day_kind == "day_of_month":
+                entry['day_of_month'] = day_value
+            else:
+                entry['weekday'] = day_value
+            billing_reminders.append(entry)
+
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
         new_prefs.update({
@@ -878,6 +1124,7 @@ class PreferencesWindowController:
             'projects': projects_config,
             'stripe_project_customers': stripe_project_customers,
             'upwork_contracts': upwork_contracts,
+            'billing_reminders': billing_reminders,
         })
 
         integration_settings = {
@@ -1010,3 +1257,10 @@ class PreferencesWindowController:
             for i in range(self.STRIPE_PROJECT_ROWS):
                 self.widgets[f'stripe_project_name_{i}'].selectItemWithTitle_("—")
                 self.widgets[f'upwork_contract_{i}'].setStringValue_("")
+
+            for i in range(self.BILLING_REMINDER_ROWS):
+                self.widgets[f'billing_reminder_enabled_{i}'].setState_(NSOffState)
+                self.widgets[f'billing_reminder_project_{i}'].selectItemWithTitle_("—")
+                self.widgets[f'billing_reminder_task_{i}'].selectItemWithTitle_("Invoice")
+                self.widgets[f'billing_reminder_weekday_{i}'].selectItemWithTitle_("Friday")
+                self.widgets[f'billing_reminder_time_{i}'].setStringValue_("")

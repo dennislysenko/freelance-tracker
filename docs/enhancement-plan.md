@@ -241,7 +241,7 @@ The `project_targets` setting accepts monthly hour targets for any project (bill
 ```json
 "project_targets": {
   "Globex": 40,      // Billable project with target
-  "Hooli": 10       // Non-billable project with target
+  "Hooli": 10     // Non-billable project with target
 }
 ```
 

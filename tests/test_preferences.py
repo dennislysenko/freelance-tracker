@@ -142,8 +142,8 @@ class TestPreferencesValidation:
         """Valid retainer_hourly_rates should pass."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['retainer_hourly_rates'] = {
-            "Client A Retainer": 150,
-            "Client B Retainer": 95.5,
+            "Retainer Project": 150,
+            "Support Retainer": 95.5,
         }
 
         errors = validate_preferences(prefs)
@@ -163,32 +163,32 @@ class TestPreferencesValidation:
         """Non-numeric retainer rates should be rejected."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['retainer_hourly_rates'] = {
-            "Client A Retainer": "150"
+            "Retainer Project": "150"
         }
 
         errors = validate_preferences(prefs)
         assert len(errors) == 1
-        assert "retainer_hourly_rates.Client A Retainer" in errors[0]
+        assert "retainer_hourly_rates.Retainer Project" in errors[0]
         assert "must be a number" in errors[0]
 
     def test_retainer_hourly_rates_non_positive(self):
         """Zero or negative retainer rates should be rejected."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['retainer_hourly_rates'] = {
-            "Client A Retainer": 0
+            "Retainer Project": 0
         }
 
         errors = validate_preferences(prefs)
         assert len(errors) == 1
-        assert "retainer_hourly_rates.Client A Retainer" in errors[0]
+        assert "retainer_hourly_rates.Retainer Project" in errors[0]
         assert "must be greater than 0" in errors[0]
 
     def test_upwork_contracts_valid(self):
         """Numeric-string Upwork contract ids should pass validation."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['upwork_contracts'] = {
-            "Pied Piper": "12345678",
-            "Another Client": "1234567890",
+            "Acme Inc": "12345678",
+            "Another Project": "1234567890",
         }
         assert validate_preferences(prefs) == []
 
@@ -196,11 +196,11 @@ class TestPreferencesValidation:
         """Non-numeric Upwork contract ids should be rejected."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['upwork_contracts'] = {
-            "Pied Piper": "abc-123",
+            "Acme Inc": "abc-123",
         }
         errors = validate_preferences(prefs)
         assert len(errors) == 1
-        assert "upwork_contracts.Pied Piper" in errors[0]
+        assert "upwork_contracts.Acme Inc" in errors[0]
         assert "digits only" in errors[0]
 
     def test_dashboard_sections_valid(self):
@@ -229,6 +229,86 @@ class TestPreferencesValidation:
         assert len(errors) == 1
         assert "dashboard_sections.today" in errors[0]
 
+    def test_billing_reminders_valid(self):
+        """Weekly billing reminders should validate with project, weekday, task, and time."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['billing_reminders'] = [
+            {
+                "enabled": True,
+                "project_name": "Acme Inc",
+                "task": "invoice",
+                "weekday": "friday",
+                "time": "14:00",
+            }
+        ]
+        assert validate_preferences(prefs) == []
+
+    def test_billing_reminders_invalid_time(self):
+        """Reminder times must use HH:MM 24-hour format."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['billing_reminders'] = [
+            {
+                "enabled": True,
+                "project_name": "Acme Inc",
+                "task": "invoice",
+                "weekday": "friday",
+                "time": "2pm",
+            }
+        ]
+        errors = validate_preferences(prefs)
+        assert any("billing_reminders[0]'.time" in e for e in errors)
+
+    def test_billing_reminders_invalid_weekday(self):
+        """Reminder weekdays must be canonical lowercase weekday names."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['billing_reminders'] = [
+            {
+                "enabled": True,
+                "project_name": "Acme Inc",
+                "task": "invoice",
+                "weekday": "fri",
+                "time": "14:00",
+            }
+        ]
+        errors = validate_preferences(prefs)
+        assert any("billing_reminders[0]'.weekday" in e for e in errors)
+
+    def test_billing_reminders_valid_day_of_month(self):
+        """Monthly reminders (day_of_month) should validate without a weekday."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['billing_reminders'] = [
+            {
+                "enabled": True,
+                "project_name": "Acme Inc",
+                "task": "invoice",
+                "day_of_month": 15,
+                "time": "09:00",
+            },
+            {
+                "enabled": True,
+                "project_name": "Acme Inc",
+                "task": "invoice",
+                "day_of_month": -1,
+                "time": "17:00",
+            },
+        ]
+        assert validate_preferences(prefs) == []
+
+    def test_billing_reminders_invalid_day_of_month(self):
+        """day_of_month outside the accepted range is rejected."""
+        prefs = DEFAULT_PREFERENCES.copy()
+        prefs['billing_reminders'] = [
+            {
+                "enabled": True,
+                "project_name": "Acme Inc",
+                "task": "invoice",
+                "day_of_month": 99,
+                "time": "09:00",
+            }
+        ]
+        errors = validate_preferences(prefs)
+        assert any("billing_reminders[0]'.day_of_month" in e for e in errors)
+
     # --- projects key tests ---
 
     def test_projects_valid_hourly_with_cap(self):
@@ -243,7 +323,7 @@ class TestPreferencesValidation:
         """Valid fixed_monthly/required project should pass."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['projects'] = {
-            "Hooli": {
+            "Stark Industries": {
                 "billing_type": "fixed_monthly",
                 "monthly_amount": 1500,
                 "hour_tracking": "required",
@@ -256,7 +336,7 @@ class TestPreferencesValidation:
         """Valid fixed_monthly/soft project should pass."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['projects'] = {
-            "Randonautica Retainer": {
+            "Client Soft Cap": {
                 "billing_type": "fixed_monthly",
                 "monthly_amount": 3000,
                 "hour_tracking": "soft",
@@ -269,7 +349,7 @@ class TestPreferencesValidation:
         """Valid fixed_monthly/none project should pass (no target_hours needed)."""
         prefs = DEFAULT_PREFERENCES.copy()
         prefs['projects'] = {
-            "Stark Industries": {
+            "Client Flat Fee": {
                 "billing_type": "fixed_monthly",
                 "monthly_amount": 4000,
                 "hour_tracking": "none",
