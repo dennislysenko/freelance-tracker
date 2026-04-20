@@ -502,10 +502,10 @@ def _render_panel_work(prefs):
     <div class="settings-help">
         Monthly hour goals per project. Blank-name rows are dropped on save.
     </div>
+    <button class="settings-add" type="button" onclick="addProjectTargetRow()">+ Add target</button>
     <div id="project_targets_rows">
         {"".join(rows_html)}
     </div>
-    <button class="settings-add" type="button" onclick="addProjectTargetRow()">+ Add target</button>
     """
 
 
@@ -638,11 +638,11 @@ def _render_panel_projects(prefs):
         Fixed + soft: display only. Fixed flat: freeform amount. Rows without a
         project selected are dropped on save.
     </div>
+    <button class="settings-add" type="button"
+            onclick="addProjectDefnRow()">+ Add project</button>
     <div id="project_defn_rows" data-toggl-names='{_esc(names_json)}'>
         {"".join(rows)}
     </div>
-    <button class="settings-add" type="button"
-            onclick="addProjectDefnRow()">+ Add project</button>
     """
 
 
@@ -715,14 +715,14 @@ def _render_panel_billing(prefs):
         (e.g. <code>14:00</code>). Notifications post as \u201cPython\u201d; a macOS
         Focus will suppress them unless Python is in that focus\u2019s allowed apps.
     </div>
+    <button class="settings-add" type="button" onclick="addBillingReminderRow()">
+        + Add reminder
+    </button>
     <div id="billing_reminder_rows"
          data-toggl-names='{_esc(names_json)}'
          data-day-options='{_esc(day_opts_js)}'>
         {"".join(rows)}
     </div>
-    <button class="settings-add" type="button" onclick="addBillingReminderRow()">
-        + Add reminder
-    </button>
     <div style="margin-top:12px;">
         <button class="settings-btn" type="button"
                 onclick="postAction('settings:test_notification')">
@@ -819,12 +819,12 @@ def _render_panel_integrations(prefs, integrations):
             Refresh Customers
         </button>
     </div>
-    <div id="mapping_rows" data-toggl-names='{_esc(names_json)}'>
-        {rows_html}
-    </div>
     <button class="settings-add" type="button" onclick="addMappingRow()">
         + Add mapping
     </button>
+    <div id="mapping_rows" data-toggl-names='{_esc(names_json)}'>
+        {rows_html}
+    </div>
     """
 
 
@@ -1124,7 +1124,7 @@ def generate_settings_js():
             '<button class="settings-row-remove" type="button" aria-label="Remove"' +
             ' onclick="removeSettingsRow(this)">\u00d7</button>' +
             '</div>';
-        container.appendChild(row);
+        container.insertBefore(row, container.firstChild);
     }
 
     function removeSettingsRow(btn) {
@@ -1192,7 +1192,7 @@ def generate_settings_js():
             '<input type="date" class="pd-last-billed" onchange="onLastBilledChange(this)"></div>' +
             '<div class="settings-field pd-field pd-carryover-field"><label>Carryover h</label>' +
             '<input type="text" inputmode="decimal" class="pd-carryover" placeholder="0"></div>';
-        container.appendChild(row);
+        container.insertBefore(row, container.firstChild);
     }
 
     function addBillingReminderRow() {
@@ -1226,7 +1226,7 @@ def generate_settings_js():
             '<button class="settings-row-remove" type="button" aria-label="Remove"' +
             ' onclick="removeSettingsRow(this)">\u00d7</button>' +
             '</div>';
-        container.appendChild(row);
+        container.insertBefore(row, container.firstChild);
     }
 
     function addProjectTargetRow(name, hours) {
@@ -1244,7 +1244,7 @@ def generate_settings_js():
             '</div>';
         if (name) row.querySelector('.pt-name').value = name;
         if (hours !== undefined && hours !== null) row.querySelector('.pt-hours').value = hours;
-        container.appendChild(row);
+        container.insertBefore(row, container.firstChild);
         var focusEl = row.querySelector('.pt-name');
         if (focusEl) focusEl.focus();
     }
