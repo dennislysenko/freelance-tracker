@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-04-16
+**Last Updated:** 2026-04-20
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -72,7 +72,8 @@ Every project can have an optional definition in the `projects` preference key. 
 - Monthly progress bar (without `last_billed_date`): numerator = current month hours, denominator = `cap_hours - carryover` (carryover adjusts the denominator)
 - Optional `last_billed_date` (YYYY-MM-DD): when set, unbilled hours are counted from that date + 1 day through today, crossing month boundaries. Replaces carryover-based tracking for projects with non-calendar billing cycles. Fetches the full date range from the Toggl API (1 call, cached daily).
   - Monthly progress bar: numerator = all unbilled hours since last_billed_date, denominator = raw `cap_hours` (no carryover adjustment)
-  - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_biz_days, cap_hours) × rate`
+  - Pacing marker + status: compares capped progress against the billing-cycle window from `last_billed_date + 1 day` through the end of the following month, instead of the current calendar month
+  - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_biz_days_in_billing_cycle, cap_hours) × rate`
   - Carryover store is cleared when last_billed_date is saved; manual carryover field hidden in UI
 - **Timesheet last day**: shown below the progress bar when over 100%. Walks through actual time entries chronologically and finds the last date where cumulative hours were at or just under the cap. Displayed as "↳ timesheet last day: Mar 15". Tells you what date to put on a timesheet as your last worked day to bill as close to 100% as possible without exceeding the cap. Works for both `last_billed_date` and calendar-month modes.
 

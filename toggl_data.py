@@ -563,6 +563,59 @@ def get_entries_since_date(start_date):
     return get_entries_for_range(start_dt, end_dt)
 
 
+def get_lbd_billing_cycle_bounds(last_billed_date):
+    """Return the pacing/projection window for an LBD capped project.
+
+    The month containing ``last_billed_date`` is treated as already billed.
+    Unbilled hours accrue from the next day through the end of the following month.
+    """
+    if isinstance(last_billed_date, str):
+        last_billed_date = datetime.strptime(last_billed_date, '%Y-%m-%d').date()
+
+    cycle_start = last_billed_date + timedelta(days=1)
+    target_year = last_billed_date.year
+    target_month = last_billed_date.month + 1
+    if target_month > 12:
+        target_month = 1
+        target_year += 1
+    cycle_end = datetime(
+        target_year,
+        target_month,
+        calendar.monthrange(target_year, target_month)[1],
+    ).date()
+    return cycle_start, cycle_end
+
+
+def get_lbd_cycle_progress(last_billed_date, today=None):
+    """Return elapsed percentage for the LBD pacing window as a 0-100 float."""
+    if today is None:
+        today = datetime.now().date()
+    cycle_start, cycle_end = get_lbd_billing_cycle_bounds(last_billed_date)
+    if today < cycle_start:
+        return 0.0
+    if today >= cycle_end:
+        return 100.0
+
+    total_days = (cycle_end - cycle_start).days + 1
+    elapsed_days = (today - cycle_start).days + 1
+    return (elapsed_days / max(total_days, 1)) * 100
+
+
+def get_lbd_remaining_business_days(last_billed_date, today=None):
+    """Return remaining business days after today in the active LBD pacing window."""
+    if today is None:
+        today = datetime.now().date()
+    _cycle_start, cycle_end = get_lbd_billing_cycle_bounds(last_billed_date)
+    if today >= cycle_end:
+        return 0
+
+    return sum(
+        1
+        for offset in range(1, (cycle_end - today).days + 1)
+        if (today + timedelta(days=offset)).weekday() < 5
+    )
+
+
 def _calculate_cap_fill_date(hours_by_day, cap_hours):
     """
     Walk through actual time entries chronologically and find the last date
@@ -1164,7 +1217,8 @@ def calculate_monthly_projection():
     )
 
     # Handle hourly_with_cap projects with last_billed_date separately.
-    # Their unbilled hours span from last_billed_date+1 to today, crossing month boundaries.
+    # Their unbilled hours span from last_billed_date+1 through the end of the
+    # following month for pacing/projection purposes.
     projects_map = get_projects()
     lbd_current_earnings = 0.0
     lbd_projected_earnings = 0.0
@@ -1195,9 +1249,11 @@ def calculate_monthly_projection():
 
         lbd_current_earnings += min(unbilled_hours, cap_hours) * hourly_rate
 
+        remaining_cycle_biz_days = get_lbd_remaining_business_days(last_billed)
+
         if worked_days_in_period > 0:
             daily_avg = unbilled_hours / worked_days_in_period
-            projected_unbilled = unbilled_hours + daily_avg * remaining_biz_days
+            projected_unbilled = unbilled_hours + daily_avg * remaining_cycle_biz_days
         else:
             projected_unbilled = unbilled_hours
 

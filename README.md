@@ -14,6 +14,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - ⚙️ **Settings button** in the main popover, with API audit log access under the Preferences `Advanced` tab
 - 🔄 **Auto-refresh** every 30 minutes
 - 📈 **Month projection** based on pace, accounting for planned days off
+- 🧾 **Invoice-date pacing** for capped projects — paces from your last bill, not the 1st of the month
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly
 - 🔁 **Carryover tracking** for capped and fixed-monthly projects across months
 - 🕐 **Last update timestamp**
@@ -158,6 +159,8 @@ The app automatically calculates your projected monthly earnings based on:
 - **Workable days**: Business days minus vacation days (default: 4 days)
 - **Daily average**: Current earnings ÷ worked days
 - **Projection**: Daily average × workable days
+
+For `hourly_with_cap` projects that set `last_billed_date`, the dashboard switches to billing-cycle pacing instead of calendar-month pacing: unbilled hours are measured from `last_billed_date + 1 day`, and the pace marker / capped projection run through the end of the following month. This keeps billing-ahead retainers from looking artificially behind just because the current calendar month is mostly over.
 
 Example: If you earned $1,000 in 4 worked days, with 20 business days and 4 vacation days (16 workable days), your projection is $4,000.
 

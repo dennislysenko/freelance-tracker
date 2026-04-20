@@ -5,6 +5,7 @@ import json
 
 import carryover
 import hours_csv_export
+import pytest
 import toggl_data
 
 
@@ -25,6 +26,15 @@ class _FrozenDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
         base = datetime(2026, 4, 11, 16, 0, 0, tzinfo=timezone.utc)
+        if tz is not None:
+            return base.astimezone(tz)
+        return base.astimezone()
+
+
+class _ProjectionDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        base = datetime(2026, 4, 20, 16, 0, 0, tzinfo=timezone.utc)
         if tz is not None:
             return base.astimezone(tz)
         return base.astimezone()
@@ -220,3 +230,64 @@ def test_clear_all_caches_removes_shared_and_legacy_cache_files(monkeypatch, tmp
     assert not (cache_dir / "projects.json").exists()
     assert not (cache_dir / "export_2026-04-01_to_2026-04-11.json").exists()
     assert not (cache_dir / "daily_2026-04-11.json").exists()
+
+
+def test_lbd_billing_cycle_bounds_and_progress_cover_following_month():
+    cycle_start, cycle_end = toggl_data.get_lbd_billing_cycle_bounds(date(2026, 4, 10))
+
+    assert cycle_start == date(2026, 4, 11)
+    assert cycle_end == date(2026, 5, 31)
+    assert toggl_data.get_lbd_cycle_progress(
+        date(2026, 4, 10),
+        today=date(2026, 4, 20),
+    ) == pytest.approx(19.607843137254903)
+
+
+def test_lbd_projection_uses_remaining_business_days_in_billing_cycle(monkeypatch, tmp_path):
+    _configure_cache_env(
+        monkeypatch,
+        tmp_path,
+        prefs={
+            "cache_ttl_today": 1800,
+            "cache_ttl_projects": 86400,
+            "projects": {
+                "Client A": {
+                    "billing_type": "hourly_with_cap",
+                    "hourly_rate": 100,
+                    "cap_hours": 200,
+                    "last_billed_date": "2026-04-10",
+                },
+            },
+            "retainer_hourly_rates": {},
+            "vacation_days_per_month": 0,
+        },
+    )
+
+    monkeypatch.setattr(toggl_data, "datetime", _ProjectionDateTime)
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {"101": {"name": "Client A"}})
+    monkeypatch.setattr(
+        toggl_data,
+        "calculate_period_earnings",
+        lambda period: {"total": 1000, "fixed_earnings": 0} if period == "monthly" else {},
+    )
+    monkeypatch.setattr(toggl_data, "calculate_business_days", lambda year, month: 22)
+    monkeypatch.setattr(toggl_data, "get_worked_days_this_month", lambda: [])
+    monkeypatch.setattr(
+        toggl_data,
+        "get_entries_since_date",
+        lambda start_date: [
+            _entry(1, 101, "2026-04-11T14:00:00Z", 18000, "Apr 11"),
+            _entry(2, 101, "2026-04-14T14:00:00Z", 18000, "Apr 14"),
+        ],
+    )
+
+    projection = toggl_data.calculate_monthly_projection()
+    remaining_days = toggl_data.get_lbd_remaining_business_days(
+        date(2026, 4, 10),
+        today=date(2026, 4, 20),
+    )
+    expected_projected_variable = (10 + (10 / 2) * remaining_days) * 100
+
+    assert remaining_days == 29
+    assert projection["projected_variable"] == expected_projected_variable
+    assert projection["projected_earnings"] == expected_projected_variable
