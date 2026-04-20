@@ -24,7 +24,9 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - Rich popover dashboard uses WebKit when available; if the WebKit bridge is missing, the app falls back to the classic dropdown menu instead of failing to launch
 - Dashboard popover auto-sizes to the current content for short project lists, while preserving scrolling for taller dashboards
 - `This Week` is collapsed by default; section collapse state is then persisted per user across launches
-- Preferences window no longer exposes dashboard collapse-state defaults; reminder configuration lives in the `Billing` tab and diagnostics stay in `Advanced`
+- Preferences are edited in the dashboard popover itself via the `⋯` → `Settings` menu. Clicking opens an in-popover Preferences view with the same six tabs (`Caching`, `Work Planning`, `Projects`, `Billing`, `Integrations`, `Advanced`) and the back chevron returns to the dashboard. The native AppKit Preferences window is retained only as the fallback path for when the WebKit bridge is unavailable.
+- Preferences view relaxes the native quirks where doing so has no persistence impact: add/remove rows instead of fixed-count grids, masked credential inputs with a show/hide eye toggle, and inline validation errors at the top of the panel in addition to modal alerts for bulk issues
+- Reminder configuration lives in the `Billing` tab and diagnostics stay in `Advanced`
 - Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, `Clear All Caches`, or `Open Cache Folder`), `Settings`, `Update`, and `Quit`
 - Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`
 - Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
@@ -141,7 +143,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 #### Legacy: Retainer Hourly Overrides
 - `retainer_hourly_rates` preference key is still supported as a fallback for projects without a definition
 - Migrate to `projects` with `billing_type: fixed_monthly` for full functionality
-- Native Preferences window: "Retainer Rates" tab replaced by "Projects" tab
+- Preferences view (both in-popover and the fallback AppKit window): `Retainer Rates` tab replaced by `Projects` tab
 
 ### Smart Caching
 - Minimizes API calls to respect Toggl rate limits
