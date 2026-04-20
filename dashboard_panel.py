@@ -4,6 +4,8 @@ Uses NSPopover with a WKWebView to show a styled dashboard when
 the status bar item is clicked - similar to how Claude Usage Tracker works.
 """
 
+import json
+
 import objc
 from AppKit import (
     NSMakeRect, NSEvent, NSViewController, NSView, NSColor, NSAppearance,
@@ -11,6 +13,12 @@ from AppKit import (
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
 from preferences import load_preferences, save_preferences, DEFAULT_PREFERENCES
 from carryover import get_previous_month_balance
+from integrations import load_integration_settings
+from settings_view import (
+    generate_settings_css,
+    generate_settings_html,
+    generate_settings_js,
+)
 
 # Import NSPopover and related constants
 NSPopover = objc.lookUpClass('NSPopover')
@@ -45,6 +53,37 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
         if action.startswith("toggle:"):
             _, section_key, state = action.split(":", 2)
             self._controller.set_section_expanded(section_key, state == "expanded")
+            return
+        if action.startswith("router:"):
+            view = action.split(":", 1)[1].strip()
+            prev_view = getattr(self._controller, "_view", None)
+            self._controller.set_view(view)
+            # Returning from settings -> dashboard should pick up any prefs
+            # the user just saved (project targets drive computed values).
+            if view == "dashboard" and prev_view == "settings":
+                cb = self._callbacks.get("refresh")
+                if cb:
+                    try:
+                        cb()
+                    except Exception as exc:
+                        _debug(f"router:dashboard refresh failed: {exc}")
+            return
+        if action.startswith("settings:"):
+            # "settings:<name>" or "settings:<name> <json-payload>"
+            rest = action[len("settings:"):]
+            name, _, payload_str = rest.partition(" ")
+            payload = None
+            if payload_str:
+                try:
+                    payload = json.loads(payload_str)
+                except ValueError:
+                    payload = None
+            callback = self._callbacks.get(f"settings:{name}")
+            if callback:
+                if payload is None:
+                    callback()
+                else:
+                    callback(payload)
             return
         if action.startswith("export_csv:"):
             parts = action.split(":")
@@ -221,6 +260,7 @@ class DashboardPanelController:
         self._current_panel_height = None
         self._exportable_projects = []
         self._stripe_invoice_state = None
+        self._view = "dashboard"  # "dashboard" | "settings"
 
     def set_exportable_projects(self, projects):
         """List of project capability dicts used by dashboard billing actions."""
@@ -431,6 +471,33 @@ class DashboardPanelController:
         if isinstance(current, dict):
             states.update({k: bool(v) for k, v in current.items() if k in states})
         return states
+
+    def set_view(self, view):
+        """Track which sub-view (dashboard|settings) the popover is showing.
+
+        The toggle is purely client-side in JS; we only mirror the state in
+        Python so a subsequent `loadHTMLString_` (e.g. after `update_data`)
+        renders the same view instead of booting the user back to dashboard.
+        """
+        if view not in ("dashboard", "settings"):
+            return
+        self._view = view
+
+    def settings_ack(self, reply):
+        """Send a reply payload back to the settings view's JS via evaluateJavaScript."""
+        if not self._view_controller or not self._view_controller.webview:
+            return
+        try:
+            payload = json.dumps(reply, default=str)
+        except (TypeError, ValueError):
+            payload = '{"ok": false, "errors": ["Internal error encoding reply"]}'
+        script = f"window.__settingsAck && window.__settingsAck({payload});"
+        try:
+            self._view_controller.webview.evaluateJavaScript_completionHandler_(
+                script, None
+            )
+        except Exception as exc:
+            _debug(f"settings_ack evaluateJavaScript failed: {exc}")
 
     def set_section_expanded(self, section_key, expanded):
         """Persist section state changed inside the dashboard."""
@@ -927,6 +994,17 @@ class DashboardPanelController:
         last_month_label = _short_range(_last_month_start, _last_month_end)
         ytd_label = _short_range(_ytd_start, _ytd_end)
         stripe_state_html = self._render_stripe_invoice_state_html()
+
+        # Settings view: rendered alongside the dashboard so switching is a
+        # pure CSS toggle (body[data-view]) and Toggl-data refreshes don't
+        # boot the user off the settings tab.
+        settings_css = generate_settings_css()
+        settings_body_html = generate_settings_html(
+            prefs=prefs,
+            integrations=load_integration_settings(),
+        )
+        settings_script = generate_settings_js()
+        current_view = self._view if self._view in ("dashboard", "settings") else "dashboard"
 
         html = f"""<!DOCTYPE html>
 <html>
@@ -1842,9 +1920,12 @@ html, body {{
     text-align: center;
     margin-top: 6px;
 }}
+
+{settings_css}
 </style>
 </head>
-<body>
+<body data-view="{current_view}">
+<div class="dashboard-root">
 <div class="wrapper">
     <div class="section-list">
         {today_section}
@@ -2001,7 +2082,7 @@ html, body {{
             <div class="more-group" id="moreGroup">
                 <button class="action-btn more-toggle" onclick="toggleMoreMenu(event)" aria-label="More actions">⋯</button>
                 <div class="more-menu" id="moreMenu">
-                    <button class="more-option" onclick="runMoreAction('settings')">Settings</button>
+                    <button class="more-option" onclick="openSettingsFromMore()">Settings</button>
                     <button class="more-option" onclick="runMoreAction('update_app')">Update</button>
                     <button class="more-option danger" onclick="runMoreAction('quit')">Quit</button>
                 </div>
@@ -2019,6 +2100,9 @@ html, body {{
         <div class="stripe-state-note">This creates a draft only. You will still review and send it from Stripe.</div>
     </div>
 </div>
+</div><!-- /.dashboard-root -->
+
+{settings_body_html}
 
 <script>
     var heightReportQueued = false;
@@ -2717,6 +2801,14 @@ html, body {{
         syncFooterClearance();
         scheduleReportHeight();
     }});
+
+    function openSettingsFromMore() {{
+        closeAllPopupMenus();
+        settingsOpen();
+    }}
+
+    // --- Settings view ---
+    {settings_script}
 </script>
 </body>
 </html>"""
