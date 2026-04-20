@@ -500,7 +500,10 @@ def _render_panel_work(prefs):
         <input type="number" id="set_vacation_days" min="0" max="31" value="{vac}">
     </div>
     <div class="settings-help">
-        Monthly hour goals per project. Blank-name rows are dropped on save.
+        Monthly hour goals for <code>hourly</code> projects and projects without a
+        billing definition. For <code>fixed</code> or <code>hourly with cap</code> projects,
+        set the target in the <strong>Projects</strong> tab instead \u2014 a value here
+        silently overrides it. Blank-name rows are dropped on save.
     </div>
     <button class="settings-add" type="button" onclick="addProjectTargetRow()">+ Add target</button>
     <div id="project_targets_rows">
