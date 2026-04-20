@@ -11,6 +11,7 @@ from AppKit import (
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
 from preferences import load_preferences, save_preferences, DEFAULT_PREFERENCES
 from carryover import get_previous_month_balance
+from toggl_data import get_lbd_cycle_progress
 
 # Import NSPopover and related constants
 NSPopover = objc.lookUpClass('NSPopover')
@@ -698,12 +699,18 @@ class DashboardPanelController:
                 percentage = (p['hours'] / effective_target) * 100
                 clamped_pct = min(percentage, 100)
 
-                # Pacing: compare hours % vs calendar %
+                # Pacing: compare hours % vs calendar progress, except capped LBD
+                # projects which pace against their billing-cycle window.
                 from datetime import date
                 import calendar as cal_mod
                 today = date.today()
                 days_in_month = cal_mod.monthrange(today.year, today.month)[1]
                 calendar_pct = (today.day / days_in_month) * 100
+                if billing_type == 'hourly_with_cap' and proj_def.get('last_billed_date'):
+                    try:
+                        calendar_pct = get_lbd_cycle_progress(proj_def['last_billed_date'], today=today)
+                    except ValueError:
+                        pass
                 pace_ratio = percentage / max(calendar_pct, 0.1)
 
                 if percentage > 105:

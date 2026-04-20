@@ -196,3 +196,60 @@ def test_month_section_includes_zero_hour_projects_with_targets(monkeypatch):
 
     assert "Bench Project: 0.0h / 12.0h (0%)" in html
     assert "Retainer Client: 0.0h / 20.0h (0%)" in html
+
+
+def test_lbd_capped_projects_use_billing_cycle_pace(monkeypatch):
+    """LBD capped projects should pace against their billing-cycle window, not the calendar month."""
+    controller = _make_controller()
+
+    monkeypatch.setattr(
+        dashboard_panel,
+        "load_preferences",
+        lambda: {
+            "project_targets": {},
+            "projects": {
+                "Retainer Client": {
+                    "billing_type": "hourly_with_cap",
+                    "hourly_rate": 200,
+                    "cap_hours": 132,
+                    "last_billed_date": "2026-04-10",
+                },
+            },
+            "dashboard_sections": {
+                "today": True,
+                "week": True,
+                "month": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_panel,
+        "get_previous_month_balance",
+        lambda name: (0.0, "Mar"),
+    )
+    monkeypatch.setattr(
+        dashboard_panel,
+        "get_lbd_cycle_progress",
+        lambda last_billed_date, today=None: 20.0,
+    )
+
+    html = controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {
+            "total": 6440,
+            "all_projects": [
+                {
+                    "name": "Retainer Client",
+                    "earnings": 6440,
+                    "hours": 32.2,
+                    "billable": True,
+                },
+            ],
+            "projection": {},
+        },
+    )
+
+    assert "Retainer Client: 32.2h / 132.0h (24%)" in html
+    assert "Ahead of pace" in html
+    assert 'class="calendar-marker" style="left: 20.0%;' in html
