@@ -101,7 +101,12 @@ def generate_settings_css():
     .settings-root {
         min-height: 100%;
         padding: 0;
+        width: 100%;
+        max-width: 100vw;
+        box-sizing: border-box;
+        overflow-x: hidden;
     }
+    .settings-root * { box-sizing: border-box; }
 
     body[data-view="dashboard"] .settings-root { display: none; }
     body[data-view="settings"] .dashboard-root { display: none; }
@@ -182,8 +187,8 @@ def generate_settings_css():
 
     .settings-tabs {
         display: flex;
-        gap: 2px;
-        padding: 6px 10px;
+        gap: 0;
+        padding: 4px 6px;
         border-bottom: 1px solid rgba(255,255,255,0.05);
         overflow-x: auto;
         scrollbar-width: none;
@@ -191,7 +196,7 @@ def generate_settings_css():
     .settings-tabs::-webkit-scrollbar { display: none; }
 
     .settings-tab {
-        padding: 6px 10px;
+        padding: 5px 7px;
         font-size: 11px;
         color: #8b949e;
         background: transparent;
@@ -422,14 +427,21 @@ def generate_settings_css():
     .creds-eye:hover { color: #c9d1d9; background: rgba(255,255,255,0.06); }
     .creds-eye.on { color: #58a6ff; }
 
-    /* Mapping rows */
+    /* Mapping rows: reflow to two visual lines so 420px popover fits.
+       Line 1: project + remove (×). Line 2: customer + upwork contract id. */
     .map-row .settings-row-header {
-        display: flex;
-        gap: 8px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+            "project remove"
+            "customer upwork";
+        gap: 6px 8px;
         align-items: center;
     }
-    .map-row .map-project { flex: 1 1 140px; min-width: 140px; }
-    .map-row .map-customer { flex: 1 1 160px; min-width: 160px; }
+    .map-row .map-project { grid-area: project; min-width: 0; }
+    .map-row .settings-row-remove { grid-area: remove; }
+    .map-row .map-customer { grid-area: customer; min-width: 0; }
+    .map-row .map-upwork { grid-area: upwork; min-width: 0; flex: unset; }
     """
 
 
@@ -745,8 +757,7 @@ def _render_mapping_row(project_name, customer_id, upwork_id, toggl_names):
                 {"".join(customer_opts)}
             </select>
             <input type="text" class="map-upwork" inputmode="numeric"
-                   value="{_esc(upwork_id or '')}" placeholder="Upwork contract id"
-                   style="flex: 0 0 150px;">
+                   value="{_esc(upwork_id or '')}" placeholder="Upwork contract id">
             <button class="settings-row-remove" type="button"
                     aria-label="Remove" onclick="removeSettingsRow(this)">\u00d7</button>
         </div>
@@ -1109,7 +1120,7 @@ def generate_settings_js():
                 '<option value="">\u2014</option>' +
             '</select>' +
             '<input type="text" class="map-upwork" inputmode="numeric"' +
-            ' placeholder="Upwork contract id" style="flex:0 0 150px;">' +
+            ' placeholder="Upwork contract id">' +
             '<button class="settings-row-remove" type="button" aria-label="Remove"' +
             ' onclick="removeSettingsRow(this)">\u00d7</button>' +
             '</div>';
