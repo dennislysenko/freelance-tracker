@@ -123,6 +123,10 @@ rm -rf ~/Library/Caches/TogglMenuBar/*    # Clear cache
 ~/Library/Logs/freelancetracker-*.log                        # Logs
 ```
 
+## Linear MCP
+
+For this project, use the `linear-freelancers-copilot` Linear MCP server (not the generic `linear` one). This project has its own `.codex/config.toml` registering `linear-freelancers-copilot`; use that workspace.
+
 ## Quick Reference
 
 | User Says | Run |

@@ -30,3 +30,10 @@ build/
 # macOS system files (contain personal data)
 Library/
 .vercel
+
+# QA preview artifacts
+qa_*.png
+.playwright-mcp/
+
+# Per-user Codex config (may reference workspace names)
+.codex/
