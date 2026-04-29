@@ -706,19 +706,15 @@ class DashboardPanelController:
                 today = date.today()
                 days_in_month = cal_mod.monthrange(today.year, today.month)[1]
                 calendar_pct = (today.day / days_in_month) * 100
-                period_start = date(today.year, today.month, 1)
-                period_end = date(today.year, today.month, days_in_month)
+                period_inline = ""
                 if billing_type == 'hourly_with_cap' and proj_def.get('last_billed_date'):
                     try:
                         calendar_pct = get_lbd_cycle_progress(proj_def['last_billed_date'], today=today)
                         period_start, period_end = get_lbd_billing_cycle_bounds(proj_def['last_billed_date'])
+                        period_label = f"{period_start.month}/{period_start.day}-{period_end.month}/{period_end.day}"
+                        period_inline = f'<span class="billing-period">{period_label}</span>'
                     except ValueError:
                         pass
-
-                def _fmt_period(d):
-                    return f"{d.month}/{d.day}"
-                period_label = f"{_fmt_period(period_start)}-{_fmt_period(period_end)}"
-                period_inline = f' <span class="billing-period">billing period: {period_label}</span>'
                 pace_ratio = percentage / max(calendar_pct, 0.1)
 
                 if percentage > 105:
@@ -764,7 +760,8 @@ class DashboardPanelController:
                 row_html = f"""
                 <div class="monthly-project">
                     <div class="monthly-project-header">
-                        <span class="project-name">{_esc(name)}: {p['hours']:.1f}h / {effective_target:.1f}h ({percentage:.0f}%){period_inline}</span>
+                        <span class="project-name">{_esc(name)}: {p['hours']:.1f}h / {effective_target:.1f}h ({percentage:.0f}%)</span>
+                        {period_inline}
                     </div>
                     <div class="progress-track">
                         <div class="progress-fill-clip"><div class="progress-fill" style="width: {clamped_pct}%; background: {bar_color};"></div></div>
@@ -1247,10 +1244,10 @@ html, body {{
 }}
 
 .billing-period {{
-    font-size: 10px;
+    font-size: 10.5px;
     color: #6e7681;
-    font-weight: normal;
-    margin-left: 4px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
 }}
 
 .projection-section {{
