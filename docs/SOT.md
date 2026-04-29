@@ -72,7 +72,7 @@ Every project can have an optional definition in the `projects` preference key. 
 - Monthly progress bar (without `last_billed_date`): numerator = current month hours, denominator = `cap_hours - carryover` (carryover adjusts the denominator)
 - Optional `last_billed_date` (YYYY-MM-DD): when set, unbilled hours are counted from that date + 1 day through today, crossing month boundaries. Replaces carryover-based tracking for projects with non-calendar billing cycles. Fetches the full date range from the Toggl API (1 call, cached daily).
   - Monthly progress bar: numerator = all unbilled hours since last_billed_date, denominator = raw `cap_hours` (no carryover adjustment)
-  - Pacing marker + status: compares capped progress against the billing-cycle window from `last_billed_date + 1 day` through the end of the following month, instead of the current calendar month
+  - Pacing marker + status: compares capped progress against the billing-cycle window from `last_billed_date + 1 day` through the end of the following month, instead of the current calendar month. Pacing label uses early-cycle Bayesian shrinkage (see Pacing decision tree below).
   - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_biz_days_in_billing_cycle, cap_hours) × rate`
   - Carryover store is cleared when last_billed_date is saved; manual carryover field hidden in UI
 - **Timesheet last day**: shown below the progress bar when over 100%. Walks through actual time entries chronologically and finds the last date where cumulative hours were at or just under the cap. Displayed as "↳ timesheet last day: Mar 15". Tells you what date to put on a timesheet as your last worked day to bill as close to 100% as possible without exceeding the cap. Works for both `last_billed_date` and calendar-month modes.
@@ -85,6 +85,33 @@ Every project can have an optional definition in the `projects` preference key. 
   - `hour_tracking: none` — freeform; no hour tracking
 - Effective hourly rate for daily/weekly display: `monthly_amount / target_hours` (required/soft), or `monthly_amount / working_days` per day (none)
 - These projects are assumed to not have a billable rate configured in Toggl
+
+#### Pacing decision tree (monthly project bars)
+
+Applies to all tracked monthly projects (calendar-month and LBD-capped).
+
+Inputs:
+- `percentage` = hours / target × 100
+- `calendar_pct` = elapsed time in cycle (calendar month, or LBD billing cycle if `last_billed_date` is set)
+- `elapsed_days` = days into the cycle (1 on the first day)
+
+Ratio with early-cycle Bayesian shrinkage:
+```
+raw_ratio       = percentage / max(calendar_pct, 0.1)
+shrink_weight   = min(elapsed_days / 5, 1.0)        # 0.2 on day 1, 1.0 by day 5
+effective_ratio = raw_ratio · shrink_weight + 1.0 · (1 − shrink_weight)
+```
+The shrinkage damps noisy ratios when the denominator is tiny at the start of a cycle. By day 5 it has no effect.
+
+Banding (first match wins):
+1. `percentage > 105` → **Over target** (red)
+2. `percentage ≥ 100` → **Complete** (orange)
+3. `percentage ≥ 95` → **Almost there** (orange)
+4. `effective_ratio ≥ 1.5` → **Well ahead — ease off or bank hours** (green)
+5. `effective_ratio ≥ 1.15` → **Ahead of pace** (green)
+6. `effective_ratio ≥ 0.85` → **On pace** (green)
+7. `effective_ratio ≥ 0.5` → **Behind — ramp up to stay on track** (blue)
+8. else → **Way behind — needs attention** (blue)
 
 #### Project Definition Schema
 

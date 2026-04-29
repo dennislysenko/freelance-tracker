@@ -1,6 +1,6 @@
 """Regression tests for dashboard popover HTML sizing."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import dashboard_panel
 from dashboard_panel import DashboardPanelController
@@ -253,3 +253,85 @@ def test_lbd_capped_projects_use_billing_cycle_pace(monkeypatch):
     assert "Retainer Client: 32.2h / 132.0h (24%)" in html
     assert "Ahead of pace" in html
     assert 'class="calendar-marker" style="left: 20.0%;' in html
+
+
+def _early_cycle_prefs():
+    return {
+        "project_targets": {},
+        "projects": {
+            "Retainer Client": {
+                "billing_type": "hourly_with_cap",
+                "hourly_rate": 200,
+                "cap_hours": 132,
+                "last_billed_date": "2026-04-10",
+            },
+        },
+        "dashboard_sections": {"today": True, "week": True, "month": True},
+    }
+
+
+def _patch_early_cycle(monkeypatch):
+    today = date.today()
+    monkeypatch.setattr(dashboard_panel, "load_preferences", _early_cycle_prefs)
+    monkeypatch.setattr(
+        dashboard_panel,
+        "get_previous_month_balance",
+        lambda name: (0.0, "Mar"),
+    )
+    monkeypatch.setattr(
+        dashboard_panel,
+        "get_lbd_cycle_progress",
+        lambda last_billed_date, today=None: 100.0 / 33,
+    )
+    monkeypatch.setattr(
+        dashboard_panel,
+        "get_lbd_billing_cycle_bounds",
+        lambda last_billed_date: (today, today + timedelta(days=32)),
+    )
+
+
+def test_early_cycle_small_lead_shrinks_to_on_pace(monkeypatch):
+    """Day 1 of a 33-day cycle: ~1.5pp lead must not trip 'Well ahead'."""
+    controller = _make_controller()
+    _patch_early_cycle(monkeypatch)
+
+    # 6.0h / 132h = 4.55% vs calendar 3.03% -> raw ratio 1.5 -> "Well ahead"
+    # Shrunk on day 1 (weight 0.2): 1.5*0.2 + 0.8 = 1.10 -> "On pace"
+    html = controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {
+            "total": 1200,
+            "all_projects": [
+                {"name": "Retainer Client", "earnings": 1200, "hours": 6.0, "billable": True},
+            ],
+            "projection": {},
+        },
+    )
+
+    assert "On pace" in html
+    assert "Well ahead" not in html
+
+
+def test_early_cycle_small_lag_shrinks_to_on_pace(monkeypatch):
+    """Day 1 of a 33-day cycle: small lag must not trip 'Way behind'."""
+    controller = _make_controller()
+    _patch_early_cycle(monkeypatch)
+
+    # 1.0h / 132h = 0.76% vs calendar 3.03% -> raw ratio 0.25 -> "Way behind"
+    # Shrunk on day 1 (weight 0.2): 0.25*0.2 + 0.8 = 0.85 -> "On pace"
+    html = controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {
+            "total": 200,
+            "all_projects": [
+                {"name": "Retainer Client", "earnings": 200, "hours": 1.0, "billable": True},
+            ],
+            "projection": {},
+        },
+    )
+
+    assert "On pace" in html
+    assert "Way behind" not in html
+    assert "Behind" not in html

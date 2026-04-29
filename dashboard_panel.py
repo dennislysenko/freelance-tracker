@@ -706,6 +706,7 @@ class DashboardPanelController:
                 today = date.today()
                 days_in_month = cal_mod.monthrange(today.year, today.month)[1]
                 calendar_pct = (today.day / days_in_month) * 100
+                elapsed_days = today.day
                 period_inline = ""
                 if billing_type == 'hourly_with_cap' and proj_def.get('last_billed_date'):
                     try:
@@ -713,9 +714,18 @@ class DashboardPanelController:
                         period_start, period_end = get_lbd_billing_cycle_bounds(proj_def['last_billed_date'])
                         period_label = f"{period_start.month}/{period_start.day}-{period_end.month}/{period_end.day}"
                         period_inline = f'<span class="billing-period">{period_label}</span>'
+                        if today >= period_start:
+                            elapsed_days = (today - period_start).days + 1
+                        else:
+                            elapsed_days = 0
                     except ValueError:
                         pass
                 pace_ratio = percentage / max(calendar_pct, 0.1)
+                # Bayesian shrinkage toward neutral (1.0) early in the cycle:
+                # the ratio is a noisy estimator when the denominator is tiny,
+                # so blend it with 1.0 weighted by elapsed days (full signal by day 5).
+                shrink_weight = min(max(elapsed_days, 0) / 5.0, 1.0)
+                pace_ratio = pace_ratio * shrink_weight + 1.0 * (1 - shrink_weight)
 
                 if percentage > 105:
                     bar_color = "#f85149"
