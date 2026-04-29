@@ -115,6 +115,11 @@ class FreelanceTrackerApp(rumps.App):
                 'open_upwork_diary': self._dashboard_open_upwork_diary,
                 'save_upwork_contract': self._dashboard_save_upwork_contract,
                 'copy_text': self._dashboard_copy_text,
+                # In-popover settings view (settings:<name> bridge messages)
+                'settings:save': self._dashboard_settings_save,
+                'settings:test_notification': self._dashboard_settings_test_notification,
+                'settings:open_audit_log': self._dashboard_settings_open_audit_log,
+                'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
             })
         else:
             _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
@@ -179,10 +184,82 @@ class FreelanceTrackerApp(rumps.App):
         subprocess.run(["open", str(CACHE_DIR)], check=False)
 
     def _dashboard_preferences(self):
-        """Called from dashboard Settings button."""
+        """Legacy callback for the dashboard Settings action.
+
+        The dashboard now switches to an in-popover settings view, so this
+        callback is no longer invoked from the popover. Kept as an emergency
+        fallback (and still used by the rumps `Edit Preferences` item).
+        """
         if self.dashboard is not None:
             self.dashboard.hide()
         self.prefs_controller.show_window()
+
+    def _dashboard_settings_save(self, payload):
+        """Save settings payload from the in-popover settings view.
+
+        Phase 1: empty payload, no-op ack. Real save assembly lives in
+        `settings_handler.apply_settings_save` once fields are wired in
+        Phase 2+.
+        """
+        try:
+            from settings_handler import apply_settings_save
+            result = apply_settings_save(payload or {})
+        except Exception as exc:
+            _debug(f"settings_save failed: {exc}")
+            result = {"ok": False, "errors": [f"Save failed: {exc}"]}
+        if self.dashboard is not None:
+            self.dashboard.settings_ack(result)
+        # Do NOT call self.update_display() here: it reloads the popover HTML
+        # and wipes the "Saved ✓" flash. The dashboard picks up the new
+        # preferences on the next auto-refresh cycle, and also refreshes
+        # immediately when the user navigates back to the dashboard view.
+
+    def _dashboard_settings_test_notification(self):
+        """Post a sample billing-reminder notification."""
+        from billing_reminders import reminder_notification
+        title, subtitle, message = reminder_notification({
+            "project_name": "Example Project",
+            "task": "invoice",
+        })
+        try:
+            rumps.notification(title, subtitle, message)
+        except Exception as exc:
+            _debug(f"test notification failed: {exc}")
+
+    def _dashboard_settings_open_audit_log(self):
+        """Open the Toggl API audit log via Terminal."""
+        from pathlib import Path
+        log_path = Path.home() / "Library" / "Logs" / "toggl-api-audit.log"
+        applescript = f'''
+        tell application "Terminal"
+            activate
+            do script "tail -f {log_path}"
+        end tell
+        '''
+        try:
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as exc:
+            _debug(f"open_audit_log failed: {exc}")
+
+    def _dashboard_settings_refresh_stripe(self, payload):
+        """Refresh the Stripe customer list using the supplied API key."""
+        api_key = (payload or {}).get("api_key") or ""
+        try:
+            from stripe_invoice import list_customers
+            customers = list_customers(api_key=api_key)
+        except Exception as exc:
+            _debug(f"refresh_stripe failed: {exc}")
+            customers = []
+        reply = {
+            "type": "stripe_customers",
+            "ok": True,
+            "customers": [
+                {"id": c.get("id", ""), "display_name": c.get("display_name") or c.get("id", "")}
+                for c in customers
+            ],
+        }
+        if self.dashboard is not None:
+            self.dashboard.settings_ack(reply)
 
     def _dashboard_quit(self):
         """Called from dashboard Quit button."""
