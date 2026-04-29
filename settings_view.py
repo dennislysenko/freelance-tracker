@@ -345,18 +345,21 @@ def generate_settings_css():
     .settings-toast {
         position: fixed;
         right: 12px;
-        top: 12px;
+        top: 10px;
         padding: 6px 10px;
         border-radius: 8px;
         background: rgba(63,185,80,0.18);
         color: #3fb950;
         border: 1px solid rgba(63,185,80,0.36);
         font-size: 11px;
+        line-height: 1;
         opacity: 0;
         transition: opacity 0.2s ease;
         z-index: 30;
+        pointer-events: none;
     }
     .settings-toast.show { opacity: 1; }
+    .settings-btn.saved-hidden { visibility: hidden; }
 
     /* Projects tab: rows own the conditional-field visibility via data-type */
     .pd-row .pd-field { display: none; }
@@ -1278,11 +1281,10 @@ def generate_settings_js():
             window.setTimeout(function() { toast.classList.remove('show'); }, 1500);
         }
         if (btn) {
-            var original = btn.textContent;
-            btn.textContent = 'Saved \u2713';
+            btn.classList.add('saved-hidden');
             btn.disabled = true;
             window.setTimeout(function() {
-                btn.textContent = original || 'Save';
+                btn.classList.remove('saved-hidden');
                 btn.disabled = false;
             }, 1500);
         }
