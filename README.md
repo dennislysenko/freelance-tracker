@@ -11,7 +11,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 📋 **Click-to-copy today descriptions** from expanded time blocks in the Today breakdown
 - 📉 **This Week collapsed by default** to keep the dashboard tighter unless you need that breakdown
 - 🆕 **Dashboard update shortcut** in the main popover footer
-- ⚙️ **Settings button** in the main popover, with API audit log access under the Preferences `Advanced` tab
+- ⚙️ **Settings** opens directly in the dashboard popover (`⋯` → `Settings`) with all six tabs (Caching, Work Planning, Projects, Billing, Integrations, Advanced). Dynamic add/remove rows, masked credential inputs with a show/hide toggle, and inline validation errors. API audit log access is under `Advanced`.
 - 🔄 **Auto-refresh** every 30 minutes
 - 📈 **Month projection** based on pace, accounting for planned days off
 - 🧾 **Invoice-date pacing** for capped projects — paces from your last bill, not the 1st of the month
@@ -195,6 +195,10 @@ Hold `Cmd` and drag the icon left or right in the menu bar.
 ```
 freelance-workflow/
 ├── menubar_app.py              # Main menu bar app
+├── dashboard_panel.py          # WebKit popover (canonical UI)
+├── settings_view.py            # In-popover preferences view (HTML/CSS/JS)
+├── settings_handler.py         # Save/validate logic for the in-popover view
+├── preferences_window.py       # Deprecated AppKit preferences window (fallback only)
 ├── stress_storage.py           # SQLite database layer
 ├── toggl_data.py               # Toggl API integration
 ├── toggl_earnings.py           # CLI version

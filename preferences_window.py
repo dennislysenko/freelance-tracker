@@ -1,4 +1,15 @@
-"""Native macOS preferences window for Freelance Tracker."""
+"""Native macOS preferences window for Freelance Tracker.
+
+DEPRECATED (2026-04-20): The canonical preferences UI is now the in-popover
+settings view rendered by `settings_view.py` + `settings_handler.py`, wired
+through `dashboard_panel.py`. Both UIs read/write the same files
+(`preferences.json`, `.env`, `retainer_carryover.json`), so a save from either
+path is identical.
+
+This window is retained only as the fallback path for the rumps menu when the
+WebKit popover is unavailable (missing PyObjC/WebKit bindings). Slated for
+removal once that fallback is itself retired. Do not add new features here.
+"""
 
 import json
 import subprocess
