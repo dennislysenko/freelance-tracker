@@ -1295,6 +1295,14 @@ def calculate_monthly_projection():
         elif bt == 'hourly':
             has_uncapped_hourly = True
 
+    # Toggl-rate projects (billable via Toggl's project rate, not in projects_config)
+    # are effectively uncapped hourly — without this, the cap below clamps their
+    # projected earnings to the hourly_with_cap ceiling.
+    for proj in monthly_data.get('projects', []):
+        if proj.get('rate_source') == 'toggl' and proj.get('earnings', 0) > 0:
+            has_uncapped_hourly = True
+            break
+
     # Add lbd ceilings to capped_ceiling for the overall cap check
     for proj_name, defn in projects_config.items():
         if defn.get('billing_type') == 'hourly_with_cap' and defn.get('last_billed_date'):
