@@ -115,6 +115,7 @@ class FreelanceTrackerApp(rumps.App):
                 'open_upwork_diary': self._dashboard_open_upwork_diary,
                 'save_upwork_contract': self._dashboard_save_upwork_contract,
                 'copy_text': self._dashboard_copy_text,
+                'copy_diagnostics': self._dashboard_copy_diagnostics,
                 # In-popover settings view (settings:<name> bridge messages)
                 'settings:save': self._dashboard_settings_save,
                 'settings:test_notification': self._dashboard_settings_test_notification,
@@ -597,6 +598,27 @@ class FreelanceTrackerApp(rumps.App):
         pasteboard = NSPasteboard.generalPasteboard()
         pasteboard.clearContents()
         pasteboard.setString_forType_(text, NSPasteboardTypeString)
+
+    def _dashboard_copy_diagnostics(self):
+        """Serialize the (anonymized) projection diagnostics to the clipboard."""
+        try:
+            from diagnostics import diagnostics_json
+            payload = diagnostics_json(anonymize=True)
+        except Exception as exc:
+            _debug(f"Copy diagnostics failed: {exc}")
+            rumps.alert("Copy diagnostics failed", str(exc))
+            return
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(payload, NSPasteboardTypeString)
+        try:
+            rumps.notification(
+                "Projection diagnostics copied",
+                "Anonymized — safe to share",
+                "Paste it wherever you're debugging the pace estimate.",
+            )
+        except Exception:
+            pass
 
     def _save_stripe_customer_mapping(self, project_name, customer_id):
         """Persist a discovered Stripe customer mapping so future invoices skip re-selection."""

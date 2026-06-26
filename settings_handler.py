@@ -197,6 +197,21 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
         new_prefs["projects"] = projects_config
         prefs_changed = True
 
+    # Rev share is a single scalar in the form, but stored month-keyed so it
+    # never carries a stale amount into the next month. Python derives the
+    # current month (don't trust the client clock). 0/blank clears this month.
+    if "rev_share_this_month" in payload:
+        from datetime import datetime
+        ym = datetime.now().strftime("%Y-%m")
+        rev_map = dict(new_prefs.get("monthly_rev_share", {}) or {})
+        amount = _safe_float(payload.get("rev_share_this_month"))
+        if amount > 0:
+            rev_map[ym] = int(amount) if amount == int(amount) else amount
+        else:
+            rev_map.pop(ym, None)
+        new_prefs["monthly_rev_share"] = rev_map
+        prefs_changed = True
+
     if "billing_reminders_rows" in payload:
         new_prefs["billing_reminders"] = translate_reminder_rows(payload["billing_reminders_rows"])
         prefs_changed = True

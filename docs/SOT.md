@@ -53,7 +53,19 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - Accounts for business days vs worked days
 - Configurable vacation days
 - Formula for hourly projects: `(earnings ÷ worked days) × workable days`
-- `fixed_monthly` projects are always treated as guaranteed income — only `hourly` and `hourly_with_cap` earnings are extrapolated by pace: `fixed_monthly_total + project((variable earnings) by pace)`
+- `fixed_monthly` projects are always treated as guaranteed income — only `hourly` and `hourly_with_cap` earnings are extrapolated by pace: `fixed_monthly_total + rev_share + project((variable earnings) by pace)`
+- **Monthly rev share**: a manually-entered, variable rev-share amount for the current month (set in Settings → Work Planning, e.g. last month $3k, this month $7k). It is added to the projection as guaranteed income (not extrapolated by pace) and shown as a "$X rev share (this month)" breakdown line. Stored per month (`monthly_rev_share: {"YYYY-MM": amount}`), so it never carries a stale value forward — each new month starts blank until you enter the new amount; entering `0` clears it. No Toggl API calls.
+
+#### Projection Diagnostics Export
+
+Settings → Advanced → **Copy Projection Diagnostics** copies an **anonymized** JSON snapshot of the projection math to the clipboard, so a user can share *why* their on-pace estimate looks wrong without exposing rates or client names. Implemented in `diagnostics.py`; uses only already-cached data (0 Toggl API calls).
+
+The blob contains the projection-relevant config (`projects`, `vacation_days_per_month`, `monthly_rev_share`, `retainer_hourly_rates`, `project_targets`), the full `calculate_monthly_projection()` result including its `trace` of raw intermediate terms (`current_total`, `variable_earnings`, `worked_day_dates`, cap state, etc.), and the `calculate_period_earnings("monthly")` per-project breakdown (rate, `rate_source`, hours, earnings — where misclassification shows up).
+
+Anonymization (always on for the share button):
+- Project names → stable labels (`Project A`, `Project B`, …). `monthly_rev_share` month keys are left intact.
+- Every monetary value (rates **and** dollar amounts) is multiplied by a single undisclosed constant, which is then dropped. Because the projection math is linear in dollars, all ratios and the `projected_variable` vs `capped_ceiling` cap comparison are preserved while absolute rates/earnings are removed. The inter-project rate *ratio* necessarily survives — it is the math being debugged.
+- Secrets are structurally excluded: API tokens live in `.env`, never in `preferences.json`. The `stripe_project_customers` / `upwork_contracts` mappings are dropped entirely (irrelevant to projection, and sensitive).
 
 ### Project Definitions
 
@@ -199,6 +211,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Configurable refresh intervals
 - Customizable goals and targets
 - Vacation day settings
+- Work Planning tab: "This Month's Rev Share" field for variable rev-share income, added to the current month's projection (`monthly_rev_share` key, month-scoped)
 - Billing tab supports weekly local reminder rules like `Friday 14:00 → invoice Acme Inc`
 - Cache TTL controls
 - Project definitions with billing types (`projects` key)

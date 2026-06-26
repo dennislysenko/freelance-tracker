@@ -479,7 +479,11 @@ def _render_panel_caching(prefs):
 
 
 def _render_panel_work(prefs):
+    from datetime import datetime
     vac = int(prefs.get("vacation_days_per_month", 4) or 0)
+    _this_month = datetime.now().strftime("%Y-%m")
+    rev_share = prefs.get("monthly_rev_share", {}).get(_this_month, 0) or 0
+    rev_share_val = int(rev_share) if rev_share == int(rev_share) else rev_share
     targets = prefs.get("project_targets", {}) or {}
     rows_html = []
     for name, hours in targets.items():
@@ -501,6 +505,16 @@ def _render_panel_work(prefs):
     <div class="settings-field">
         <label for="set_vacation_days">Vacation Days/Month</label>
         <input type="number" id="set_vacation_days" min="0" max="31" value="{vac}">
+    </div>
+    <div class="settings-field">
+        <label for="set_rev_share">This Month's Rev Share</label>
+        <input type="number" id="set_rev_share" min="0" step="1" value="{rev_share_val}">
+    </div>
+    <div class="settings-help">
+        Variable rev-share income for the current month (<code>{_this_month}</code>),
+        added to this month's projection as guaranteed income. It is stored per month,
+        so next month starts blank — set it again when you know the new amount.
+        Enter <code>0</code> to clear it.
     </div>
     <div class="settings-help">
         Monthly hour goals for <code>hourly</code> projects and projects without a
@@ -840,6 +854,14 @@ def _render_panel_advanced():
     <div class="settings-help">Advanced tools for troubleshooting and diagnostics.</div>
     <button class="settings-btn" type="button"
             onclick="postAction('settings:open_audit_log')">View API Audit Log</button>
+    <button class="settings-btn" type="button"
+            onclick="postAction('copy_diagnostics')">Copy Projection Diagnostics</button>
+    <div class="settings-help">
+        Copies an <strong>anonymized</strong> snapshot of your projection math to the
+        clipboard — config plus the computed month, with project names replaced by
+        labels and all rates/amounts normalized (absolute dollars removed, ratios kept).
+        Share it to debug why an on-pace estimate looks off. No secrets are included.
+    </div>
     """
 
 
@@ -1060,6 +1082,7 @@ def generate_settings_js():
             cache_ttl_projects: settingsReadInt('set_cache_ttl_projects', 0),
             cache_ttl_today: settingsReadInt('set_cache_ttl_today', 0),
             vacation_days_per_month: settingsReadInt('set_vacation_days', 0),
+            rev_share_this_month: settingsReadInt('set_rev_share', 0),
             project_targets: settingsCollectProjectTargets(),
             projects_rows: settingsCollectProjectRows(),
             billing_reminders_rows: settingsCollectReminderRows(),

@@ -632,6 +632,8 @@ class DashboardPanelController:
             height += 44
             if projection.get('fixed_monthly_total', 0) > 0:
                 height += 14
+            if projection.get('rev_share_amount', 0) > 0:
+                height += 14
             if projection.get('daily_average', 0) > 0:
                 height += 14
             if projection.get('vacation_days', 0) > 0:
@@ -877,10 +879,13 @@ class DashboardPanelController:
             daily_avg = projection.get('daily_average', 0)
             fixed_total = projection.get('fixed_monthly_total', 0)
             projected_variable = projection.get('projected_variable', 0)
+            rev_share = projection.get('rev_share_amount', 0)
 
             projection_details = ""
             if fixed_total > 0:
                 projection_details += f'<div class="projection-detail">${fixed_total:,.0f} fixed + ${projected_variable:,.0f} projected hourly</div>'
+            if rev_share > 0:
+                projection_details += f'<div class="projection-detail">${rev_share:,.0f} rev share (this month)</div>'
             if daily_avg > 0:
                 projection_details += f'<div class="projection-detail">Hourly daily avg: ${daily_avg:,.0f}</div>'
             if vacation > 0:

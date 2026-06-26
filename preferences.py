@@ -18,6 +18,7 @@ DEFAULT_PREFERENCES = {
     "cache_ttl_today": 1800,  # 30 minutes
     "vacation_days_per_month": 4,  # Vacation days to exclude from projection
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
+    "monthly_rev_share": {},  # Variable rev-share income by month: {"2026-06": 7000}. Added to that month's projection as guaranteed income.
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
     "projects": {},  # Project definitions by name: see docs/SOT.md for schema
     "stripe_project_customers": {},  # Optional Stripe customer ids by project name
@@ -150,6 +151,30 @@ def validate_preferences(prefs):
                 if hours < 0:
                     errors.append(
                         f"'project_targets.{project_name}': must be non-negative (got {hours})"
+                    )
+
+    # Optional field: monthly_rev_share (month key "YYYY-MM" -> non-negative amount)
+    if 'monthly_rev_share' in prefs:
+        monthly_rev_share = prefs['monthly_rev_share']
+
+        if not isinstance(monthly_rev_share, dict):
+            errors.append("'monthly_rev_share': must be an object/dictionary")
+        else:
+            import re
+            for month_key, amount in monthly_rev_share.items():
+                if not isinstance(month_key, str) or not re.match(r'^\d{4}-\d{2}$', month_key):
+                    errors.append(
+                        f"'monthly_rev_share': key '{month_key}' must be 'YYYY-MM' format"
+                    )
+                    continue
+                if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                    errors.append(
+                        f"'monthly_rev_share.{month_key}': must be a number, got {type(amount).__name__}"
+                    )
+                    continue
+                if amount < 0:
+                    errors.append(
+                        f"'monthly_rev_share.{month_key}': must be non-negative (got {amount})"
                     )
 
     # Optional field: retainer_hourly_rates

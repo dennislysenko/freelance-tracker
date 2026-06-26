@@ -1209,6 +1209,11 @@ def calculate_monthly_projection():
         if defn.get('billing_type') == 'fixed_monthly'
     )
 
+    # Rev share for the current month (manually entered, treated as guaranteed
+    # income for this month only — not extrapolated by pace).
+    current_month_key = today.strftime('%Y-%m')
+    rev_share_amount = prefs.get('monthly_rev_share', {}).get(current_month_key, 0) or 0
+
     # Remaining business days in current month (from tomorrow onwards)
     last_day_of_month = calendar.monthrange(today.year, today.month)[1]
     remaining_biz_days = sum(
@@ -1316,11 +1321,12 @@ def calculate_monthly_projection():
     if is_projection_capped:
         projected_variable = capped_ceiling
 
-    projected_total = fixed_monthly_total + projected_variable
+    projected_total = fixed_monthly_total + rev_share_amount + projected_variable
 
     return {
         "projected_earnings": projected_total,
         "fixed_monthly_total": fixed_monthly_total,
+        "rev_share_amount": rev_share_amount,
         "projected_variable": projected_variable,
         "worked_days": worked_days_count,
         "total_business_days": total_business_days,
@@ -1329,4 +1335,15 @@ def calculate_monthly_projection():
         "daily_average": daily_variable_avg,
         "is_projection_capped": is_projection_capped,
         "capped_ceiling": capped_ceiling if not has_uncapped_hourly else None,
+        # Raw intermediate terms — surfaced for diagnostics so a "weird" pace
+        # can be traced back to its inputs without re-deriving the math.
+        "trace": {
+            "current_total": current_total,
+            "fixed_earnings_so_far": fixed_earnings_so_far,
+            "lbd_current_earnings": lbd_current_earnings,
+            "lbd_projected_earnings": lbd_projected_earnings,
+            "variable_earnings": variable_earnings,
+            "has_uncapped_hourly": has_uncapped_hourly,
+            "worked_day_dates": sorted(worked_days),
+        },
     }

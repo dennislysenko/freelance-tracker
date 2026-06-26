@@ -164,6 +164,10 @@ For `hourly_with_cap` projects that set `last_billed_date`, the dashboard switch
 
 Example: If you earned $1,000 in 4 worked days, with 20 business days and 4 vacation days (16 workable days), your projection is $4,000.
 
+**Monthly rev share**: If a contract pays you a variable rev share that you know (at least approximately) at the start of the month, enter it under **Settings → Work Planning → This Month's Rev Share**. The amount is added to that month's projection as guaranteed income — it is *not* extrapolated by pace — and appears as a "$X rev share (this month)" line in the projection breakdown. It is stored per month, so it never carries a stale value into the next month: each new month starts blank until you enter the new amount (enter `0` to clear it). No Toggl API calls are made.
+
+**Projection diagnostics (debugging a weird estimate)**: If your on-pace projection looks wrong, open **Settings → Advanced → Copy Projection Diagnostics**. It copies an **anonymized** JSON snapshot of the projection math to your clipboard — your config plus the fully computed month (including the raw intermediate terms the pace is derived from) — that you can paste to someone (or back to Claude) to figure out why. Project names are replaced with labels (`Project A`, `Project B`, …) and every rate/amount is normalized so absolute dollars are removed while the ratios that drive the math are preserved. No API tokens or client mappings are included.
+
 To adjust vacation days, edit preferences:
 ```json
 {
