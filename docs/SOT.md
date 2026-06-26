@@ -127,6 +127,8 @@ Banding (first match wins):
 7. `effective_ratio ≥ 0.5` → **Behind — ramp up to stay on track** (blue)
 8. else → **Way behind — needs attention** (blue)
 
+**Late-cycle feasibility guard** (`hourly_with_cap` only): the proportional ratio above keeps crediting time that has not elapsed yet, so a cap that is mathematically out of reach can still read green in the final couple of days. As a counterpart to the early-cycle shrinkage, once the cycle is near its end (`calendar_pct ≥ 80`) and only the last business days remain (remaining business days in the cycle ≤ 2), if filling the cap would now require more than a full workday (>8h) per remaining business day, a green band is downgraded to **Behind — cap out of reach** (blue). It runs after banding, only ever turns green → blue, and is inert with 3+ business days left, so earlier-cycle pacing is unchanged. Remaining business days come from `get_lbd_remaining_business_days` (LBD projects) or the remaining weekdays in the month (calendar-month caps).
+
 #### Project Definition Schema
 
 ```json

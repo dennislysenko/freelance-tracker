@@ -13,7 +13,11 @@ from AppKit import (
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
 from preferences import load_preferences, save_preferences, DEFAULT_PREFERENCES
 from carryover import get_previous_month_balance
-from toggl_data import get_lbd_billing_cycle_bounds, get_lbd_cycle_progress
+from toggl_data import (
+    get_lbd_billing_cycle_bounds,
+    get_lbd_cycle_progress,
+    get_lbd_remaining_business_days,
+)
 from integrations import load_integration_settings
 from settings_view import (
     generate_settings_css,
@@ -820,6 +824,36 @@ class DashboardPanelController:
                 else:
                     bar_color = "#58a6ff"
                     status_text = "Way behind \u2014 needs attention"
+
+                # Late-cycle feasibility guard (capped projects only). The pace
+                # ratio above still credits time that hasn't elapsed, so a cap
+                # that is mathematically out of reach can still read "on pace"
+                # in the final couple of days. If filling the cap would now need
+                # more than a full workday (8h) per remaining business day,
+                # downgrade. Only ever turns green -> "Behind"; with 3+ business
+                # days left this branch does nothing, so earlier-cycle pacing is
+                # untouched.
+                if (billing_type == 'hourly_with_cap' and bar_color == "#3fb950"
+                        and calendar_pct >= 80):
+                    if proj_def.get('last_billed_date'):
+                        try:
+                            remaining_biz_days = get_lbd_remaining_business_days(
+                                proj_def['last_billed_date'], today=today)
+                        except ValueError:
+                            remaining_biz_days = None
+                    else:
+                        remaining_biz_days = sum(
+                            1 for d in range(today.day + 1, days_in_month + 1)
+                            if date(today.year, today.month, d).weekday() < 5
+                        )
+                    if remaining_biz_days is not None and remaining_biz_days <= 2:
+                        hours_needed = effective_target - p['hours']
+                        if hours_needed > 0 and (
+                            remaining_biz_days == 0
+                            or hours_needed / remaining_biz_days > 8.0
+                        ):
+                            bar_color = "#58a6ff"
+                            status_text = "Behind \u2014 cap out of reach"
 
                 carryover_html = ""
                 if carryover_balance != 0.0:

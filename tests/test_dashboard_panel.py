@@ -255,6 +255,86 @@ def test_lbd_capped_projects_use_billing_cycle_pace(monkeypatch):
     assert 'class="calendar-marker" style="left: 20.0%;' in html
 
 
+def test_late_cycle_unreachable_cap_downgrades_to_behind(monkeypatch):
+    """Final 2 business days: if filling the cap needs >8h/day, a green
+    'on pace' is downgraded to 'cap out of reach'."""
+    controller = _make_controller()
+
+    monkeypatch.setattr(
+        dashboard_panel,
+        "load_preferences",
+        lambda: {
+            "project_targets": {},
+            "projects": {
+                "Retainer Client": {
+                    "billing_type": "hourly_with_cap",
+                    "hourly_rate": 200,
+                    "cap_hours": 132,
+                    "last_billed_date": "2026-04-10",
+                },
+            },
+            "dashboard_sections": {"today": True, "week": True, "month": True},
+        },
+    )
+    monkeypatch.setattr(dashboard_panel, "get_previous_month_balance", lambda name: (0.0, "Mar"))
+    # 104/132 = 78.7% done, 87.5% of cycle elapsed -> pace ratio ~0.90 -> "On pace".
+    monkeypatch.setattr(dashboard_panel, "get_lbd_cycle_progress",
+                        lambda last_billed_date, today=None: 87.5)
+    # 2 business days left; 28h needed / 2 = 14h/day > 8 -> unreachable.
+    monkeypatch.setattr(dashboard_panel, "get_lbd_remaining_business_days",
+                        lambda last_billed_date, today=None: 2)
+
+    html = controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {"total": 20800, "all_projects": [
+            {"name": "Retainer Client", "earnings": 20800, "hours": 104.0, "billable": True},
+        ], "projection": {}},
+    )
+
+    assert "cap out of reach" in html
+    assert "On pace" not in html
+
+
+def test_late_cycle_reachable_cap_stays_on_pace(monkeypatch):
+    """Same tail of the cycle, but the remaining gap is small enough to finish
+    at a normal pace -> the guard must NOT fire."""
+    controller = _make_controller()
+
+    monkeypatch.setattr(
+        dashboard_panel,
+        "load_preferences",
+        lambda: {
+            "project_targets": {},
+            "projects": {
+                "Retainer Client": {
+                    "billing_type": "hourly_with_cap",
+                    "hourly_rate": 200,
+                    "cap_hours": 132,
+                    "last_billed_date": "2026-04-10",
+                },
+            },
+            "dashboard_sections": {"today": True, "week": True, "month": True},
+        },
+    )
+    monkeypatch.setattr(dashboard_panel, "get_previous_month_balance", lambda name: (0.0, "Mar"))
+    monkeypatch.setattr(dashboard_panel, "get_lbd_cycle_progress",
+                        lambda last_billed_date, today=None: 87.5)
+    monkeypatch.setattr(dashboard_panel, "get_lbd_remaining_business_days",
+                        lambda last_billed_date, today=None: 2)
+
+    # 124/132 = 93.9% done; only 8h to go over 2 days = 4h/day -> reachable.
+    html = controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {"total": 24800, "all_projects": [
+            {"name": "Retainer Client", "earnings": 24800, "hours": 124.0, "billable": True},
+        ], "projection": {}},
+    )
+
+    assert "cap out of reach" not in html
+
+
 def _early_cycle_prefs():
     return {
         "project_targets": {},
