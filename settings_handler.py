@@ -27,6 +27,7 @@ _SETTINGS_KEYS = (
     "cache_ttl_projects",
     "cache_ttl_today",
     "vacation_days_per_month",
+    "days_off_keywords",
     "project_targets",
     "stripe_project_customers",
     "upwork_contracts",
@@ -231,12 +232,18 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
             "TOGGL_API_TOKEN": str(integrations_payload.get("TOGGL_API_TOKEN", "") or "").strip(),
             "TOGGL_WORKSPACE_ID": str(integrations_payload.get("TOGGL_WORKSPACE_ID", "") or "").strip(),
             "STRIPE_API_KEY": str(integrations_payload.get("STRIPE_API_KEY", "") or "").strip(),
+            "GOOGLE_CALENDAR_ICS_URL": str(
+                integrations_payload.get("GOOGLE_CALENDAR_ICS_URL", "") or ""
+            ).strip(),
         }
         if not integration_settings["TOGGL_API_TOKEN"]:
             errors.append("Toggl API Token is required")
         stripe_key = integration_settings["STRIPE_API_KEY"]
         if stripe_key and not stripe_key.startswith("sk_"):
             errors.append("Stripe API Key must start with 'sk_'")
+        calendar_url = integration_settings["GOOGLE_CALENDAR_ICS_URL"]
+        if calendar_url and not calendar_url.startswith(("http://", "https://")):
+            errors.append("Google Calendar ICS URL must start with http(s)://")
         integrations_changed = True
 
     # Validate

@@ -11,6 +11,7 @@ DEFAULT_INTEGRATIONS = {
     "TOGGL_API_TOKEN": "",
     "TOGGL_WORKSPACE_ID": "",
     "STRIPE_API_KEY": "",
+    "GOOGLE_CALENDAR_ICS_URL": "",
 }
 
 

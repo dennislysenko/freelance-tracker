@@ -52,6 +52,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - Intelligent forecast based on current performance
 - Accounts for business days vs worked days
 - Configurable vacation days
+- **Google Calendar days off (optional)**: when a Google Calendar secret iCal URL is set (Settings → Integrations → "Google Calendar ICS URL", stored as `GOOGLE_CALENDAR_ICS_URL` in `.env`), the projection counts the month's *actual* days off instead of the flat `vacation_days_per_month` estimate. A business day counts as off when a calendar event's title matches one of the configurable `days_off_keywords` (Settings → Work Planning; case-insensitive substring, defaults include "vacation", "day off", "ooo", "out of office", "ceo day", "holiday", "pto"). Recurring events (e.g. a weekly "CEO Day") are expanded via RRULE and count once per occurrence; multi-day all-day events count each covered business day (weekend days never reduce workable days). The dashboard shows "N days off excluded (from calendar)" when the calendar drives the count. The flat `vacation_days_per_month` remains the fallback when no URL is configured or the feed is unreachable with no cache. Implemented in `calendar_days_off.py`. API cost: 0 Toggl calls; the ICS feed is fetched at most once per 6 hours and cached in `~/Library/Caches/TogglMenuBar/` (a stale cache is reused when a fetch fails).
 - Formula for hourly projects: `(earnings ÷ worked days) × workable days`
 - `fixed_monthly` projects are always treated as guaranteed income — only `hourly` and `hourly_with_cap` earnings are extrapolated by pace: `fixed_monthly_total + rev_share + project((variable earnings) by pace)`
 - **Monthly rev share**: a manually-entered, variable rev-share amount for the current month (set in Settings → Work Planning, e.g. last month $3k, this month $7k). It is added to the projection as guaranteed income (not extrapolated by pace) and shown as a "$X rev share (this month)" breakdown line. Stored per month (`monthly_rev_share: {"YYYY-MM": amount}`), so it never carries a stale value forward — each new month starts blank until you enter the new amount; entering `0` clears it. No Toggl API calls.
@@ -60,7 +61,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 
 Settings → Advanced → **Copy Projection Diagnostics** copies an **anonymized** JSON snapshot of the projection math to the clipboard, so a user can share *why* their on-pace estimate looks wrong without exposing rates or client names. Implemented in `diagnostics.py`; uses only already-cached data (0 Toggl API calls).
 
-The blob contains the projection-relevant config (`projects`, `vacation_days_per_month`, `monthly_rev_share`, `retainer_hourly_rates`, `project_targets`), the full `calculate_monthly_projection()` result including its `trace` of raw intermediate terms (`current_total`, `variable_earnings`, `worked_day_dates`, cap state, etc.), and the `calculate_period_earnings("monthly")` per-project breakdown (rate, `rate_source`, hours, earnings — where misclassification shows up).
+The blob contains the projection-relevant config (`projects`, `vacation_days_per_month`, `days_off_keywords`, `monthly_rev_share`, `retainer_hourly_rates`, `project_targets`), the full `calculate_monthly_projection()` result including its `trace` of raw intermediate terms (`current_total`, `variable_earnings`, `worked_day_dates`, cap state, etc.), and the `calculate_period_earnings("monthly")` per-project breakdown (rate, `rate_source`, hours, earnings — where misclassification shows up).
 
 Anonymization (always on for the share button):
 - Project names → stable labels (`Project A`, `Project B`, …). `monthly_rev_share` month keys are left intact.
@@ -212,12 +213,13 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - JSON-based configuration
 - Configurable refresh intervals
 - Customizable goals and targets
-- Vacation day settings
+- Vacation day settings (fallback when no days-off calendar is configured)
+- Work Planning tab: "Days Off Keywords" field (comma-separated) controlling which calendar events mark a day off (`days_off_keywords` key)
 - Work Planning tab: "This Month's Rev Share" field for variable rev-share income, added to the current month's projection (`monthly_rev_share` key, month-scoped)
 - Billing tab supports weekly local reminder rules like `Friday 14:00 → invoice Acme Inc`
 - Cache TTL controls
 - Project definitions with billing types (`projects` key)
-- Integrations tab lets the user update the Toggl API token, Toggl workspace id, and Stripe API key after installation
+- Integrations tab lets the user update the Toggl API token, Toggl workspace id, Stripe API key, and Google Calendar ICS URL after installation; an "Open Google Calendar Settings" button opens calendar.google.com's settings page in the browser to grab the secret iCal URL
 - Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
 - The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
 - `fixed_monthly` projects are always fixed in projections — no toggle needed

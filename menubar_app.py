@@ -120,6 +120,7 @@ class FreelanceTrackerApp(rumps.App):
                 'settings:save': self._dashboard_settings_save,
                 'settings:test_notification': self._dashboard_settings_test_notification,
                 'settings:open_audit_log': self._dashboard_settings_open_audit_log,
+                'settings:open_gcal_settings': self._dashboard_settings_open_gcal_settings,
                 'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
             })
         else:
@@ -241,6 +242,17 @@ class FreelanceTrackerApp(rumps.App):
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as exc:
             _debug(f"open_audit_log failed: {exc}")
+
+    def _dashboard_settings_open_gcal_settings(self):
+        """Open Google Calendar's settings page (secret iCal URL lives under
+        the specific calendar's "Integrate calendar" section)."""
+        try:
+            subprocess.run(
+                ["open", "https://calendar.google.com/calendar/u/0/r/settings"],
+                check=False,
+            )
+        except Exception as exc:
+            _debug(f"open_gcal_settings failed: {exc}")
 
     def _dashboard_settings_refresh_stripe(self, payload):
         """Refresh the Stripe customer list using the supplied API key."""

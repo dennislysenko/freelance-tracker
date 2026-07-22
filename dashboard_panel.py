@@ -948,7 +948,8 @@ class DashboardPanelController:
             if daily_avg > 0:
                 projection_details += f'<div class="projection-detail">Hourly daily avg: ${daily_avg:,.0f}</div>'
             if vacation > 0:
-                projection_details += f'<div class="projection-detail">{vacation} days off excluded</div>'
+                from_calendar = " (from calendar)" if projection.get('vacation_source') == 'calendar' else ""
+                projection_details += f'<div class="projection-detail">{vacation} days off excluded{from_calendar}</div>'
 
             projection_html = f"""
             <div class="section projection-section">

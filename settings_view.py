@@ -481,6 +481,7 @@ def _render_panel_caching(prefs):
 def _render_panel_work(prefs):
     from datetime import datetime
     vac = int(prefs.get("vacation_days_per_month", 4) or 0)
+    keywords_str = ", ".join(prefs.get("days_off_keywords") or [])
     _this_month = datetime.now().strftime("%Y-%m")
     rev_share = prefs.get("monthly_rev_share", {}).get(_this_month, 0) or 0
     rev_share_val = int(rev_share) if rev_share == int(rev_share) else rev_share
@@ -505,6 +506,18 @@ def _render_panel_work(prefs):
     <div class="settings-field">
         <label for="set_vacation_days">Vacation Days/Month</label>
         <input type="number" id="set_vacation_days" min="0" max="31" value="{vac}">
+    </div>
+    <div class="settings-field">
+        <label for="set_days_off_keywords">Days Off Keywords</label>
+        <input type="text" id="set_days_off_keywords" value="{_esc(keywords_str)}"
+               spellcheck="false" autocorrect="off" autocapitalize="off">
+    </div>
+    <div class="settings-help">
+        With a Google Calendar ICS URL set (<strong>Integrations</strong> tab), business
+        days whose calendar events match one of these comma-separated keywords
+        (case-insensitive, recurring events included) are excluded from the month
+        projection. Vacation Days/Month is only the fallback when no calendar is
+        configured or it can’t be fetched.
     </div>
     <div class="settings-field">
         <label for="set_rev_share">This Month's Rev Share</label>
@@ -789,6 +802,7 @@ def _render_panel_integrations(prefs, integrations):
     token = integrations.get("TOGGL_API_TOKEN", "") or ""
     workspace = integrations.get("TOGGL_WORKSPACE_ID", "") or ""
     stripe_key = integrations.get("STRIPE_API_KEY", "") or ""
+    calendar_url = integrations.get("GOOGLE_CALENDAR_ICS_URL", "") or ""
 
     toggl_names = get_toggl_project_names()
     stripe_map = prefs.get("stripe_project_customers") or {}
@@ -827,6 +841,18 @@ def _render_panel_integrations(prefs, integrations):
     {field("Toggl API Token", "set_toggl_token", token, "password")}
     {field("Toggl Workspace ID", "set_toggl_workspace", workspace, "text")}
     {field("Stripe API Key", "set_stripe_key", stripe_key, "password")}
+    {field("Google Calendar ICS URL", "set_calendar_ics_url", calendar_url, "password")}
+    <div class="settings-help">
+        Optional. In Google Calendar settings, under <strong>Settings for my
+        calendars</strong> (left sidebar), choose the calendar you put your vacation
+        days on, then scroll to <strong>Integrate calendar</strong> &rarr;
+        <em>Secret address in iCal format</em> and copy it here. Lets the month
+        projection count your actual days off (see <strong>Work Planning</strong>
+        &rarr; Days Off Keywords) instead of a flat vacation estimate. Fetched at
+        most every 6 hours.
+    </div>
+    <button class="settings-btn" type="button"
+            onclick="postAction('settings:open_gcal_settings')">Open Google Calendar Settings</button>
 
     <div class="settings-panel-title" style="margin-top:18px;">Project Billing Mapping</div>
     <div class="settings-help">
@@ -1073,8 +1099,16 @@ def generate_settings_js():
         return {
             TOGGL_API_TOKEN: settingsReadField('set_toggl_token'),
             TOGGL_WORKSPACE_ID: settingsReadField('set_toggl_workspace'),
-            STRIPE_API_KEY: settingsReadField('set_stripe_key')
+            STRIPE_API_KEY: settingsReadField('set_stripe_key'),
+            GOOGLE_CALENDAR_ICS_URL: settingsReadField('set_calendar_ics_url')
         };
+    }
+
+    function settingsCollectDaysOffKeywords() {
+        return settingsReadField('set_days_off_keywords')
+            .split(',')
+            .map(function (s) { return s.trim(); })
+            .filter(function (s) { return s.length > 0; });
     }
 
     function settingsCollectForm() {
@@ -1082,6 +1116,7 @@ def generate_settings_js():
             cache_ttl_projects: settingsReadInt('set_cache_ttl_projects', 0),
             cache_ttl_today: settingsReadInt('set_cache_ttl_today', 0),
             vacation_days_per_month: settingsReadInt('set_vacation_days', 0),
+            days_off_keywords: settingsCollectDaysOffKeywords(),
             rev_share_this_month: settingsReadInt('set_rev_share', 0),
             project_targets: settingsCollectProjectTargets(),
             projects_rows: settingsCollectProjectRows(),

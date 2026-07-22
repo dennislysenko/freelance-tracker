@@ -209,7 +209,15 @@ class PreferencesWindowController:
             view, "Vacation Days/Month:", 20, y,
             self.current_prefs['vacation_days_per_month'], min_value=0
         )
-        y -= 60
+        y -= 40
+
+        # Days-off keywords (comma-separated; drives the Google Calendar
+        # days-off match, with vacation days as the no-calendar fallback)
+        self.widgets['days_off_keywords'] = self._create_text_field(
+            view, "Days Off Keywords:", 20, y,
+            ", ".join(self.current_prefs.get('days_off_keywords', []))
+        )
+        y -= 50
 
         # Project targets header
         label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 20))
@@ -453,6 +461,12 @@ class PreferencesWindowController:
 
         self.widgets['stripe_api_key'] = self._create_secure_field(
             view, "Stripe API Key:", 20, y, self.current_integrations.get('STRIPE_API_KEY', '')
+        )
+        y -= 40
+
+        self.widgets['calendar_ics_url'] = self._create_secure_field(
+            view, "Google Calendar ICS URL:", 20, y,
+            self.current_integrations.get('GOOGLE_CALENDAR_ICS_URL', '')
         )
         y -= 52
 
@@ -920,10 +934,14 @@ class PreferencesWindowController:
 
         # Load vacation days
         self.widgets['vacation_days'].setIntValue_(self.current_prefs['vacation_days_per_month'])
+        self.widgets['days_off_keywords'].setStringValue_(
+            ", ".join(self.current_prefs.get('days_off_keywords', []))
+        )
 
         self.widgets['toggl_api_token'].setStringValue_(self.current_integrations.get('TOGGL_API_TOKEN', ''))
         self.widgets['toggl_workspace_id'].setStringValue_(self.current_integrations.get('TOGGL_WORKSPACE_ID', ''))
         self.widgets['stripe_api_key'].setStringValue_(self.current_integrations.get('STRIPE_API_KEY', ''))
+        self.widgets['calendar_ics_url'].setStringValue_(self.current_integrations.get('GOOGLE_CALENDAR_ICS_URL', ''))
 
         # Load project targets into name/hours field pairs
         project_targets = self.current_prefs.get('project_targets', {})
@@ -1131,6 +1149,11 @@ class PreferencesWindowController:
             'cache_ttl_projects': self.widgets['cache_ttl_projects'].intValue(),
             'cache_ttl_today': self.widgets['cache_ttl_today'].intValue(),
             'vacation_days_per_month': self.widgets['vacation_days'].intValue(),
+            'days_off_keywords': [
+                kw.strip() for kw in
+                self.widgets['days_off_keywords'].stringValue().split(',')
+                if kw.strip()
+            ],
             'project_targets': project_targets,
             'projects': projects_config,
             'stripe_project_customers': stripe_project_customers,
@@ -1142,6 +1165,7 @@ class PreferencesWindowController:
             'TOGGL_API_TOKEN': self.widgets['toggl_api_token'].stringValue().strip(),
             'TOGGL_WORKSPACE_ID': self.widgets['toggl_workspace_id'].stringValue().strip(),
             'STRIPE_API_KEY': self.widgets['stripe_api_key'].stringValue().strip(),
+            'GOOGLE_CALENDAR_ICS_URL': self.widgets['calendar_ics_url'].stringValue().strip(),
         }
 
         integration_errors = []
@@ -1150,6 +1174,9 @@ class PreferencesWindowController:
         stripe_key = integration_settings['STRIPE_API_KEY']
         if stripe_key and not stripe_key.startswith('sk_'):
             integration_errors.append("Stripe API Key must start with 'sk_'")
+        calendar_url = integration_settings['GOOGLE_CALENDAR_ICS_URL']
+        if calendar_url and not calendar_url.startswith(('http://', 'https://')):
+            integration_errors.append("Google Calendar ICS URL must start with http(s)://")
 
         # Validate using existing function
         errors = validate_preferences(new_prefs)
@@ -1241,9 +1268,13 @@ class PreferencesWindowController:
             self.widgets['cache_ttl_projects'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_projects'])
             self.widgets['cache_ttl_today'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_today'])
             self.widgets['vacation_days'].setIntValue_(DEFAULT_PREFERENCES['vacation_days_per_month'])
+            self.widgets['days_off_keywords'].setStringValue_(
+                ", ".join(DEFAULT_PREFERENCES['days_off_keywords'])
+            )
             self.widgets['toggl_api_token'].setStringValue_("")
             self.widgets['toggl_workspace_id'].setStringValue_("")
             self.widgets['stripe_api_key'].setStringValue_("")
+            self.widgets['calendar_ics_url'].setStringValue_("")
 
             # Clear all project target fields
             for i in range(self.PROJECT_TARGET_ROWS):

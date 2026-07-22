@@ -178,6 +178,7 @@ def build_diagnostics(anonymize: bool = True) -> Dict[str, Any]:
         "anonymized": bool(anonymize),
         "config": {
             "vacation_days_per_month": prefs.get("vacation_days_per_month"),
+            "days_off_keywords": list(prefs.get("days_off_keywords", []) or []),
             "projects": _slim_projects_config(prefs.get("projects", {})),
             "retainer_hourly_rates": dict(prefs.get("retainer_hourly_rates", {}) or {}),
             "project_targets": dict(prefs.get("project_targets", {}) or {}),

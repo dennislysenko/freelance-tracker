@@ -1195,7 +1195,12 @@ def calculate_monthly_projection():
 
     prefs = load_preferences()
     projects_config = prefs.get('projects', {})
-    vacation_days = prefs.get('vacation_days_per_month', 4)
+
+    # Days off: actual calendar events (Google Calendar ICS) when configured,
+    # otherwise the flat vacation_days_per_month estimate.
+    from calendar_days_off import get_month_days_off
+    days_off_info = get_month_days_off(today.year, today.month, prefs=prefs)
+    vacation_days = days_off_info['vacation_days']
 
     # Get current month's earnings (includes fixed_earnings breakdown)
     monthly_data = calculate_period_earnings("monthly")
@@ -1332,6 +1337,7 @@ def calculate_monthly_projection():
         "total_business_days": total_business_days,
         "workable_days": workable_days,
         "vacation_days": vacation_days,
+        "vacation_source": days_off_info['source'],
         "daily_average": daily_variable_avg,
         "is_projection_capped": is_projection_capped,
         "capped_ceiling": capped_ceiling if not has_uncapped_hourly else None,
@@ -1345,5 +1351,6 @@ def calculate_monthly_projection():
             "variable_earnings": variable_earnings,
             "has_uncapped_hourly": has_uncapped_hourly,
             "worked_day_dates": sorted(worked_days),
+            "days_off_dates": days_off_info['dates'],
         },
     }

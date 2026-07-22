@@ -22,7 +22,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 📂 **Open Cache Folder** action in the dashboard refresh menu for quick Finder access
 - 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`. CSV and Stripe flows include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
 - ⏰ **Billing reminders** in Settings → `Billing` for local notifications on a weekly (`Friday 14:00`) or monthly (`Day 15`, `Last day of month`, `2nd-to-last day`) schedule
-- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, and Stripe API key after installation, plus save optional Upwork contract ids per project
+- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, Stripe API key, and Google Calendar ICS URL after installation, plus save optional Upwork contract ids per project
 - 💾 **Smart caching** to minimize Toggl API calls
   Dashboard, CSV export, Stripe draft invoices, capped billing-cycle calculations, and auto carryover all reuse the same shared day-based Toggl entry cache
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)
@@ -156,7 +156,7 @@ If the WebKit bridge is unavailable on a given machine (missing PyObjC, etc.), t
 
 The app automatically calculates your projected monthly earnings based on:
 - **Worked days**: Days with earnings-contributing time entries this month (Toggl billable rates or configured retainer overrides)
-- **Workable days**: Business days minus vacation days (default: 4 days)
+- **Workable days**: Business days minus days off — from your Google Calendar when connected (see below), otherwise the flat vacation-days estimate (default: 4 days)
 - **Daily average**: Current earnings ÷ worked days
 - **Projection**: Daily average × workable days
 
@@ -168,10 +168,18 @@ Example: If you earned $1,000 in 4 worked days, with 20 business days and 4 vaca
 
 **Projection diagnostics (debugging a weird estimate)**: If your on-pace projection looks wrong, open **Settings → Advanced → Copy Projection Diagnostics**. It copies an **anonymized** JSON snapshot of the projection math to your clipboard — your config plus the fully computed month (including the raw intermediate terms the pace is derived from) — that you can paste to someone (or back to Claude) to figure out why. Project names are replaced with labels (`Project A`, `Project B`, …) and every rate/amount is normalized so absolute dollars are removed while the ratios that drive the math are preserved. No API tokens or client mappings are included.
 
-To adjust vacation days, edit preferences:
+**Google Calendar days off**: Instead of a flat vacation estimate, the projection can count your *actual* days off from Google Calendar:
+
+1. In Google Calendar settings, under **Settings for my calendars** (left sidebar), choose the calendar you put your vacation days on → scroll to **Integrate calendar** → copy the **Secret address in iCal format**.
+2. Paste it into **Settings → Integrations → Google Calendar ICS URL** (stored in the local `.env`, never in `preferences.json`).
+3. Optionally tune **Settings → Work Planning → Days Off Keywords** (comma-separated; defaults include `vacation`, `day off`, `ooo`, `out of office`, `ceo day`, `holiday`, `pto`).
+
+Any business day with an event whose title contains one of the keywords counts as a day off — recurring events (like a weekly "CEO Day") count once per occurrence, and multi-day vacations count each covered weekday. The projection line shows "N days off excluded (from calendar)" when the calendar is driving the count. The feed is fetched at most every 6 hours and cached; if it can't be fetched and no cache exists, the app falls back to `vacation_days_per_month`.
+
+To adjust the fallback vacation days, use **Settings → Work Planning → Vacation Days/Month** or edit preferences:
 ```json
 {
-  "vacation_days_per_month": 4  // Change this to your typical vacation days
+  "vacation_days_per_month": 4  // Used only when no days-off calendar is configured
 }
 ```
 
@@ -181,6 +189,7 @@ Open **Settings → Integrations** to update credentials after install:
 - `TOGGL_API_TOKEN`
 - `TOGGL_WORKSPACE_ID`
 - `STRIPE_API_KEY`
+- `GOOGLE_CALENDAR_ICS_URL` (optional — powers calendar-driven days off in the month projection)
 
 The same tab also lets you map Toggl projects to Stripe customers by picking from the live Stripe customer list by name. If you try to create a Stripe invoice for an unmapped project, the dashboard will ask you to pick a customer right after you choose the date range, then save that association for next time.
 

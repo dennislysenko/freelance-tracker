@@ -16,7 +16,16 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_PREFERENCES = {
     "cache_ttl_projects": 86400,  # 24 hours
     "cache_ttl_today": 1800,  # 30 minutes
-    "vacation_days_per_month": 4,  # Vacation days to exclude from projection
+    "vacation_days_per_month": 4,  # Vacation days to exclude from projection (fallback when no calendar is configured)
+    "days_off_keywords": [  # Calendar event title keywords that mark a day off (case-insensitive substring match)
+        "vacation",
+        "day off",
+        "ooo",
+        "out of office",
+        "ceo day",
+        "holiday",
+        "pto",
+    ],
     "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
     "monthly_rev_share": {},  # Variable rev-share income by month: {"2026-06": 7000}. Added to that month's projection as guaranteed income.
     "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
@@ -151,6 +160,19 @@ def validate_preferences(prefs):
                 if hours < 0:
                     errors.append(
                         f"'project_targets.{project_name}': must be non-negative (got {hours})"
+                    )
+
+    # Optional field: days_off_keywords (list of non-empty strings)
+    if 'days_off_keywords' in prefs:
+        days_off_keywords = prefs['days_off_keywords']
+
+        if not isinstance(days_off_keywords, list):
+            errors.append("'days_off_keywords': must be a list of strings")
+        else:
+            for kw in days_off_keywords:
+                if not isinstance(kw, str) or not kw.strip():
+                    errors.append(
+                        f"'days_off_keywords': entries must be non-empty strings (got {kw!r})"
                     )
 
     # Optional field: monthly_rev_share (month key "YYYY-MM" -> non-negative amount)
