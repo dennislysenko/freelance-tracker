@@ -9,8 +9,33 @@ import json
 import objc
 from AppKit import (
     NSMakeRect, NSEvent, NSViewController, NSView, NSColor, NSAppearance,
+    NSApplication, NSEventModifierFlagCommand, NSEventModifierFlagShift,
 )
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
+
+
+class EditingWebView(WKWebView):
+    """WKWebView that routes ⌘C/V/X/A/Z itself.
+
+    A menu bar app has no Edit menu, so these key equivalents have no menu
+    item to land on and are silently dropped — fields in the popover could
+    only be pasted into via the right-click context menu."""
+
+    def performKeyEquivalent_(self, event):
+        flags = event.modifierFlags()
+        if flags & NSEventModifierFlagCommand:
+            key = (event.charactersIgnoringModifiers() or "").lower()
+            if key == "z":
+                selector = "redo:" if flags & NSEventModifierFlagShift else "undo:"
+            else:
+                selector = {
+                    "v": "paste:", "c": "copy:", "x": "cut:", "a": "selectAll:",
+                }.get(key)
+            if selector and NSApplication.sharedApplication().sendAction_to_from_(
+                selector, None, self
+            ):
+                return True
+        return objc.super(EditingWebView, self).performKeyEquivalent_(event)
 from preferences import load_preferences, save_preferences, DEFAULT_PREFERENCES
 from carryover import get_previous_month_balance
 from toggl_data import (
@@ -189,7 +214,7 @@ class DashboardViewController(NSViewController):
         )
         content_controller.addUserScript_(dark_bg_script)
 
-        self.webview = WKWebView.alloc().initWithFrame_configuration_(
+        self.webview = EditingWebView.alloc().initWithFrame_configuration_(
             NSMakeRect(0, 0, w, h), config
         )
         # Use setValue:forKey: for _drawsBackground (private but standard approach)
