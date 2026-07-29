@@ -377,10 +377,11 @@ class DashboardPanelController:
         _ = self._view_controller.view()
         self._current_panel_height = initial_height
 
-        # Pre-load HTML if we already have data (prevents white flash on first show)
-        if self._last_data:
-            html = self._generate_html(*self._last_data)
-            self._view_controller.loadHTML_(html)
+        # Pre-load HTML (prevents white flash on first show). Placeholder data
+        # keeps the popover functional (Retry/Quit) when the first fetch failed.
+        daily, weekly, monthly = self._last_data or self._placeholder_data()
+        html = self._generate_html(daily, weekly, monthly)
+        self._view_controller.loadHTML_(html)
 
         _debug("NSPopover created")
 
@@ -398,12 +399,13 @@ class DashboardPanelController:
         self._ensure_popover()
         _debug(f"show() called, button={status_item_button}")
 
-        # Load data into webview
-        if self._last_data:
-            self._resize_for_data(*self._last_data)
-            html = self._generate_html(*self._last_data)
-            self._view_controller.loadHTML_(html)
-            _debug("HTML loaded")
+        # Load data into webview; placeholder data keeps the popover functional
+        # (Retry/Quit) when no fetch has succeeded yet (e.g. launched offline)
+        daily, weekly, monthly = self._last_data or self._placeholder_data()
+        self._resize_for_data(daily, weekly, monthly)
+        html = self._generate_html(daily, weekly, monthly)
+        self._view_controller.loadHTML_(html)
+        _debug("HTML loaded")
 
         if status_item_button:
             # Show relative to the status bar button - macOS handles positioning
