@@ -217,6 +217,110 @@ def generate_settings_css():
         padding-bottom: 20px;
     }
 
+    /* --- Integrations grid (cells) + drill-in detail --- */
+    .intg-group-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: #c9d1d9;
+        margin: 14px 0 2px;
+    }
+    .intg-group-title:first-child { margin-top: 0; }
+    .intg-group-sub {
+        font-size: 11px;
+        color: #8b949e;
+        margin-bottom: 8px;
+    }
+
+    .intg-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 4px;
+    }
+    /* A lone cell in a group reads as a dangling half-row in two columns. */
+    .intg-grid.single { grid-template-columns: 1fr; }
+
+    .intg-cell {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 9px 10px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        cursor: pointer;
+        -webkit-appearance: none;
+        color: inherit;
+        font: inherit;
+    }
+    .intg-cell:hover {
+        background: rgba(255,255,255,0.06);
+        border-color: rgba(255,255,255,0.16);
+    }
+    .intg-cell.active {
+        background: rgba(63,185,80,0.10);
+        border-color: rgba(63,185,80,0.28);
+    }
+
+    .intg-cell-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+    }
+    .intg-cell-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: #c9d1d9;
+    }
+    .intg-cell-icon {
+        font-size: 13px;
+        opacity: 0.75;
+        flex: none;
+    }
+    .intg-cell-status {
+        font-size: 11px;
+        color: #8b949e;
+        margin-top: 2px;
+    }
+    .intg-cell.active .intg-cell-status { color: #3fb950; }
+
+    /* Grid and detail are mutually exclusive; JS flips data-intg on the
+       panel so reopening the popover can restore either state. */
+    .settings-panel[data-intg=""] .intg-detail { display: none; }
+    .settings-panel:not([data-intg=""]) .intg-index { display: none; }
+    .intg-detail { display: none; }
+    .intg-detail.active { display: block; }
+
+    .intg-detail-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+    .intg-back {
+        background: transparent;
+        border: 0;
+        color: #8b949e;
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 5px;
+        -webkit-appearance: none;
+    }
+    .intg-back:hover { color: #c9d1d9; background: rgba(255,255,255,0.06); }
+    .intg-detail-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: #c9d1d9;
+    }
+    .intg-detail-badge {
+        font-size: 10px;
+        color: #3fb950;
+        margin-left: auto;
+    }
+
     .settings-panel { display: none; }
     .settings-panel.active { display: block; }
 
@@ -450,10 +554,12 @@ def generate_settings_css():
 
 # ---------- HTML ----------
 
-def _render_tab_nav():
+def _render_tab_nav(active_tab=None):
     buttons = []
+    valid = {k for k, _ in TAB_ORDER}
+    active_tab = active_tab if active_tab in valid else TAB_ORDER[0][0]
     for idx, (key, label) in enumerate(TAB_ORDER):
-        cls = "settings-tab" + (" active" if idx == 0 else "")
+        cls = "settings-tab" + (" active" if key == active_tab else "")
         buttons.append(
             f'<button class="{cls}" data-tab="{key}" '
             f'onclick="settingsSelectTab(\'{key}\')">{_esc(label)}</button>'
@@ -798,16 +904,23 @@ def _render_mapping_row(project_name, customer_id, upwork_id, toggl_names):
     """
 
 
-def _render_panel_integrations(prefs, integrations):
+def _render_panel_integrations(prefs, integrations, active_integration=None):
+    """Render Integrations as a grid of cells that drill into detail panes.
+
+    Each credential used to be a field in one long scrolling column, which meant
+    hunting for the right one every time the popover reopened. Now the panel
+    shows compact status cells; clicking one swaps the grid for just that
+    integration's fields.
+    """
     token = integrations.get("TOGGL_API_TOKEN", "") or ""
     workspace = integrations.get("TOGGL_WORKSPACE_ID", "") or ""
     stripe_key = integrations.get("STRIPE_API_KEY", "") or ""
     calendar_url = integrations.get("GOOGLE_CALENDAR_ICS_URL", "") or ""
+    openai_key = integrations.get("OPENAI_API_KEY", "") or ""
 
     toggl_names = get_toggl_project_names()
     stripe_map = prefs.get("stripe_project_customers") or {}
     upwork_map = prefs.get("upwork_contracts") or {}
-    # Union of both maps so rows persist info from either side.
     all_names = set(stripe_map.keys()) | set(upwork_map.keys())
     row_entries = sorted(
         (name, stripe_map.get(name, ""), upwork_map.get(name, ""))
@@ -831,33 +944,85 @@ def _render_panel_integrations(prefs, integrations):
         </div>
         """
 
-    return f"""
-    <div class="settings-panel-title">Integration Credentials</div>
-    <div class="settings-help">
-        Credentials are stored in the repo-local <code>.env</code> file, not in
-        <code>preferences.json</code>. Missing Toggl token blocks save; Stripe key
-        must start with <code>sk_</code>.
-    </div>
+    toggl_detail = f"""
     {field("Toggl API Token", "set_toggl_token", token, "password")}
     {field("Toggl Workspace ID", "set_toggl_workspace", workspace, "text")}
+    <div class="settings-help">
+        Required. Everything else in this app reads from Toggl; without a token
+        the dashboard cannot load. Find your token at
+        <code>track.toggl.com/profile</code>.
+    </div>
+    """
+
+    openai_detail = f"""
+    <div class="settings-help">
+        Optional. Bring your own OpenAI key to type entries in plain English
+        (&ldquo;1 hour of Acme retainer at 9am the past 2 days, no note&rdquo;) and
+        ask questions about your hours. You always confirm proposed entries before
+        anything is written to Toggl. Billed to <em>your</em> OpenAI account &mdash;
+        expect well under $1/month.
+    </div>
+    {field("OpenAI API Key", "set_openai_key", openai_key, "password")}
+    <div class="settings-help">
+        <strong>Privacy:</strong> when you use this feature, what you type plus your
+        Toggl <em>project names</em> are sent to OpenAI under your own account and
+        its data-retention terms. Project names are often client names. Nothing is
+        sent unless you use the feature, and no other credential ever leaves your Mac.
+    </div>
+    <div class="settings-help">
+        <strong>Setting up a tightly scoped key:</strong>
+        <ol style="margin:6px 0 0 16px; padding:0;">
+            <li>At platform.openai.com, create a <strong>new project</strong>
+                (Settings &rarr; Projects) so this app is isolated from your other work.</li>
+            <li>In that project&rsquo;s <strong>Limits</strong>, set a hard monthly budget
+                &mdash; $5 is generous &mdash; and an email alert. This caps the damage
+                if the key ever leaks.</li>
+            <li>Under <strong>API keys</strong>, create a key owned by that project
+                (not a user or service-account key) with <strong>Restricted</strong>
+                permissions. Set <em>Model capabilities</em> to <strong>Request</strong>
+                &mdash; that grants Write on <code>/v1/responses</code>, which is the
+                only endpoint this app calls &mdash; and leave everything else
+                (Assistants, Files, Fine-tuning, Vector stores, Admin) on
+                <em>None</em>.</li>
+            <li>Paste it above. Saving verifies the key before it is stored.</li>
+        </ol>
+    </div>
+    <button class="settings-btn" type="button"
+            onclick="postAction('settings:open_openai_settings')">Open OpenAI API Keys</button>
+    """
+
+    stripe_detail = f"""
+    <div class="settings-help">
+        Optional. Powers the dashboard&rsquo;s <strong>Create Stripe Invoice</strong>
+        flow, which creates <em>draft</em> invoices only &mdash; you review and send
+        them yourself in Stripe.
+    </div>
     {field("Stripe API Key", "set_stripe_key", stripe_key, "password")}
+    <div class="settings-help">Must start with <code>sk_</code>.</div>
+    """
+
+    calendar_detail = f"""
+    <div class="settings-help">
+        Optional. Lets the month projection count your <em>actual</em> days off
+        instead of a flat vacation estimate.
+    </div>
     {field("Google Calendar ICS URL", "set_calendar_ics_url", calendar_url, "password")}
     <div class="settings-help">
-        Optional. In Google Calendar settings, under <strong>Settings for my
-        calendars</strong> (left sidebar), choose the calendar you put your vacation
-        days on, then scroll to <strong>Integrate calendar</strong> &rarr;
-        <em>Secret address in iCal format</em> and copy it here. Lets the month
-        projection count your actual days off (see <strong>Work Planning</strong>
-        &rarr; Days Off Keywords) instead of a flat vacation estimate. Fetched at
-        most every 6 hours.
+        In Google Calendar settings, under <strong>Settings for my calendars</strong>
+        (left sidebar), choose the calendar you put your vacation days on, then
+        scroll to <strong>Integrate calendar</strong> &rarr;
+        <em>Secret address in iCal format</em> and copy it here. Which events count
+        is controlled by <strong>Work Planning</strong> &rarr; Days Off Keywords.
+        Fetched at most every 6 hours.
     </div>
     <button class="settings-btn" type="button"
             onclick="postAction('settings:open_gcal_settings')">Open Google Calendar Settings</button>
+    """
 
-    <div class="settings-panel-title" style="margin-top:18px;">Project Billing Mapping</div>
+    mapping_detail = f"""
     <div class="settings-help">
         Attach a Toggl project to a Stripe customer and/or Upwork contract. The
-        dashboard\u2019s Create Stripe Invoice flow reuses the customer mapping; the
+        dashboard&rsquo;s Create Stripe Invoice flow reuses the customer mapping; the
         Open Upwork Diary shortcut reuses the contract id.
     </div>
     <div style="margin-bottom:8px;">
@@ -872,6 +1037,60 @@ def _render_panel_integrations(prefs, integrations):
         {rows_html}
     </div>
     """
+
+    # (key, label, icon, configured, detail html) grouped for the index.
+    groups = [
+        ("Time tracking", "Where your hours come from.", [
+            ("toggl", "Toggl", "&#9201;", bool(token and workspace), toggl_detail),
+        ]),
+        ("Assistant", "Log time by typing it in plain English.", [
+            ("openai", "OpenAI", "&#10022;", bool(openai_key), openai_detail),
+        ]),
+        ("Billing &amp; invoicing", "Turn tracked hours into invoices.", [
+            ("stripe", "Stripe", "&#128179;", bool(stripe_key), stripe_detail),
+            ("mapping", "Project Mapping", "&#128279;", bool(all_names), mapping_detail),
+        ]),
+        ("Planning", "Feeds the month projection.", [
+            ("calendar", "Google Calendar", "&#128197;", bool(calendar_url), calendar_detail),
+        ]),
+    ]
+
+    index_parts = []
+    detail_parts = []
+    for group_label, group_sub, cells in groups:
+        index_parts.append(f'<div class="intg-group-title">{group_label}</div>')
+        index_parts.append(f'<div class="intg-group-sub">{group_sub}</div>')
+        grid_cls = "intg-grid single" if len(cells) == 1 else "intg-grid"
+        index_parts.append(f'<div class="{grid_cls}">')
+        for key, label, icon, configured, detail in cells:
+            state = " active" if configured else ""
+            opened = " active" if key == active_integration else ""
+            status = "&#10003; Active" if configured else "Configure integration"
+            index_parts.append(
+                f'<button class="intg-cell{state}" type="button" data-intg-cell="{key}" '
+                f'onclick="settingsOpenIntegration(\'{key}\')">'
+                f'<div class="intg-cell-top">'
+                f'<span class="intg-cell-name">{label}</span>'
+                f'<span class="intg-cell-icon">{icon}</span>'
+                f'</div>'
+                f'<div class="intg-cell-status">{status}</div>'
+                f'</button>'
+            )
+            badge = '<span class="intg-detail-badge">&#10003; Active</span>' if configured else ""
+            detail_parts.append(
+                f'<div class="intg-detail{opened}" data-intg-detail="{key}">'
+                f'<div class="intg-detail-head">'
+                f'<button class="intg-back" type="button" aria-label="Back to integrations" '
+                f'onclick="settingsCloseIntegration()">&#8592;</button>'
+                f'<span class="intg-detail-title">{label}</span>{badge}'
+                f'</div>{detail}</div>'
+            )
+        index_parts.append('</div>')
+
+    return (
+        '<div class="intg-index">' + "".join(index_parts) + '</div>'
+        + "".join(detail_parts)
+    )
 
 
 def _render_panel_advanced():
@@ -898,10 +1117,12 @@ def _render_panel_stub(key, label):
     )
 
 
-def _render_tab_panels(prefs, integrations):
+def _render_tab_panels(prefs, integrations, active_tab=None, active_integration=None):
     panels = []
+    valid = {k for k, _ in TAB_ORDER}
+    active_tab = active_tab if active_tab in valid else TAB_ORDER[0][0]
     for idx, (key, label) in enumerate(TAB_ORDER):
-        active = " active" if idx == 0 else ""
+        active = " active" if key == active_tab else ""
         if key == "caching":
             body = _render_panel_caching(prefs)
         elif key == "work":
@@ -911,24 +1132,36 @@ def _render_tab_panels(prefs, integrations):
         elif key == "billing":
             body = _render_panel_billing(prefs)
         elif key == "integrations":
-            body = _render_panel_integrations(prefs, integrations)
+            body = _render_panel_integrations(prefs, integrations, active_integration)
         elif key == "advanced":
             body = _render_panel_advanced()
         else:
             body = _render_panel_stub(key, label)
+        # data-intg drives the grid/detail swap in CSS; rendering it here (not
+        # only in JS) is what restores the open integration after a reopen.
+        extra = ""
+        if key == "integrations":
+            extra = f' data-intg="{_esc(active_integration or "")}"'
         panels.append(
-            f'<div class="settings-panel{active}" data-panel="{key}" id="settingsPanel_{key}">'
+            f'<div class="settings-panel{active}" data-panel="{key}" '
+            f'id="settingsPanel_{key}"{extra}>'
             f'{body}</div>'
         )
     return "".join(panels)
 
 
-def generate_settings_html(prefs=None, integrations=None):
-    """Return the settings-view HTML fragment (excluding <style>/<script>)."""
+def generate_settings_html(prefs=None, integrations=None, active_tab=None,
+                           active_integration=None):
+    """Return the settings-view HTML fragment (excluding <style>/<script>).
+
+    `active_tab` / `active_integration` restore where the user was; the popover
+    is transient, so switching to a browser to fetch a credential dismisses it,
+    and re-rendering from scratch used to dump them back on the first tab.
+    """
     prefs = prefs if prefs is not None else {}
     integrations = integrations if integrations is not None else {}
-    tabs_html = _render_tab_nav()
-    panels_html = _render_tab_panels(prefs, integrations)
+    tabs_html = _render_tab_nav(active_tab)
+    panels_html = _render_tab_panels(prefs, integrations, active_tab, active_integration)
     return f"""
     <div class="settings-root">
         <div class="settings-header">
@@ -973,6 +1206,36 @@ def generate_settings_js():
             __settingsIntegrationsLoaded = true;
             settingsRefreshStripe();
         }
+        // Mirror to Python so dismissing and reopening the popover comes back
+        // to this tab instead of resetting to the first one.
+        postAction('settings_tab:' + key);
+    }
+
+    function settingsIntegrationsPanel() {
+        return document.getElementById('settingsPanel_integrations');
+    }
+
+    function settingsApplyIntegration(key) {
+        var panel = settingsIntegrationsPanel();
+        if (!panel) return;
+        panel.setAttribute('data-intg', key || '');
+        var details = panel.querySelectorAll('.intg-detail');
+        for (var i = 0; i < details.length; i++) {
+            details[i].classList.toggle(
+                'active', details[i].getAttribute('data-intg-detail') === key
+            );
+        }
+        window.scrollTo(0, 0);
+    }
+
+    function settingsOpenIntegration(key) {
+        settingsApplyIntegration(key);
+        postAction('settings_intg:' + key);
+    }
+
+    function settingsCloseIntegration() {
+        settingsApplyIntegration('');
+        postAction('settings_intg:');
     }
 
     function settingsGoBack() {
@@ -1100,7 +1363,8 @@ def generate_settings_js():
             TOGGL_API_TOKEN: settingsReadField('set_toggl_token'),
             TOGGL_WORKSPACE_ID: settingsReadField('set_toggl_workspace'),
             STRIPE_API_KEY: settingsReadField('set_stripe_key'),
-            GOOGLE_CALENDAR_ICS_URL: settingsReadField('set_calendar_ics_url')
+            GOOGLE_CALENDAR_ICS_URL: settingsReadField('set_calendar_ics_url'),
+            OPENAI_API_KEY: settingsReadField('set_openai_key')
         };
     }
 

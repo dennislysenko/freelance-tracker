@@ -121,6 +121,7 @@ class FreelanceTrackerApp(rumps.App):
                 'settings:test_notification': self._dashboard_settings_test_notification,
                 'settings:open_audit_log': self._dashboard_settings_open_audit_log,
                 'settings:open_gcal_settings': self._dashboard_settings_open_gcal_settings,
+                'settings:open_openai_settings': self._dashboard_settings_open_openai_settings,
                 'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
             })
         else:
@@ -253,6 +254,16 @@ class FreelanceTrackerApp(rumps.App):
             )
         except Exception as exc:
             _debug(f"open_gcal_settings failed: {exc}")
+
+    def _dashboard_settings_open_openai_settings(self):
+        """Open the OpenAI API keys page so the user can mint a scoped key."""
+        try:
+            subprocess.run(
+                ["open", "https://platform.openai.com/api-keys"],
+                check=False,
+            )
+        except Exception as exc:
+            _debug(f"open_openai_settings failed: {exc}")
 
     def _dashboard_settings_refresh_stripe(self, payload):
         """Refresh the Stripe customer list using the supplied API key."""

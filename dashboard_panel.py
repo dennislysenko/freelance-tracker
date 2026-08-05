@@ -45,6 +45,7 @@ from toggl_data import (
 )
 from integrations import load_integration_settings
 from settings_view import (
+    TAB_ORDER,
     generate_settings_css,
     generate_settings_html,
     generate_settings_js,
@@ -83,6 +84,13 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
         if action.startswith("toggle:"):
             _, section_key, state = action.split(":", 2)
             self._controller.set_section_expanded(section_key, state == "expanded")
+            return
+        if action.startswith("settings_tab:"):
+            self._controller.set_settings_tab(action.split(":", 1)[1].strip())
+            return
+        if action.startswith("settings_intg:"):
+            # Empty payload means the user backed out to the integrations grid.
+            self._controller.set_settings_integration(action.split(":", 1)[1].strip())
             return
         if action.startswith("router:"):
             view = action.split(":", 1)[1].strip()
@@ -291,6 +299,11 @@ class DashboardPanelController:
         self._exportable_projects = []
         self._stripe_invoice_state = None
         self._view = "dashboard"  # "dashboard" | "settings"
+        # The popover is transient, so leaving to fetch a credential in a
+        # browser dismisses it. Remembering the tab and the open integration
+        # means reopening lands where the user left off, not on the first tab.
+        self._settings_tab = "caching"
+        self._settings_integration = ""
 
     def set_exportable_projects(self, projects):
         """List of project capability dicts used by dashboard billing actions."""
@@ -514,6 +527,15 @@ class DashboardPanelController:
         if view not in ("dashboard", "settings"):
             return
         self._view = view
+
+    def set_settings_tab(self, tab):
+        """Remember which preferences tab is showing, across popover reopens."""
+        if tab in {key for key, _ in TAB_ORDER}:
+            self._settings_tab = tab
+
+    def set_settings_integration(self, key):
+        """Remember which integration detail is open ('' = the grid index)."""
+        self._settings_integration = key or ""
 
     def settings_ack(self, reply):
         """Send a reply payload back to the settings view's JS via evaluateJavaScript."""
@@ -1091,6 +1113,8 @@ class DashboardPanelController:
         settings_body_html = generate_settings_html(
             prefs=prefs,
             integrations=load_integration_settings(),
+            active_tab=self._settings_tab,
+            active_integration=self._settings_integration,
         )
         settings_script = generate_settings_js()
         current_view = self._view if self._view in ("dashboard", "settings") else "dashboard"
