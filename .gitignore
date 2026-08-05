@@ -37,3 +37,4 @@ qa_*.png
 
 # Per-user Codex config (may reference workspace names)
 .codex/
+.openai_sample_key
