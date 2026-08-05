@@ -226,6 +226,22 @@ are answered from the existing local cache and cost **zero Toggl API calls**.
 Costs are billed to your own OpenAI account and are tiny — a few hundred tokens
 per command, realistically well under $1/month.
 
+**How it looks.** The input sits at the top of the dashboard. Submitting takes
+you to the Assistant view, which shows what it plans to log:
+
+```
+Proposed 2 entries · 1 overlap existing time
+ [x] Mon Aug 3 · 9:00am-10:00am    Randonautica Retainer · 1.00h
+ [ ] Tue Aug 4 · 9:00am-10:00am    Randonautica Retainer · 1.00h
+     Overlaps time already logged
+                             [ Dismiss ]  [ Apply ]
+```
+
+Rows that overlap time you already logged start **unchecked** and flagged, so
+re-running the same command does not double-log you — but you can tick them
+back on if you really did work two things at once. Apply writes only the
+checked rows.
+
 **Setting up a tightly scoped key.** The point here is to bound the blast radius
 if the key ever leaks:
 
