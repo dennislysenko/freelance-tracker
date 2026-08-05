@@ -22,7 +22,8 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 📂 **Open Cache Folder** action in the dashboard refresh menu for quick Finder access
 - 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`. CSV and Stripe flows include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
 - ⏰ **Billing reminders** in Settings → `Billing` for local notifications on a weekly (`Friday 14:00`) or monthly (`Day 15`, `Last day of month`, `2nd-to-last day`) schedule
-- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, Stripe API key, and Google Calendar ICS URL after installation, plus save optional Upwork contract ids per project
+- 🗣️ **Natural-language time logging** (optional, bring your own OpenAI key) — type "1 hour of Acme retainer at 9am the past 2 days, no note", confirm the proposed entries, and they are written to Toggl. Also answers read questions about your hours from cache
+- 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, Stripe API key, Google Calendar ICS URL, and OpenAI API key after installation, plus save optional Upwork contract ids per project
 - 💾 **Smart caching** to minimize Toggl API calls
   Dashboard, CSV export, Stripe draft invoices, capped billing-cycle calculations, and auto carryover all reuse the same shared day-based Toggl entry cache
 - 🚀 **Runs as macOS system service** (auto-starts on login, restarts on crash)
@@ -185,17 +186,78 @@ To adjust the fallback vacation days, use **Settings → Work Planning → Vacat
 
 ### Integrations
 
-Open **Settings → Integrations** to update credentials after install:
+**Settings → Integrations** shows a grid of integration cells grouped by
+purpose, each marked **✓ Active** or **Configure integration** at a glance.
+Click one to drill into just that integration's fields and setup notes; the
+back arrow returns to the grid. The tab you're on and the integration you have
+open are both remembered, so if the popover dismisses while you're off grabbing
+a key in your browser, reopening puts you right back where you were.
+
+Credentials you can set after install:
 - `TOGGL_API_TOKEN`
 - `TOGGL_WORKSPACE_ID`
 - `STRIPE_API_KEY`
 - `GOOGLE_CALENDAR_ICS_URL` (optional — powers calendar-driven days off in the month projection)
+- `OPENAI_API_KEY` (optional — powers natural-language time logging; see below)
 
 The same tab also lets you map Toggl projects to Stripe customers by picking from the live Stripe customer list by name. If you try to create a Stripe invoice for an unmapped project, the dashboard will ask you to pick a customer right after you choose the date range, then save that association for next time.
 
 That project-mapping grid also has an **Upwork Contract ID** column. Add the Upwork hourly contract id for any project where you want a fast work-diary shortcut. The dashboard can also save that id inline the first time you click an unmapped project from `Export/Invoice → Open Upwork Diary`, then open the diary immediately.
 
 The current Upwork integration is intentionally a deep-link shortcut, not a direct API write. Upwork’s documented GraphQL docs expose work-diary reads, but they do not document a manual-time creation mutation, so the app currently opens the contract-specific work diary URL instead of attempting an unsupported write.
+
+### Natural-Language Time Logging (optional)
+
+Bring your own OpenAI key and you can type entries in plain English instead of
+filling in a form:
+
+```
+put 1 hour of Randonautica retainer at 9am for the past 2 days, no note
+```
+
+The app proposes the entries it would create — one row per day, with the
+resolved date, time, duration, and project — and **writes nothing until you hit
+Apply**. If a proposal overlaps time you already logged, it says so, so
+re-running the same command does not silently double-log you.
+
+You can also ask read questions ("how many hours on Acme this month?"). Those
+are answered from the existing local cache and cost **zero Toggl API calls**.
+
+Costs are billed to your own OpenAI account and are tiny — a few hundred tokens
+per command, realistically well under $1/month.
+
+**Setting up a tightly scoped key.** The point here is to bound the blast radius
+if the key ever leaks:
+
+1. At [platform.openai.com](https://platform.openai.com), go to **Settings →
+   Projects** and create a new project (e.g. `freelance-tracker`). A key can
+   never reach outside the project that owns it.
+2. In that project's **Limits**, set a hard monthly budget — **$5** is generous
+   — plus an email alert. This is the control that actually matters: a leaked
+   key with a $5 cap is a $5 problem.
+3. Under **API keys**, create a key owned by that project (*not* a user key or
+   a service-account key) with **Restricted** permissions. Set **Model
+   capabilities** to **Request** — expanding that group shows it grants
+   **Write** on `/v1/responses`, which is the only endpoint this app calls —
+   and leave everything else (Assistants, Files, Fine-tuning, Vector stores,
+   Admin) on **None**.
+4. Paste it into **Settings → Integrations → OpenAI API Key**. Saving verifies
+   the key with a live call, so you find out immediately if it is wrong or has
+   no billing credit attached.
+
+> **Note:** a brand-new OpenAI account with no payment method produces a valid
+> key that still fails with "no available credit". The app names that case
+> specifically rather than reporting a generic error.
+
+**Privacy.** When you use this feature, what you type plus your Toggl *project
+names* are sent to OpenAI under your own account and its data-retention terms.
+Project names are frequently client names, so this is worth a conscious choice.
+Nothing is sent unless you use the feature, and no other credential ever leaves
+your Mac. Leave the key blank and the feature is simply unavailable — everything
+else works exactly as before.
+
+The model is pinned to `gpt-4.1-mini`. Set `OPENAI_MODEL` in `.env` to use a
+different one.
 
 ### Reordering Menu Bar Icons
 

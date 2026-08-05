@@ -219,7 +219,10 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Billing tab supports weekly local reminder rules like `Friday 14:00 → invoice Acme Inc`
 - Cache TTL controls
 - Project definitions with billing types (`projects` key)
-- Integrations tab lets the user update the Toggl API token, Toggl workspace id, Stripe API key, and Google Calendar ICS URL after installation; an "Open Google Calendar Settings" button opens calendar.google.com's settings page in the browser to grab the secret iCal URL
+- Integrations tab is a **grid of integration cells** grouped by purpose (Time tracking, Assistant, Billing & invoicing, Planning). Each cell shows the integration name and its status — green "✓ Active" when configured, "Configure integration" when not — so the whole tab fits on one screen with no scrolling
+- Clicking a cell **drills into a detail pane** containing only that integration's fields and setup guidance, with a back arrow to the grid. Replaces the previous single long scrolling column of every credential
+- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), and Google Calendar (days off). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
+- The active tab **and** the open integration are mirrored to Python (`settings_tab:` / `settings_intg:` bridge messages) and re-rendered on the next load. The popover is transient, so leaving to fetch a credential in a browser dismisses it; without this the user was dropped back on the first tab and had to re-navigate every time
 - Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
 - The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
 - `fixed_monthly` projects are always fixed in projections — no toggle needed
@@ -285,6 +288,24 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - API call cost:
   - Toggl: 0 calls
   - Upwork: 0 app-side API calls; the app only opens the diary URL in the browser
+
+### Natural-Language Time Logging (optional, bring-your-own OpenAI key)
+- Lets the user type shorthand — "put 1 hour of Randonautica retainer at 9am for the past 2 days, no note" — and have it turned into proposed Toggl entries
+- **Nothing is written without confirmation.** The parse produces a *proposal* (one row per entry, e.g. "mon aug 3, 9:00am · 1.00h · Randonautica - Retainer"), which the user applies or cancels
+- Also classifies read questions ("how many hours on Acme this month?") into a local date-range query answered from the existing entry cache — **zero Toggl API calls**
+- Implemented in `nl_time.py`; the write path reuses the long-standing `toggl_data.create_time_entry`
+- Available projects are passed to the model as a JSON-schema **enum**, so it cannot propose a project that does not exist in the workspace. Ambiguous commands return an `unclear` intent asking for what is missing rather than guessing a project
+- The model never performs timezone math: it returns a local calendar date plus a local wall-clock time, and `resolve_entries` attaches the machine's local zone to build the aware datetime `create_time_entry` requires
+- `find_collisions` flags proposals overlapping an entry already in Toggl, so re-running "the past 2 days" warns instead of silently double-logging
+- **Bring-your-own key**: set `OPENAI_API_KEY` in Settings → Integrations (stored in `.env`, never in `preferences.json`). With no key set, the feature is simply unavailable; every other feature is unaffected
+- The key is **verified with a live call when saved** (only when it actually changed), so a bad key surfaces in the settings pane rather than mid-command. Errors are distinguished: rejected key (401), no billing credit (`insufficient_quota`), rate limit, and service/network failure each produce a different message
+- Uses the OpenAI **Responses** API (`/v1/responses`), not chat/completions: a restricted project key with *Model capabilities: Request* grants Write on `/v1/responses` specifically, so this is the endpoint covered by the scoped key the setup guide tells users to mint
+- Model is pinned to `gpt-4.1-mini`, overridable via `OPENAI_MODEL` in `.env`
+- **Privacy**: the utterance and the user's Toggl *project names* (often client names) are sent to OpenAI under the user's own account and retention terms. This is stated in the Integrations tab. Nothing is sent unless the feature is used; no other credential leaves the machine
+- API call cost:
+  - Toggl: 0 calls to parse; **1 POST per entry** on apply (a "past 2 days" command applies 2 entries = 2 calls); read questions cost 0
+  - OpenAI: 1 call per command, plus 1 on key save; billed to the user's own account
+  - OpenAI calls are deliberately **not** recorded in the Toggl audit log, which stays Toggl-only so the documented Toggl call counts remain accurate
 
 ---
 
