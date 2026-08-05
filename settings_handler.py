@@ -167,6 +167,33 @@ def translate_reminder_rows(rows):
     return out
 
 
+def _validate_openai_key(api_key: str):
+    """
+    Validate the OpenAI key on save, so a bad key is caught in the settings pane
+    instead of halfway through logging time.
+
+    Only makes a network call when the key actually changed — otherwise every
+    unrelated settings save would cost a round trip. An empty key is valid; it
+    just leaves natural-language logging switched off.
+    """
+    if not api_key:
+        return []
+    if not api_key.startswith("sk-"):
+        return ["OpenAI API Key must start with 'sk-'"]
+
+    previous = (load_integration_settings().get("OPENAI_API_KEY") or "").strip()
+    if api_key == previous:
+        return []
+
+    try:
+        import nl_time
+    except ImportError:
+        return []  # feature module unavailable; do not block saving other settings
+
+    ok, message = nl_time.validate_api_key(api_key)
+    return [] if ok else [f"OpenAI API Key: {message}"]
+
+
 def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Apply a settings save payload. Returns `{ok, errors}`.
 
@@ -235,6 +262,9 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
             "GOOGLE_CALENDAR_ICS_URL": str(
                 integrations_payload.get("GOOGLE_CALENDAR_ICS_URL", "") or ""
             ).strip(),
+            "OPENAI_API_KEY": str(
+                integrations_payload.get("OPENAI_API_KEY", "") or ""
+            ).strip(),
         }
         if not integration_settings["TOGGL_API_TOKEN"]:
             errors.append("Toggl API Token is required")
@@ -244,6 +274,7 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
         calendar_url = integration_settings["GOOGLE_CALENDAR_ICS_URL"]
         if calendar_url and not calendar_url.startswith(("http://", "https://")):
             errors.append("Google Calendar ICS URL must start with http(s)://")
+        errors.extend(_validate_openai_key(integration_settings["OPENAI_API_KEY"]))
         integrations_changed = True
 
     # Validate
