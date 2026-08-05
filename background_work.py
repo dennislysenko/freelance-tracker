@@ -57,7 +57,7 @@ def on_main_thread(fn):
         fn()
 
 
-def run_in_background(work, on_done, on_error=None, name="bg-work"):
+def run_in_background(work, on_done, on_error=None, name="bg-work", dispatch=None):
     """
     Run `work()` on a worker thread; deliver its result to `on_done` on the
     main thread.
@@ -65,7 +65,13 @@ def run_in_background(work, on_done, on_error=None, name="bg-work"):
     An exception in `work` goes to `on_error` (also on the main thread) rather
     than killing the thread silently. `on_done` and `on_error` are the only
     places allowed to touch AppKit.
+
+    `dispatch` overrides how completions are delivered. It exists for tests: a
+    process that has imported PyObjC but runs no main run loop will queue
+    main-thread blocks that never execute, so tests pass a direct dispatcher
+    rather than depending on import order.
     """
+    deliver = dispatch or on_main_thread
 
     def _runner():
         try:
@@ -73,9 +79,9 @@ def run_in_background(work, on_done, on_error=None, name="bg-work"):
         except Exception as exc:
             _debug(f"{name} failed: {exc}\n{traceback.format_exc()}")
             if on_error is not None:
-                on_main_thread(lambda: on_error(exc))
+                deliver(lambda: on_error(exc))
             return
-        on_main_thread(lambda: on_done(result))
+        deliver(lambda: on_done(result))
 
     thread = threading.Thread(target=_runner, name=name, daemon=True)
     thread.start()

@@ -44,6 +44,14 @@ from toggl_data import (
     get_lbd_remaining_business_days,
 )
 from integrations import load_integration_settings
+from assistant import AssistantSession
+from assistant_view import (
+    generate_assistant_css,
+    generate_assistant_html,
+    generate_assistant_js,
+    render_launcher,
+)
+from background_work import Generation, run_in_background
 from settings_view import (
     TAB_ORDER,
     generate_settings_css,
@@ -84,6 +92,23 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
         if action.startswith("toggle:"):
             _, section_key, state = action.split(":", 2)
             self._controller.set_section_expanded(section_key, state == "expanded")
+            return
+        if action.startswith("assistant_ask:"):
+            cb = self._callbacks.get("assistant_ask")
+            if cb:
+                cb(action[len("assistant_ask:"):])
+            return
+        if action.startswith("assistant_apply:"):
+            rest = action[len("assistant_apply:"):]
+            proposal_id, _, indices = rest.partition(":")
+            cb = self._callbacks.get("assistant_apply")
+            if cb:
+                cb(proposal_id, indices)
+            return
+        if action == "assistant_clear":
+            cb = self._callbacks.get("assistant_clear")
+            if cb:
+                cb()
             return
         if action.startswith("settings_tab:"):
             self._controller.set_settings_tab(action.split(":", 1)[1].strip())
@@ -298,12 +323,19 @@ class DashboardPanelController:
         self._current_panel_height = None
         self._exportable_projects = []
         self._stripe_invoice_state = None
-        self._view = "dashboard"  # "dashboard" | "settings"
+        self._view = "dashboard"  # "dashboard" | "settings" | "assistant"
         # The popover is transient, so leaving to fetch a credential in a
         # browser dismisses it. Remembering the tab and the open integration
         # means reopening lands where the user left off, not on the first tab.
         self._settings_tab = "caching"
         self._settings_integration = ""
+        # Assistant transcript lives here, not in the DOM: loadHTML_ reloads
+        # the document on every refresh and would otherwise wipe it.
+        self.assistant = AssistantSession(
+            entries_provider=self._assistant_entries_provider
+        )
+        self._assistant_pending = False
+        self._assistant_gen = Generation()
 
     def set_exportable_projects(self, projects):
         """List of project capability dicts used by dashboard billing actions."""
@@ -524,9 +556,86 @@ class DashboardPanelController:
         Python so a subsequent `loadHTMLString_` (e.g. after `update_data`)
         renders the same view instead of booting the user back to dashboard.
         """
-        if view not in ("dashboard", "settings"):
+        if view not in ("dashboard", "settings", "assistant"):
             return
         self._view = view
+
+    def _assistant_entries_provider(self, start_day, end_day):
+        """Cached Toggl entries spanning the proposed days, for collision checks."""
+        import toggl_data
+
+        return toggl_data.get_entries_for_range(start_day, end_day)
+
+    def assistant_ask(self, encoded_utterance):
+        """Handle a submitted command. Returns immediately; work is threaded."""
+        import base64
+
+        try:
+            utterance = base64.b64decode(encoded_utterance).decode("utf-8").strip()
+        except Exception as exc:
+            _debug(f"assistant_ask decode failed: {exc}")
+            return
+        if not utterance or self._assistant_pending:
+            return
+
+        self.assistant.add_user_turn(utterance)
+        self._assistant_pending = True
+        self._view = "assistant"
+        self.refresh_contents()
+
+        token = self._assistant_gen.next()
+
+        def done(result):
+            # A reply from a superseded command must not land on a newer one.
+            if not self._assistant_gen.is_current(token):
+                return
+            self._assistant_pending = False
+            self.assistant.accept(result)
+            self.refresh_contents()
+
+        def failed(exc):
+            if not self._assistant_gen.is_current(token):
+                return
+            self._assistant_pending = False
+            self.assistant.add_error_turn(str(exc))
+            self.refresh_contents()
+
+        run_in_background(
+            lambda: self.assistant.resolve(utterance),
+            done,
+            failed,
+            name="assistant-ask",
+        )
+
+    def assistant_apply(self, proposal_id, indices):
+        """Write the selected rows of a proposal, then refresh the dashboard."""
+        selected = []
+        for part in (indices or "").split(","):
+            part = part.strip()
+            if part.isdigit():
+                selected.append(int(part))
+
+        days = self.assistant.applied_days(proposal_id)
+        written, error = self.assistant.apply_proposal(proposal_id, selected)
+
+        if written:
+            try:
+                import toggl_data
+
+                toggl_data.invalidate_entry_days(days)
+            except Exception as exc:
+                _debug(f"assistant_apply cache invalidation failed: {exc}")
+        if error:
+            self.assistant.add_error_turn(error)
+
+        self.refresh_contents()
+        # menubar_app owns the data refresh; tell it whether anything landed.
+        return written
+
+    def assistant_clear(self):
+        self.assistant.clear()
+        self._assistant_pending = False
+        self.refresh_contents()
 
     def set_settings_tab(self, tab):
         """Remember which preferences tab is showing, across popover reopens."""
@@ -1109,6 +1218,15 @@ class DashboardPanelController:
         # Settings view: rendered alongside the dashboard so switching is a
         # pure CSS toggle (body[data-view]) and Toggl-data refreshes don't
         # boot the user off the settings tab.
+        assistant_enabled = bool(
+            (load_integration_settings().get("OPENAI_API_KEY") or "").strip()
+        )
+        assistant_css = generate_assistant_css()
+        assistant_body_html = generate_assistant_html(
+            self.assistant, pending=self._assistant_pending
+        )
+        assistant_script = generate_assistant_js()
+        assistant_launcher_html = render_launcher(assistant_enabled)
         settings_css = generate_settings_css()
         settings_body_html = generate_settings_html(
             prefs=prefs,
@@ -1117,7 +1235,14 @@ class DashboardPanelController:
             active_integration=self._settings_integration,
         )
         settings_script = generate_settings_js()
-        current_view = self._view if self._view in ("dashboard", "settings") else "dashboard"
+        current_view = (
+            self._view
+            if self._view in ("dashboard", "settings", "assistant")
+            else "dashboard"
+        )
+        # Without a key there is no assistant to route to.
+        if current_view == "assistant" and not assistant_enabled:
+            current_view = "dashboard"
 
         html = f"""<!DOCTYPE html>
 <html>
@@ -2042,11 +2167,13 @@ html, body {{
 }}
 
 {settings_css}
+{assistant_css}
 </style>
 </head>
 <body data-view="{current_view}">
 <div class="dashboard-root">
 <div class="wrapper">
+    {assistant_launcher_html}
     <div class="section-list">
         {today_section}
         {week_section}
@@ -2223,6 +2350,8 @@ html, body {{
 </div><!-- /.dashboard-root -->
 
 {settings_body_html}
+
+{assistant_body_html}
 
 <script>
     var heightReportQueued = false;
@@ -2929,6 +3058,7 @@ html, body {{
 
     // --- Settings view ---
     {settings_script}
+    {assistant_script}
 </script>
 </body>
 </html>"""

@@ -9,12 +9,19 @@ import unittest
 
 from background_work import Generation, run_in_background
 
+# Deliver completions inline. With PyObjC imported (which happens as soon as
+# any sibling test imports dashboard_panel) the real dispatcher queues onto a
+# main run loop that a test process never runs, so completions would hang.
+INLINE = lambda fn: fn()
+
 
 class TestRunInBackground(unittest.TestCase):
     def test_result_is_delivered_to_on_done(self):
         done = threading.Event()
         got = []
-        run_in_background(lambda: 41 + 1, lambda r: (got.append(r), done.set()))
+        run_in_background(
+            lambda: 41 + 1, lambda r: (got.append(r), done.set()), dispatch=INLINE
+        )
         self.assertTrue(done.wait(5))
         self.assertEqual(got, [42])
 
@@ -24,6 +31,7 @@ class TestRunInBackground(unittest.TestCase):
         run_in_background(
             lambda: seen.setdefault("worker", threading.current_thread().name),
             lambda _: done.set(),
+            dispatch=INLINE,
         )
         self.assertTrue(done.wait(5))
         self.assertNotEqual(seen["worker"], threading.current_thread().name)
@@ -39,6 +47,7 @@ class TestRunInBackground(unittest.TestCase):
             boom,
             lambda r: (results.append(r), done.set()),
             lambda e: (errors.append(e), done.set()),
+            dispatch=INLINE,
         )
         self.assertTrue(done.wait(5))
         self.assertEqual(results, [])
@@ -47,7 +56,7 @@ class TestRunInBackground(unittest.TestCase):
 
     def test_failure_without_error_handler_does_not_propagate(self):
         # A worker blowing up must not take the app down.
-        thread = run_in_background(lambda: 1 / 0, lambda _: None)
+        thread = run_in_background(lambda: 1 / 0, lambda _: None, dispatch=INLINE)
         thread.join(5)
         self.assertFalse(thread.is_alive())
 

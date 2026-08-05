@@ -123,6 +123,9 @@ class FreelanceTrackerApp(rumps.App):
                 'settings:open_gcal_settings': self._dashboard_settings_open_gcal_settings,
                 'settings:open_openai_settings': self._dashboard_settings_open_openai_settings,
                 'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
+                'assistant_ask': self._dashboard_assistant_ask,
+                'assistant_apply': self._dashboard_assistant_apply,
+                'assistant_clear': self._dashboard_assistant_clear,
             })
         else:
             _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
@@ -284,6 +287,23 @@ class FreelanceTrackerApp(rumps.App):
         }
         if self.dashboard is not None:
             self.dashboard.settings_ack(reply)
+
+    def _dashboard_assistant_ask(self, encoded_utterance):
+        """Submit a natural-language command. Parsing happens on a worker."""
+        if self.dashboard is not None:
+            self.dashboard.assistant_ask(encoded_utterance)
+
+    def _dashboard_assistant_apply(self, proposal_id, indices):
+        """Apply a confirmed proposal, then pull fresh totals if anything landed."""
+        if self.dashboard is None:
+            return
+        written = self.dashboard.assistant_apply(proposal_id, indices)
+        if written:
+            self.update_display()
+
+    def _dashboard_assistant_clear(self):
+        if self.dashboard is not None:
+            self.dashboard.assistant_clear()
 
     def _dashboard_quit(self):
         """Called from dashboard Quit button."""
