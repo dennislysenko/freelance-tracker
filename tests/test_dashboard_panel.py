@@ -415,3 +415,44 @@ def test_early_cycle_small_lag_shrinks_to_on_pace(monkeypatch):
     assert "On pace" in html
     assert "Way behind" not in html
     assert "Behind" not in html
+
+
+def test_assistant_apply_runs_off_main_thread_and_reports_back(monkeypatch):
+    """Apply must not block the popover: writes go through run_in_background,
+    the card shows an in-flight state meanwhile, and the menubar is told how
+    many entries landed once they do."""
+    from tests.test_assistant import _resolved
+
+    controller = _make_controller()
+    proposal = controller.assistant.accept(
+        {"kind": "proposal", "entries": _resolved(2), "collisions": [], "message": None}
+    )
+    writes = []
+    controller.assistant._writer = lambda **kw: writes.append(kw)
+    monkeypatch.setattr(dashboard_panel, "refresh_contents_calls", [], raising=False)
+    monkeypatch.setattr(controller, "refresh_contents", lambda: None)
+    invalidated = []
+    import toggl_data
+    monkeypatch.setattr(toggl_data, "invalidate_entry_days", lambda days: invalidated.extend(days))
+
+    captured = {}
+
+    def fake_run(work, on_done, on_error=None, name=None):
+        # Snapshot the in-flight state before completing, as the UI would see it.
+        captured["applying_during"] = proposal.applying
+        on_done(work())
+
+    monkeypatch.setattr(dashboard_panel, "run_in_background", fake_run)
+
+    reported = []
+    controller.assistant_apply(proposal.id, "0,1", on_written=reported.append)
+
+    assert captured["applying_during"] is True
+    assert proposal.applying is False
+    assert proposal.applied is True
+    assert len(writes) == 2
+    assert reported == [2]
+    assert len(invalidated) >= 1
+    # A second click on an applied card is a no-op.
+    controller.assistant_apply(proposal.id, "0", on_written=reported.append)
+    assert reported == [2]

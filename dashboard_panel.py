@@ -616,30 +616,57 @@ class DashboardPanelController:
             name="assistant-ask",
         )
 
-    def assistant_apply(self, proposal_id, indices):
-        """Write the selected rows of a proposal, then refresh the dashboard."""
+    def assistant_apply(self, proposal_id, indices, on_written=None):
+        """Write the selected rows of a proposal on a worker thread.
+
+        Each row is one Toggl POST, so applying on the main thread froze the
+        popover for the duration. The card renders a "Logging…" state until
+        the writes finish; `on_written(count)` runs on the main thread
+        afterwards so menubar_app can refresh totals.
+        """
         selected = []
         for part in (indices or "").split(","):
             part = part.strip()
             if part.isdigit():
                 selected.append(int(part))
 
-        days = self.assistant.applied_days(proposal_id)
-        written, error = self.assistant.apply_proposal(proposal_id, selected)
+        proposal = self.assistant.get_proposal(proposal_id)
+        if proposal is None or proposal.applied or proposal.applying:
+            return
+        if not selected:
+            self.assistant.add_error_turn("Nothing selected to log.")
+            self.refresh_contents()
+            return
 
-        if written:
-            try:
-                import toggl_data
-
-                toggl_data.invalidate_entry_days(days)
-            except Exception as exc:
-                _debug(f"assistant_apply cache invalidation failed: {exc}")
-        if error:
-            self.assistant.add_error_turn(error)
-
+        proposal.applying = True
         self.refresh_contents()
-        # menubar_app owns the data refresh; tell it whether anything landed.
-        return written
+        days = self.assistant.applied_days(proposal_id)
+
+        def work():
+            return self.assistant.apply_proposal(proposal_id, selected)
+
+        def done(result):
+            written, error = result
+            proposal.applying = False
+            if written:
+                try:
+                    import toggl_data
+
+                    toggl_data.invalidate_entry_days(days)
+                except Exception as exc:
+                    _debug(f"assistant_apply cache invalidation failed: {exc}")
+            if error:
+                self.assistant.add_error_turn(error)
+            self.refresh_contents()
+            if written and on_written is not None:
+                on_written(written)
+
+        def failed(exc):
+            proposal.applying = False
+            self.assistant.add_error_turn(str(exc))
+            self.refresh_contents()
+
+        run_in_background(work, done, failed, name="assistant-apply")
 
     def assistant_clear(self):
         self.assistant.clear()

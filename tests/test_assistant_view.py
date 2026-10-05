@@ -147,3 +147,16 @@ class TestBridgeEncoding(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestApplyingState(unittest.TestCase):
+    def test_in_flight_card_shows_logging_and_disables_rows(self):
+        from assistant import Proposal
+        from tests.test_assistant import _resolved
+        proposal = Proposal("p1", _resolved(1), [])
+        proposal.applying = True
+        from assistant_view import _render_proposal
+        html = _render_proposal(proposal)
+        self.assertIn("Logging to Toggl", html)
+        self.assertNotIn("assistantApply(", html)
+        self.assertIn("disabled", html)

@@ -182,6 +182,7 @@ def generate_assistant_css():
     }
     .assistant-input::placeholder { color: #6e7681; }
 
+    .prop-applying { color: #8b949e; }
     .assistant-pending {
         font-size: 11px;
         color: #8b949e;
@@ -246,7 +247,7 @@ def _render_proposal(proposal):
         if item["description"]:
             meta += f' &middot; {_esc(item["description"])}'
         checked = " checked" if index in checked_default else ""
-        disabled = " disabled" if proposal.applied else ""
+        disabled = " disabled" if (proposal.applied or proposal.applying) else ""
         warn = (
             '<div class="prop-warn">Overlaps time already logged</div>'
             if collides
@@ -269,6 +270,8 @@ def _render_proposal(proposal):
             f'<div class="prop-applied">&#10003; Logged {proposal.applied_count} '
             f'{"entry" if proposal.applied_count == 1 else "entries"} to Toggl</div>'
         )
+    elif proposal.applying:
+        actions = '<div class="prop-applied prop-applying">Logging to Toggl&hellip;</div>'
     else:
         actions = (
             '<div class="prop-actions">'

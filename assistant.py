@@ -40,6 +40,7 @@ class Proposal:
         self.collisions = set(collisions)
         self.applied = False
         self.applied_count = 0
+        self.applying = False  # writes in flight on a worker thread
 
     def default_selection(self):
         """Rows checked when the card first renders.

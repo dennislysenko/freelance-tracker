@@ -297,9 +297,9 @@ class FreelanceTrackerApp(rumps.App):
         """Apply a confirmed proposal, then pull fresh totals if anything landed."""
         if self.dashboard is None:
             return
-        written = self.dashboard.assistant_apply(proposal_id, indices)
-        if written:
-            self.update_display()
+        self.dashboard.assistant_apply(
+            proposal_id, indices, on_written=lambda _count: self.update_display()
+        )
 
     def _dashboard_assistant_clear(self):
         if self.dashboard is not None:
