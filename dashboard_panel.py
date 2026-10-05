@@ -319,6 +319,10 @@ class DashboardPanelController:
         self._current_panel_height = None
         self._exportable_projects = []
         self._stripe_invoice_state = None
+        # Gusto sync: `status` drives the Export/Invoice badge and menu row;
+        # `card` is the result overlay shown after a manual push.
+        self._gusto_status = None
+        self._gusto_card = None
         self._view = "dashboard"  # "dashboard" | "settings" | "assistant"
         # The popover is transient, so leaving to fetch a credential in a
         # browser dismisses it. Remembering the tab and the open integration
@@ -348,6 +352,14 @@ class DashboardPanelController:
     def clear_stripe_invoice_state(self):
         """Clear any active Stripe invoice workflow state."""
         self._stripe_invoice_state = None
+
+    def set_gusto_status(self, status):
+        """gusto_sync.status_view() output, or None when the sync is not set up."""
+        self._gusto_status = dict(status) if status else None
+
+    def set_gusto_card(self, card):
+        """Overlay after a manual push: {"status": running|success|error, title, detail, issues}."""
+        self._gusto_card = dict(card) if card else None
 
     def set_callbacks(self, callbacks):
         """Set action callbacks for dashboard buttons/menu items."""
@@ -1176,6 +1188,23 @@ class DashboardPanelController:
         last_month_label = _short_range(_last_month_start, _last_month_end)
         ytd_label = _short_range(_ytd_start, _ytd_end)
         stripe_state_html = self._render_stripe_invoice_state_html()
+        gusto_card_html = self._render_gusto_card_html()
+        gusto_status = self._gusto_status or {}
+        gusto_badge_html = ""
+        gusto_option_html = ""
+        if gusto_status.get("configured"):
+            if gusto_status.get("stale"):
+                gusto_badge_html = '<span class="export-badge" title="Gusto hours not pushed"></span>'
+            meta_cls = "export-option-meta" + (
+                " warn" if gusto_status.get("stale") else
+                " muted" if gusto_status.get("running") else ""
+            )
+            disabled = " disabled" if gusto_status.get("running") else ""
+            gusto_option_html = (
+                f'<button class="export-option invoice-option" onclick="gustoPush(event)"{disabled}>'
+                f'<span>Push to Gusto</span>'
+                f'<span class="{meta_cls}">{_esc(gusto_status.get("meta") or "")}</span></button>'
+            )
 
         # Settings view: rendered alongside the dashboard so switching is a
         # pure CSS toggle (body[data-view]) and Toggl-data refreshes don't
@@ -1798,6 +1827,28 @@ html, body {{
     color: #6e7681;
 }}
 
+.export-option-meta.warn {{
+    color: #f0883e;
+}}
+
+.export-badge {{
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: #f0883e;
+    vertical-align: middle;
+    position: relative;
+    top: -1px;
+}}
+
+.gusto-card-issue {{
+    font-size: 11px;
+    color: #f0883e;
+    margin-top: 4px;
+}}
+
 .export-empty {{
     padding: 7px 8px;
     color: #6e7681;
@@ -2164,7 +2215,7 @@ html, body {{
             </div>
             <div class="export-group" id="exportGroup">
                 <div class="action-btn export-toggle">
-                    <button class="export-primary" onclick="toggleExportMenu(event)">Export/Invoice</button>
+                    <button class="export-primary" onclick="toggleExportMenu(event)">Export/Invoice{gusto_badge_html}</button>
                 </div>
                 <div class="export-menu" id="exportMenu" {export_menu_data_attrs}>
                     <div class="export-stage" id="exportStage0">
@@ -2172,6 +2223,7 @@ html, body {{
                         <button class="export-option" onclick="exportChooseWorkflow('csv')">Export CSV</button>
                         <button class="export-option" onclick="exportChooseWorkflow('invoice')">Create Stripe Invoice</button>
                         <button class="export-option" onclick="exportChooseWorkflow('upwork')">Open Upwork Diary</button>
+                        {gusto_option_html}
                     </div>
                     <div class="export-stage" id="exportStage1" style="display:none;">
                         <div class="export-stage-title">Choose project</div>
@@ -2302,6 +2354,7 @@ html, body {{
     </div>
 </div>
 {stripe_state_html}
+{gusto_card_html}
 <div class="stripe-state-overlay" id="stripeInlineLoading" style="display:none;">
     <div class="stripe-state-card">
         <div class="stripe-state-title">Creating draft invoice…</div>
@@ -2403,6 +2456,15 @@ html, body {{
         closeExportMenu();
         closeMoreMenu();
         group.classList.toggle('open');
+    }}
+
+    function gustoPush(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        closeExportMenu();
+        postAction('gusto_push');
     }}
 
     function toggleExportMenu(event) {{
@@ -3026,6 +3088,39 @@ html, body {{
 </html>"""
 
         return html
+
+    def _render_gusto_card_html(self):
+        """Overlay for a manual Gusto push: in progress, then the result."""
+        card = self._gusto_card or {}
+        status = card.get("status")
+        if not status:
+            return ""
+        title = _esc(card.get("title") or "")
+        detail = _esc(card.get("detail") or "")
+        issues_html = "".join(
+            f'<div class="gusto-card-issue">&#9888; {_esc(msg)}</div>' for msg in card.get("issues") or []
+        )
+        if status == "running":
+            return f"""
+            <div class="stripe-state-overlay">
+                <div class="stripe-state-card">
+                    <div class="stripe-state-title">{title or 'Pushing to Gusto…'}</div>
+                    <div class="stripe-state-detail">{detail}</div>
+                    <div class="stripe-state-note">If Gusto asks you to log in, approve your passkey in the Gusto window.</div>
+                </div>
+            </div>"""
+        tone = "success" if status == "success" else "error"
+        return f"""
+        <div class="stripe-state-overlay">
+            <div class="stripe-state-card {tone}">
+                <div class="stripe-state-title">{title}</div>
+                <div class="stripe-state-detail">{detail}</div>
+                {issues_html}
+                <div class="stripe-state-actions">
+                    <button class="stripe-state-btn secondary" onclick="postAction('gusto_dismiss')">Done</button>
+                </div>
+            </div>
+        </div>"""
 
     def _render_stripe_invoice_state_html(self):
         """Render the current Stripe invoice workflow overlay, if any."""
