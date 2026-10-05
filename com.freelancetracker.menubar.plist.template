@@ -10,8 +10,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/dennis/dev/freelance-workflow/venv/bin/python</string>
-        <string>/Users/dennis/dev/freelance-workflow/menubar_app.py</string>
+        <string>__APP_DIR__/venv/bin/python</string>
+        <string>__APP_DIR__/menubar_app.py</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -21,10 +21,10 @@
     <true/>
 
     <key>StandardErrorPath</key>
-    <string>/Users/dennis/Library/Logs/freelancetracker-error.log</string>
+    <string>__HOME__/Library/Logs/freelancetracker-error.log</string>
 
     <key>StandardOutPath</key>
-    <string>/Users/dennis/Library/Logs/freelancetracker-output.log</string>
+    <string>__HOME__/Library/Logs/freelancetracker-output.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -33,6 +33,6 @@
     </dict>
 
     <key>WorkingDirectory</key>
-    <string>/Users/dennis/dev/freelance-workflow</string>
+    <string>__APP_DIR__</string>
 </dict>
 </plist>

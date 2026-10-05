@@ -3,7 +3,8 @@
 
 PLIST_NAME="com.freelancetracker.menubar.plist"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-SOURCE_PLIST="$(pwd)/$PLIST_NAME"
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+TEMPLATE_PLIST="$APP_DIR/$PLIST_NAME.template"
 DEST_PLIST="$LAUNCH_AGENTS_DIR/$PLIST_NAME"
 
 echo "Installing Freelance Tracker as a system service..."
@@ -11,9 +12,9 @@ echo "Installing Freelance Tracker as a system service..."
 # Create LaunchAgents directory if it doesn't exist
 mkdir -p "$LAUNCH_AGENTS_DIR"
 
-# Copy plist to LaunchAgents
-cp "$SOURCE_PLIST" "$DEST_PLIST"
-echo "✓ Copied plist to $DEST_PLIST"
+# Fill this checkout's paths into the template (the repo holds no user paths)
+sed -e "s|__APP_DIR__|$APP_DIR|g" -e "s|__HOME__|$HOME|g" "$TEMPLATE_PLIST" > "$DEST_PLIST"
+echo "✓ Wrote plist to $DEST_PLIST"
 
 # Load the service
 launchctl unload "$DEST_PLIST" 2>/dev/null

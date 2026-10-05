@@ -316,7 +316,7 @@ freelance-workflow/
 ├── status_service.sh           # Check app status
 ├── logs.sh                     # View logs
 │
-├── com.freelancetracker.menubar.plist  # LaunchAgent config
+├── com.freelancetracker.menubar.plist.template  # LaunchAgent config (paths filled in by install_service.sh)
 ├── .env                        # API credentials (gitignored)
 ├── requirements.txt            # Python dependencies
 │

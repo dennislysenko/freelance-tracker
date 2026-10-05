@@ -51,7 +51,7 @@ Preferences are stored in `~/Library/Application Support/TogglMenuBar/preference
 ### Step 1: Install as LaunchAgent
 
 ```bash
-cd /Users/dennis/dev/freelance-workflow
+cd path/to/freelance-workflow
 ./install_service.sh
 ```
 
@@ -180,7 +180,7 @@ The cache will rebuild automatically on next refresh.
 2. **Verify Python path:**
    ```bash
    which python
-   # Should show: /Users/dennis/dev/freelance-workflow/venv/bin/python
+   # Should show: <repo>/venv/bin/python
    ```
 
 3. **Check plist syntax:**

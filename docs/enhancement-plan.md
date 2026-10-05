@@ -53,7 +53,7 @@ This plan addresses four critical requirements for the Freelance Tracker macOS m
 
 ### Code Changes
 
-**File: `/Users/dennis/dev/freelance-workflow/menubar_app.py`**
+**File: `menubar_app.py`**
 
 Add menu item in `update_display()` method (after API Audit Log item):
 ```python
@@ -173,7 +173,7 @@ def _watch_preferences_changes(self, original_mtime):
 
 ### Validation Function
 
-**File: `/Users/dennis/dev/freelance-workflow/preferences.py`**
+**File: `preferences.py`**
 
 Add validation function:
 ```python
@@ -330,7 +330,7 @@ Add inline comments to help users understand settings when they open the file:
 
 **Test Framework:** pytest
 
-**New File: `/Users/dennis/dev/freelance-workflow/tests/test_preferences.py`**
+**New File: `tests/test_preferences.py`**
 
 ```python
 import pytest
@@ -381,7 +381,7 @@ class TestPreferencesValidation:
         pass
 ```
 
-**New File: `/Users/dennis/dev/freelance-workflow/tests/test_toggl_data.py`**
+**New File: `tests/test_toggl_data.py`**
 
 ```python
 import pytest
@@ -411,7 +411,7 @@ class TestProjections:
         pass
 ```
 
-**New File: `/Users/dennis/dev/freelance-workflow/tests/test_cache.py`**
+**New File: `tests/test_cache.py`**
 
 ```python
 import pytest
@@ -439,7 +439,7 @@ class TestCaching:
 
 #### B. Integration Tests (Semi-Automated)
 
-**New File: `/Users/dennis/dev/freelance-workflow/tests/test_integration.py`**
+**New File: `tests/test_integration.py`**
 
 ```python
 import pytest
@@ -462,7 +462,7 @@ class TestMenuBarIntegration:
 
 #### C. Manual Testing Checklist (Human Verification)
 
-**Test Plan Document: `/Users/dennis/dev/freelance-workflow/docs/manual-test-checklist.md`**
+**Test Plan Document: `docs/manual-test-checklist.md`**
 
 ```markdown
 # Manual Testing Checklist
@@ -527,7 +527,7 @@ class TestMenuBarIntegration:
 
 #### D. Automated Test Runner
 
-**New File: `/Users/dennis/dev/freelance-workflow/run_tests.sh`**
+**New File: `run_tests.sh`**
 
 ```bash
 #!/bin/bash
@@ -759,22 +759,22 @@ jobs:
 Here are the key files that will be modified or created:
 
 **Modified:**
-- `/Users/dennis/dev/freelance-workflow/menubar_app.py` - Add LSUIElement code, Edit Preferences menu item, file watching
-- `/Users/dennis/dev/freelance-workflow/preferences.py` - Add `validate_preferences()` function
-- `/Users/dennis/dev/freelance-workflow/com.freelancetracker.menubar.plist` - May need updates for py2app
+- `menubar_app.py` - Add LSUIElement code, Edit Preferences menu item, file watching
+- `preferences.py` - Add `validate_preferences()` function
+- `com.freelancetracker.menubar.plist` - May need updates for py2app
 
 **Created (if py2app needed):**
-- `/Users/dennis/dev/freelance-workflow/setup.py` - py2app configuration
-- `/Users/dennis/dev/freelance-workflow/build_app.sh` - Build script
+- `setup.py` - py2app configuration
+- `build_app.sh` - Build script
 
 **Created (testing):**
-- `/Users/dennis/dev/freelance-workflow/tests/__init__.py`
-- `/Users/dennis/dev/freelance-workflow/tests/test_preferences.py`
-- `/Users/dennis/dev/freelance-workflow/tests/test_toggl_data.py`
-- `/Users/dennis/dev/freelance-workflow/tests/test_cache.py`
-- `/Users/dennis/dev/freelance-workflow/tests/test_integration.py`
-- `/Users/dennis/dev/freelance-workflow/run_tests.sh`
-- `/Users/dennis/dev/freelance-workflow/docs/manual-test-checklist.md`
+- `tests/__init__.py`
+- `tests/test_preferences.py`
+- `tests/test_toggl_data.py`
+- `tests/test_cache.py`
+- `tests/test_integration.py`
+- `run_tests.sh`
+- `docs/manual-test-checklist.md`
 
 ---
 
