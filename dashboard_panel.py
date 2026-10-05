@@ -38,11 +38,7 @@ class EditingWebView(WKWebView):
         return objc.super(EditingWebView, self).performKeyEquivalent_(event)
 from preferences import load_preferences, save_preferences, DEFAULT_PREFERENCES
 from carryover import get_previous_month_balance
-from toggl_data import (
-    get_lbd_billing_cycle_bounds,
-    get_lbd_cycle_progress,
-    get_lbd_remaining_business_days,
-)
+from pacing import compute_pacing
 from integrations import load_integration_settings
 from assistant import AssistantSession
 from assistant_view import (
@@ -962,92 +958,22 @@ class DashboardPanelController:
                 carryover_balance, prev_month_label = get_previous_month_balance(name)
 
             if target:
-                effective_target = max(0.1, target - carryover_balance)
-                percentage = (p['hours'] / effective_target) * 100
-                clamped_pct = min(percentage, 100)
-
-                # Pacing: compare hours % vs calendar progress, except capped LBD
-                # projects which pace against their billing-cycle window.
-                from datetime import date
-                import calendar as cal_mod
-                today = date.today()
-                days_in_month = cal_mod.monthrange(today.year, today.month)[1]
-                calendar_pct = (today.day / days_in_month) * 100
-                elapsed_days = today.day
+                pacing = compute_pacing(
+                    p['hours'], target, carryover_balance, billing_type, proj_def
+                )
+                effective_target = pacing['effective_target']
+                percentage = pacing['percentage']
+                clamped_pct = pacing['clamped_pct']
+                calendar_pct = pacing['calendar_pct']
+                bar_color = pacing['color']
+                status_text = pacing['label']
                 period_inline = ""
-                if billing_type == 'hourly_with_cap' and proj_def.get('last_billed_date'):
-                    try:
-                        calendar_pct = get_lbd_cycle_progress(proj_def['last_billed_date'], today=today)
-                        period_start, period_end = get_lbd_billing_cycle_bounds(proj_def['last_billed_date'])
-                        period_label = f"{period_start.month}/{period_start.day}-{period_end.month}/{period_end.day}"
-                        period_inline = f'<span class="billing-period">{period_label}</span>'
-                        if today >= period_start:
-                            elapsed_days = (today - period_start).days + 1
-                        else:
-                            elapsed_days = 0
-                    except ValueError:
-                        pass
-                pace_ratio = percentage / max(calendar_pct, 0.1)
-                # Bayesian shrinkage toward neutral (1.0) early in the cycle:
-                # the ratio is a noisy estimator when the denominator is tiny,
-                # so blend it with 1.0 weighted by elapsed days (full signal by day 5).
-                shrink_weight = min(max(elapsed_days, 0) / 5.0, 1.0)
-                pace_ratio = pace_ratio * shrink_weight + 1.0 * (1 - shrink_weight)
-
-                if percentage > 105:
-                    bar_color = "#f85149"
-                    status_text = "Over target"
-                elif percentage >= 100:
-                    bar_color = "#f0883e"
-                    status_text = "Complete"
-                elif percentage >= 95:
-                    bar_color = "#f0883e"
-                    status_text = "Almost there"
-                elif pace_ratio >= 1.5:
-                    bar_color = "#3fb950"
-                    status_text = "Well ahead \u2014 ease off or bank hours"
-                elif pace_ratio >= 1.15:
-                    bar_color = "#3fb950"
-                    status_text = "Ahead of pace"
-                elif pace_ratio >= 0.85:
-                    bar_color = "#3fb950"
-                    status_text = "On pace"
-                elif pace_ratio >= 0.5:
-                    bar_color = "#58a6ff"
-                    status_text = "Behind \u2014 ramp up to stay on track"
-                else:
-                    bar_color = "#58a6ff"
-                    status_text = "Way behind \u2014 needs attention"
-
-                # Late-cycle feasibility guard (capped projects only). The pace
-                # ratio above still credits time that hasn't elapsed, so a cap
-                # that is mathematically out of reach can still read "on pace"
-                # in the final couple of days. If filling the cap would now need
-                # more than a full workday (8h) per remaining business day,
-                # downgrade. Only ever turns green -> "Behind"; with 3+ business
-                # days left this branch does nothing, so earlier-cycle pacing is
-                # untouched.
-                if (billing_type == 'hourly_with_cap' and bar_color == "#3fb950"
-                        and calendar_pct >= 80):
-                    if proj_def.get('last_billed_date'):
-                        try:
-                            remaining_biz_days = get_lbd_remaining_business_days(
-                                proj_def['last_billed_date'], today=today)
-                        except ValueError:
-                            remaining_biz_days = None
-                    else:
-                        remaining_biz_days = sum(
-                            1 for d in range(today.day + 1, days_in_month + 1)
-                            if date(today.year, today.month, d).weekday() < 5
-                        )
-                    if remaining_biz_days is not None and remaining_biz_days <= 2:
-                        hours_needed = effective_target - p['hours']
-                        if hours_needed > 0 and (
-                            remaining_biz_days == 0
-                            or hours_needed / remaining_biz_days > 8.0
-                        ):
-                            bar_color = "#58a6ff"
-                            status_text = "Behind \u2014 cap out of reach"
+                if pacing['cycle_start'] and pacing['cycle_end']:
+                    from datetime import date
+                    period_start = date.fromisoformat(pacing['cycle_start'])
+                    period_end = date.fromisoformat(pacing['cycle_end'])
+                    period_label = f"{period_start.month}/{period_start.day}-{period_end.month}/{period_end.day}"
+                    period_inline = f'<span class="billing-period">{period_label}</span>'
 
                 carryover_html = ""
                 if carryover_balance != 0.0:

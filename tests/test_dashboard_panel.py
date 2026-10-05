@@ -3,6 +3,7 @@
 from datetime import date, datetime, timedelta
 
 import dashboard_panel
+import pacing
 from dashboard_panel import DashboardPanelController
 
 
@@ -228,7 +229,7 @@ def test_lbd_capped_projects_use_billing_cycle_pace(monkeypatch):
         lambda name: (0.0, "Mar"),
     )
     monkeypatch.setattr(
-        dashboard_panel,
+        pacing,
         "get_lbd_cycle_progress",
         lambda last_billed_date, today=None: 20.0,
     )
@@ -278,10 +279,10 @@ def test_late_cycle_unreachable_cap_downgrades_to_behind(monkeypatch):
     )
     monkeypatch.setattr(dashboard_panel, "get_previous_month_balance", lambda name: (0.0, "Mar"))
     # 104/132 = 78.7% done, 87.5% of cycle elapsed -> pace ratio ~0.90 -> "On pace".
-    monkeypatch.setattr(dashboard_panel, "get_lbd_cycle_progress",
+    monkeypatch.setattr(pacing, "get_lbd_cycle_progress",
                         lambda last_billed_date, today=None: 87.5)
     # 2 business days left; 28h needed / 2 = 14h/day > 8 -> unreachable.
-    monkeypatch.setattr(dashboard_panel, "get_lbd_remaining_business_days",
+    monkeypatch.setattr(pacing, "get_lbd_remaining_business_days",
                         lambda last_billed_date, today=None: 2)
 
     html = controller._generate_html(
@@ -318,9 +319,9 @@ def test_late_cycle_reachable_cap_stays_on_pace(monkeypatch):
         },
     )
     monkeypatch.setattr(dashboard_panel, "get_previous_month_balance", lambda name: (0.0, "Mar"))
-    monkeypatch.setattr(dashboard_panel, "get_lbd_cycle_progress",
+    monkeypatch.setattr(pacing, "get_lbd_cycle_progress",
                         lambda last_billed_date, today=None: 87.5)
-    monkeypatch.setattr(dashboard_panel, "get_lbd_remaining_business_days",
+    monkeypatch.setattr(pacing, "get_lbd_remaining_business_days",
                         lambda last_billed_date, today=None: 2)
 
     # 124/132 = 93.9% done; only 8h to go over 2 days = 4h/day -> reachable.
@@ -359,12 +360,12 @@ def _patch_early_cycle(monkeypatch):
         lambda name: (0.0, "Mar"),
     )
     monkeypatch.setattr(
-        dashboard_panel,
+        pacing,
         "get_lbd_cycle_progress",
         lambda last_billed_date, today=None: 100.0 / 33,
     )
     monkeypatch.setattr(
-        dashboard_panel,
+        pacing,
         "get_lbd_billing_cycle_bounds",
         lambda last_billed_date: (today, today + timedelta(days=32)),
     )
