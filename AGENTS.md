@@ -48,6 +48,8 @@ Current API usage per operation:
 3. UPDATE this documentation with new call patterns
 4. Use the audit log to verify call counts: `~/Library/Logs/toggl-api-audit.log`
 
+**MCP server rule:** anything added to `mcp_server.py` must keep working under `toggl_data.CACHE_ONLY` (0 Toggl calls). If a tool needs data the dashboard does not already keep warm, it returns a `CacheMissError` message rather than fetching.
+
 **Cache TTLs:**
 - Projects: 24 hours (`cache_ttl_projects`)
 - Today's entries: 30 minutes (`cache_ttl_today`)
@@ -113,6 +115,9 @@ rm -rf ~/Library/Caches/TogglMenuBar/*    # Clear cache
 - `toggl_earnings.py` - CLI version
 - `preferences.py` - Settings
 - `preferences_window.py` - Native preferences UI
+- `pacing.py` - Pure monthly pacing decision tree shared by the dashboard bars and the MCP server
+- `mcp_server.py` - Read-only stdio MCP server for agents (Claude Code, Codex); runs the data layer in cache-only mode, never calls Toggl
+- `mcp_support.py` - Registration snippets, registration detection, and the settings "Test server" probe
 - `.env` - API credentials (never commit!)
 
 ## File Locations

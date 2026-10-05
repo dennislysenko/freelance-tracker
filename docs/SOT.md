@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-04-20
+**Last Updated:** 2026-09-15
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -221,7 +221,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Project definitions with billing types (`projects` key)
 - Integrations tab is a **grid of integration cells** grouped by purpose (Time tracking, Assistant, Billing & invoicing, Planning). Each cell shows the integration name and its status — green "✓ Active" when configured, "Configure integration" when not — so the whole tab fits on one screen with no scrolling
 - Clicking a cell **drills into a detail pane** containing only that integration's fields and setup guidance, with a back arrow to the grid. Replaces the previous single long scrolling column of every credential
-- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), and Google Calendar (days off). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
+- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), Google Calendar (days off), and Agents (MCP) (read-only agent access, see "Agent access (MCP server)"). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
 - The active tab **and** the open integration are mirrored to Python (`settings_tab:` / `settings_intg:` bridge messages) and re-rendered on the next load. The popover is transient, so leaving to fetch a credential in a browser dismisses it; without this the user was dropped back on the first tab and had to re-navigate every time
 - Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
 - The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
@@ -315,6 +315,20 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
   - Toggl: 0 calls to parse; **1 POST per entry** on apply (a "past 2 days" command applies 2 entries = 2 calls); read questions cost 0
   - OpenAI: 1 call per command, plus 1 on key save; billed to the user's own account
   - OpenAI calls are deliberately **not** recorded in the Toggl audit log, which stays Toggl-only so the documented Toggl call counts remain accurate
+
+### Agent access (MCP server)
+- `mcp_server.py` is a stdio [MCP](https://modelcontextprotocol.io) server that lets coding agents (Claude Code, Codex, any MCP host) read the same numbers the dashboard shows. Setup guide: `docs/mcp-agents.md`; design: `docs/mcp-server-plan.md`
+- **Read-only.** No tool writes to Toggl, preferences, or carryover. Time logging stays with the in-app assistant and its confirm-before-write contract
+- **Never calls Toggl.** The server runs the data layer in **cache-only mode** (`FREELANCE_TRACKER_CACHE_ONLY=1` → `toggl_data.CACHE_ONLY`): it reads the shared day-shard cache and projects cache as-is, serves a stale today shard rather than refetching, and raises `CacheMissError` ("open the dashboard or press Refresh Now") only for a day that has never been cached. Every response carries `data_as_of` (oldest shard mtime in the range)
+- It calls `calculate_period_earnings` / `calculate_monthly_projection` directly, never `get_monthly_earnings`, so the auto-carryover write never runs from the agent process
+- Tools: `get_overview` (today / week / month + projection summary), `get_month_status` (per-project pacing plus a ranked `attention` list: cap out of reach / way behind → behind → capped cycle ending within 3 business days with hours unfilled → over target → well ahead), `get_projection` (full projection incl. `trace`), `get_project_rules` (definitions, targets, rev share, vacation settings, plus plain-English rules), `get_time_entries` (cached entries between two dates, max 92 days, optional project filter), `get_data_freshness`. One prompt, `progress_checkin`, tells the host model to lead with `attention` and quote hours per remaining business day rather than labels
+- Pacing numbers come from `pacing.py`, the same pure module the dashboard now uses for its progress bars (`compute_pacing`): percentage, calendar progress, raw and shrunk pace ratio, band, label, colour, billing-cycle bounds, remaining business days, hours needed, hours per remaining day. Extracted from the dashboard renderer so both surfaces cannot drift
+- **Preferences** (Settings → Integrations → **Agents (MCP)** cell, in a new "Agents" group; also two checkboxes on the fallback AppKit window's Advanced tab):
+  - `mcp_enabled` (default `false`). Checked on every tool call; when off, every tool returns a "disabled" error, so registering the server with an agent before enabling it is harmless
+  - `mcp_anonymize` (default `false`). When on, project names become `Project A`, `Project B`, … and every dollar value is rescaled by one undisclosed constant (same approach as the diagnostics export); plain-English rules are hidden
+- The detail pane shows best-effort, read-only detection of existing registrations (`~/.claude.json` and `~/.codex/config.toml`), copy buttons for the Claude Code `claude mcp add` command and the Codex TOML block with real paths filled in, and a **Test server** button that spawns the server on a worker thread (`background_work`) and reports tool count and data freshness. The app never edits agent config files
+- stdio owns stdout, so the server redirects `sys.stdout` to stderr before importing project modules (some `print()` on error paths) and hands the real stdout back to the transport
+- API call cost: **0 Toggl calls** for every tool, always. The server makes no network calls of any kind. Dependency: `mcp>=2.0` (Python SDK)
 
 ---
 

@@ -206,6 +206,20 @@ That project-mapping grid also has an **Upwork Contract ID** column. Add the Upw
 
 The current Upwork integration is intentionally a deep-link shortcut, not a direct API write. Upwork’s documented GraphQL docs expose work-diary reads, but they do not document a manual-time creation mutation, so the app currently opens the contract-specific work diary URL instead of attempting an unsupported write.
 
+### Agents (MCP) — let Claude Code or Codex read your numbers
+
+The app ships a read-only [MCP](https://modelcontextprotocol.io) server so a coding
+agent can answer "how is my month going, and where should I put more hours?" from
+your real Toggl data: hours, earnings, the month projection, per-project pacing, and
+your billing rules. It never calls Toggl (it reads the app's cache) and cannot log
+time or change settings.
+
+1. Settings → Integrations → **Agents (MCP)** → tick **Enable MCP server** → Save.
+2. Click **Copy Claude Code command** (or **Copy Codex config**) and run / paste it.
+3. In your agent: "Check in on my freelance month."
+
+Full setup, tool list, and troubleshooting: [docs/mcp-agents.md](docs/mcp-agents.md).
+
 ### Natural-Language Time Logging (optional)
 
 Bring your own OpenAI key and you can type entries in plain English instead of
