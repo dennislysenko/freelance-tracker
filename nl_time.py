@@ -1,7 +1,7 @@
 """
 Natural-language time logging.
 
-Turns an utterance like "put 1 hour of randonautica retainer at 9am for the past
+Turns an utterance like "put 1 hour of globex retainer at 9am for the past
 2 days, no note" into a list of *proposed* Toggl time entries, which the caller
 shows for confirmation before writing anything. Also classifies read questions
 ("how many hours on X this month?") into a local query the caller answers from
@@ -320,8 +320,8 @@ Rules:
 - When the user gives only a vague time of day, use these defaults so the same
   command always produces the same entry: morning 09:00, afternoon 13:00,
   evening 18:00. If they give no time at all, use 09:00.
-- Match the project by meaning, not exact string ("randonautica retainer" may
-  be "Randonautica - Retainer"). Choose only from the provided list.
+- Match the project by meaning, not exact string ("globex retainer" may
+  be "Globex - Retainer"). Choose only from the provided list.
 - "no note" / "no description" means description must be null.
 - Default billable to true unless the user says otherwise.
 - One object per day: "1 hour at 9am for the past 2 days" is TWO entries.
@@ -589,7 +589,7 @@ def find_collisions(resolved, existing_entries):
 
 if __name__ == "__main__":
     # Harness for checking parse quality without the dashboard:
-    #   python nl_time.py "1 hour of randonautica retainer at 9am the past 2 days, no note"
+    #   python nl_time.py "1 hour of globex retainer at 9am the past 2 days, no note"
     import sys
 
     import toggl_data

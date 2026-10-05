@@ -7,7 +7,7 @@ import nl_time
 from assistant import MAX_TURNS, AssistantSession
 
 
-PROJECTS = {"101": {"name": "Acme"}, "202": {"name": "TriShot"}}
+PROJECTS = {"101": {"name": "Acme"}, "202": {"name": "Initech"}}
 
 
 def _parsed_entry(**overrides):

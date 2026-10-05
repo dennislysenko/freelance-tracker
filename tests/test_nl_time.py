@@ -6,14 +6,14 @@ from datetime import date as _date, datetime, timedelta, timezone
 import nl_time
 
 
-PROJECTS = {"101": {"name": "Randonautica - Retainer"}, "202": {"name": "Acme"}}
+PROJECTS = {"101": {"name": "Globex - Retainer"}, "202": {"name": "Acme"}}
 
 
 class TestProjectNameMap(unittest.TestCase):
     def test_inverts_id_keyed_projects(self):
         self.assertEqual(
             nl_time.project_name_map(PROJECTS),
-            {"Randonautica - Retainer": 101, "Acme": 202},
+            {"Globex - Retainer": 101, "Acme": 202},
         )
 
     def test_tolerates_empty_and_nameless(self):
@@ -27,7 +27,7 @@ class TestResolveEntries(unittest.TestCase):
 
     def _entry(self, **overrides):
         base = {
-            "project": "Randonautica - Retainer",
+            "project": "Globex - Retainer",
             "date_kind": "absolute",
             "date_absolute": "2026-08-03",
             "date_days_ago": None,
@@ -223,9 +223,9 @@ class TestFindCollisions(unittest.TestCase):
 
 class TestSchema(unittest.TestCase):
     def test_projects_are_an_enum_so_the_model_cannot_invent_one(self):
-        schema = nl_time._schema(["Acme", "Randonautica - Retainer"])
+        schema = nl_time._schema(["Acme", "Globex - Retainer"])
         entry_props = schema["schema"]["properties"]["entries"]["items"]["properties"]
-        self.assertEqual(entry_props["project"]["enum"], ["Acme", "Randonautica - Retainer"])
+        self.assertEqual(entry_props["project"]["enum"], ["Acme", "Globex - Retainer"])
 
     def test_strict_mode_requires_every_property(self):
         schema = nl_time._schema(["Acme"])["schema"]
