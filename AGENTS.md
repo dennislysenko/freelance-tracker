@@ -58,6 +58,8 @@ Current API usage per operation:
 
 **MCP server rule:** anything added to `mcp_server.py` must keep working under `toggl_data.CACHE_ONLY` (0 Toggl calls). If a tool needs data the dashboard does not already keep warm, it returns a `CacheMissError` message rather than fetching.
 
+**Gusto push:** 1 Toggl call per run (fetched fresh via `fetch_entries_fresh`, never the day cache, so payroll is never under-reported).
+
 **Gusto rule:** `gusto_client.py` must only ever drive a **visible** Chrome window (never headless) and never try to get past Gusto's Cloudflare check; never enter passwords or approve passkeys; never save Gusto request headers/cookies to disk. Tests must use fake sessions, never real Gusto. Don't submit test shifts: the only real writes are the user's own Toggl hours. When Gusto's API changes, use the `gusto-recapture` skill.
 
 **Cache TTLs:**

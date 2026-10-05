@@ -369,19 +369,25 @@ class FreelanceTrackerApp(rumps.App):
         def session_factory(slug):
             return gusto_client.open_session(slug, on_login_needed=notify_login)
 
+        prior_error = state.get("last_error")
+
         def work():
-            return gusto_sync.run_sync(
-                prefs, state, now=now, window=window,
-                session_factory=session_factory, persist=gusto_sync.save_state,
+            # Locked across processes; the ledger is re-read inside the lock.
+            return gusto_sync.run_locked(
+                prefs, now=now, window=window, session_factory=session_factory,
             )
 
         def done(result):
-            new_state, summary = result
-            gusto_sync.save_state(new_state)
+            _new_state, summary = result
             self._gusto_running = False
             text = gusto_sync.describe_result(summary)
             _debug(f"Gusto sync ({'manual' if manual else 'scheduled'}): {text}")
-            if summary.get("error"):
+            # A scheduled run only notifies about an error the first time it
+            # appears; retries of the same failure stay quiet.
+            new_error = summary.get("error") and (manual or summary["error"] != prior_error)
+            if summary.get("busy") and not manual:
+                pass
+            elif new_error:
                 rumps.notification(
                     "Gusto", "Needs your passkey" if summary.get("login_required") else "Push failed",
                     f"{text} Use Export/Invoice → Push to Gusto to retry.",

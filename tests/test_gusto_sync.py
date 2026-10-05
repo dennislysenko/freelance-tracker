@@ -267,3 +267,115 @@ def test_status_flags_attention_and_hides_when_unconfigured():
     assert view["stale"] and view["meta"] == "1 needs attention"
     assert g.status_view({**PREFS, "gusto_sync_enabled": False}, state)["configured"] is False
     assert g.status_view(PREFS, state, running=True)["stale"] is False
+
+
+# --- review fixes --------------------------------------------------------------
+
+
+def test_retry_backoff_doubles_and_caps():
+    assert g.retry_delay({"consecutive_failures": 1}) == timedelta(hours=1)
+    assert g.retry_delay({"consecutive_failures": 3}) == timedelta(hours=4)
+    assert g.retry_delay({"consecutive_failures": 10}) == timedelta(hours=24)
+    state = {"last_error": "schema", "last_attempt": "2026-10-12T09:00:00", "consecutive_failures": 3}
+    assert not g.sync_due(datetime(2026, 10, 12, 12, 0), state)
+    assert g.sync_due(datetime(2026, 10, 12, 13, 1), state)
+
+
+def test_failures_count_up_and_reset_on_success():
+    _, (state, _) = _run([], session=FakeSession(login_required=True))
+    assert state["consecutive_failures"] == 1
+    _, (state, _) = _run([], state={**state, "login_required": False, "consecutive_failures": 1},
+                         session=FakeSession(login_required=True))
+    assert state["consecutive_failures"] == 2
+    _, (state, _) = _run([], state=state)
+    assert state["consecutive_failures"] == 0
+
+
+def test_future_start_date_means_nothing_to_push_and_no_browser():
+    def no_browser(slug):
+        raise AssertionError("must not open Gusto")
+    state, summary = g.run_sync(
+        PREFS, {"pushed": {}}, now=datetime(2026, 10, 8, 12),
+        window=(date(2026, 10, 9), date(2026, 10, 7)), session_factory=no_browser,
+    )
+    assert summary["empty"] and not summary["error"]
+    assert g.describe_result(summary) == "Nothing to push yet"
+    assert g.manual_window(datetime(2026, 10, 8, 12), {}, first_day=date(2026, 10, 9))[0] > \
+        g.manual_window(datetime(2026, 10, 8, 12), {}, first_day=date(2026, 10, 9))[1]
+
+
+def test_drift_ignores_time_zone_changes():
+    start = datetime(2026, 10, 6, 13, 0, tzinfo=timezone.utc)
+    stop = start + timedelta(hours=1)
+    # Recorded while the Mac was in another zone: same instants, different offsets.
+    other = timezone(timedelta(hours=-7))
+    state = {"pushed": {"1": {"day": "2026-10-06",
+                              "start": start.astimezone(other).isoformat(timespec="seconds"),
+                              "stop": stop.astimezone(other).isoformat(timespec="seconds")}}}
+    issues = g.find_drift([_entry(1, start, 60)], PROJECT_ID, state, date(2026, 10, 5), date(2026, 10, 11))
+    assert issues == []
+
+
+def test_shift_that_landed_despite_an_error_is_adopted_not_retried():
+    start = _local(2026, 10, 6, 9)
+
+    class LandsButErrors(FakeSession):
+        def add_shift(self, tracker_id, clock_in, clock_out, note, timezone):
+            self.existing.append({"id": "555", "clock_in": clock_in.isoformat(),
+                                  "clock_out": clock_out.isoformat()})
+            raise gusto_client.GustoError("Gusto accepted the shift but did not return it.")
+
+    session = LandsButErrors()
+    _, (state, summary) = _run([_entry(1, start, 60)], session=session)
+    assert state["pushed"]["1"]["shift_id"] == "555"
+    assert summary["issues"] == []
+
+
+def test_same_shift_falls_back_to_day_duration_note_without_timestamps():
+    start = _local(2026, 10, 6, 9)
+    hidden = {"id": "9", "date": "2026-10-06", "minutes": 60, "clock_in": None,
+              "clock_out": None, "notes": ["a"]}
+    assert g._same_shift(hidden, start, start + timedelta(hours=1), "a")
+    assert not g._same_shift(hidden, start, start + timedelta(hours=2), "a")
+    assert not g._same_shift(hidden, start, start + timedelta(hours=1), "b")
+
+
+def test_run_locked_refuses_while_another_push_holds_the_lock(tmp_path):
+    lock = tmp_path / "sync.lock"
+    state_path = tmp_path / "state.json"
+    g.save_state({"pushed": {"x": {}}}, state_path)
+    with g.run_lock(lock):
+        state, summary = g.run_locked(PREFS, lock_path=lock, state_path=state_path,
+                                      window=(date(2026, 10, 5), date(2026, 10, 11)))
+    assert summary["busy"] and "already running" in summary["error"]
+    assert state == {"pushed": {"x": {}}}
+
+
+def test_run_locked_saves_ledger_under_the_lock(tmp_path):
+    session = FakeSession()
+    state, summary = g.run_locked(
+        PREFS, now=datetime(2026, 10, 12, 9, 30), session_factory=_factory(session),
+        state_path=tmp_path / "s.json", lock_path=tmp_path / "l.lock",
+        entries_provider=lambda s, e: [_entry(1, _local(2026, 10, 6, 9), 60)],
+        projects_provider=lambda: {PROJECT_ID: {"name": "Acme"}},
+    )
+    assert summary["pushed"] == 1
+    assert "1" in g.load_state(tmp_path / "s.json")["pushed"]
+
+
+def test_fresh_fetch_raises_instead_of_returning_cached_or_empty(monkeypatch):
+    import toggl_data
+
+    class Response:
+        status_code = 402
+
+    monkeypatch.setattr(toggl_data, "CACHE_ONLY", False)
+    monkeypatch.setattr(toggl_data, "_get_api_token", lambda: "token")
+    monkeypatch.setattr(toggl_data.requests, "get", lambda *a, **k: Response())
+    monkeypatch.setattr(toggl_data, "log_api_request", lambda *a, **k: None)  # keep the real audit log clean
+    monkeypatch.setattr(toggl_data, "_rate_limited", False)
+    stored = []
+    monkeypatch.setattr(toggl_data, "_store_entries_for_range", lambda *a: stored.append(a))
+    with pytest.raises(toggl_data.TogglFetchError, match="rate limit"):
+        toggl_data.fetch_entries_fresh(_local(2026, 10, 5, 0), _local(2026, 10, 11, 23))
+    assert stored == []
