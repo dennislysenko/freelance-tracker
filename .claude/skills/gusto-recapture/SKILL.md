@@ -24,7 +24,7 @@ bundles and run read queries. Never submit a shift to see what happens.
 - Page load: `ReviewTrackerTimesheet`, which reads `tracker(id).groupedShiftsWithTotals(payPeriod:{startDate,endDate})` (mirrored by our `SHIFTS_QUERY`).
 - Save a manual shift: `TimesheetAddShift` → `addHours(input:{trackerId, clockInTimestamp, clockOutTimestamp, noteText, timezone, ...})`. Response `shiftsForDay` is a **single object, not a list** (`add_shift` handles both). Also in the bundle: `TimesheetEditShift` (`editShift`) and `TimesheetDeleteShift` (`deleteShift`). We never use either.
 - Auth: the gateway needs `x-csrf-token` and `x-role-id` (plus `apollographql-client-name`/`-version`) on top of cookies. Without `x-role-id` it returns 403 `GRAPHQL_IDENTITY_FAILURE`. `open_session` copies `_FORWARDED_HEADERS` from the first POST Gusto's own client sends to `GRAPHQL_URL`, keeps them in memory, and issues `fetch(..., {credentials:'include'})` from inside the page.
-- The mutation text was in a `ReviewTrackerTimesheetRoot-*.js` bundle on a CloudFront host (e.g. `d3bnlkto289wdc.cloudfront.net/vite-dev/assets/*.js`).
+- The mutation text was in a `ReviewTrackerTimesheetRoot-*.js` bundle served from Gusto's CDN (a CloudFront host, `.../vite-dev/assets/*.js`).
 
 ## Procedure
 Run everything from the repo root with the venv active: `source venv/bin/activate`.

@@ -290,6 +290,50 @@ def get_entries_for_range(start_date, end_date, force_refresh=False):
     return cached_entries or []
 
 
+class TogglFetchError(RuntimeError):
+    """A fresh Toggl fetch failed (rate limit, network, HTTP error)."""
+
+
+def fetch_entries_fresh(start_date, end_date):
+    """Fetch entries straight from Toggl, never from cache; raise on failure.
+
+    For callers that must not act on stale data. Past days are cached
+    permanently once written, so a day cached before its last entries were
+    logged would otherwise be read short forever; the Gusto push uses this so
+    hours are never under-reported. Unlike `get_time_entries` there is no
+    fallback: a rate limit or network error raises `TogglFetchError` instead
+    of returning cached or empty data. Successful results refresh the day
+    shards. Costs 1 call.
+    """
+    global _rate_limited
+    if CACHE_ONLY:
+        raise TogglFetchError("Toggl is in cache-only mode in this process.")
+    start_local = start_date.astimezone()
+    end_local = end_date.astimezone()
+    try:
+        response = requests.get(
+            f"{BASE_URL}/me/time_entries",
+            auth=(_get_api_token(), "api_token"),
+            params={"start_date": start_local.isoformat(), "end_date": end_local.isoformat()},
+            timeout=10,
+        )
+    except requests.exceptions.RequestException as exc:
+        log_api_request("/me/time_entries", "GET", error=str(exc))
+        raise TogglFetchError(f"Toggl request failed: {exc}") from exc
+    if response.status_code == 402:
+        _rate_limited = True
+        log_api_request("/me/time_entries", "GET", status_code=402, rate_limited=True)
+        raise TogglFetchError("Toggl rate limit reached; try again later.")
+    if response.status_code >= 400:
+        log_api_request("/me/time_entries", "GET", status_code=response.status_code)
+        raise TogglFetchError(f"Toggl returned HTTP {response.status_code}.")
+    _rate_limited = False
+    log_api_request("/me/time_entries", "GET", status_code=response.status_code)
+    entries = response.json() or []
+    _store_entries_for_range(start_local, end_local, entries)
+    return entries
+
+
 def get_time_entries(start_date, end_date):
     """
     Fetch time entries for a date range.

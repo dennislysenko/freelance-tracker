@@ -26,17 +26,21 @@ Gusto through injectable providers.
 
 from __future__ import annotations
 
+import fcntl
 import json
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from preferences import APP_SUPPORT_DIR
 
 STATE_FILE = APP_SUPPORT_DIR / "gusto_sync_state.json"
+LOCK_FILE = APP_SUPPORT_DIR / "gusto_sync.lock"
 
 SYNC_WEEKDAY = 0  # Monday
 SYNC_HOUR = 9  # 09:00 local
-RETRY_AFTER = timedelta(hours=1)  # after a non-login failure
+RETRY_AFTER = timedelta(hours=1)  # first retry after a non-login failure; doubles each time
+MAX_RETRY_AFTER = timedelta(hours=24)
 LOOKBACK_DAYS = 35  # how far back late additions and edits are noticed
 DEFAULT_NOTE = "Logged from Toggl"
 ENTRY_TOLERANCE = timedelta(minutes=1)  # Gusto works in whole minutes
@@ -111,11 +115,19 @@ def sync_due(now, state, enabled=True):
     last_attempt = state.get("last_attempt")
     if last_attempt and state.get("last_error"):
         try:
-            if now - datetime.fromisoformat(last_attempt) < RETRY_AFTER:
+            if now - datetime.fromisoformat(last_attempt) < retry_delay(state):
                 return False
         except (TypeError, ValueError):
             pass
     return True
+
+
+def retry_delay(state):
+    """Backoff after consecutive failures: 1h, 2h, 4h ... capped at 24h, so a
+    persistent error (schema change, missing project) cannot pop the Gusto
+    window up every hour."""
+    failures = max(int(state.get("consecutive_failures") or 1), 1)
+    return min(RETRY_AFTER * (2 ** (failures - 1)), MAX_RETRY_AFTER)
 
 
 def manual_window(now, state, first_day=None):
@@ -124,7 +136,7 @@ def manual_window(now, state, first_day=None):
     Today is left out because it is not over yet."""
     start, _ = sync_window(now, state, first_day)
     end = now.date() - timedelta(days=1)
-    return min(start, end), end
+    return start, end  # start > end means nothing to push yet
 
 
 def is_configured(prefs):
@@ -274,12 +286,22 @@ def entry_bounds(entry):
     return start, stop
 
 
-def _same_shift(shift, start, stop):
+def _same_shift(shift, start, stop, note=None):
+    """Does a Gusto shift represent this Toggl entry?
+
+    Compares clock-in/out times. If Gusto returned no timestamps, falls back
+    to day + duration + note, so a shift whose times are hidden still counts
+    as present (erring towards "already there" rather than double-logging).
+    """
     try:
         clock_in = _parse(shift["clock_in"])
         clock_out = _parse(shift["clock_out"])
     except (KeyError, TypeError, ValueError):
-        return False
+        minutes = round((stop - start).total_seconds() / 60)
+        same_day = shift.get("date") == start.date().isoformat()
+        same_length = shift.get("minutes") is not None and abs(int(shift["minutes"]) - minutes) <= 1
+        same_note = note is None or note in (shift.get("notes") or [])
+        return bool(same_day and same_length and same_note)
     return abs(clock_in - start) <= ENTRY_TOLERANCE and abs(clock_out - stop) <= ENTRY_TOLERANCE
 
 
@@ -305,7 +327,8 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
             continue
         if entry_stop - entry_start < ENTRY_TOLERANCE:
             continue
-        match = next((s for s in existing_shifts if _same_shift(s, entry_start, entry_stop)), None)
+        note = (entry.get("description") or "").strip() or DEFAULT_NOTE
+        match = next((s for s in existing_shifts if _same_shift(s, entry_start, entry_stop, note)), None)
         plan.append({
             "existing_shift_id": match.get("id") if match else None,
             "toggl_id": str(entry.get("id")),
@@ -313,7 +336,7 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
             "start": entry_start,
             "stop": entry_stop,
             "hours": (entry_stop - entry_start).total_seconds() / 3600,
-            "note": (entry.get("description") or "").strip() or DEFAULT_NOTE,
+            "note": note,
         })
     plan.sort(key=lambda item: item["start"])
     return plan
@@ -339,9 +362,14 @@ def find_drift(entries, project_id, state, start, end):
         bounds = entry_bounds(entry)
         if bounds is None:
             continue
-        start_iso = bounds[0].isoformat(timespec="seconds")
-        stop_iso = bounds[1].isoformat(timespec="seconds")
-        if start_iso != record.get("start") or stop_iso != record.get("stop"):
+        try:
+            # Compare instants, not strings: a Mac time zone change (travel)
+            # must not flag every pushed entry.
+            changed = (abs(bounds[0] - _parse(record["start"])) > ENTRY_TOLERANCE
+                       or abs(bounds[1] - _parse(record["stop"])) > ENTRY_TOLERANCE)
+        except (KeyError, TypeError, ValueError):
+            changed = True
+        if changed:
             issues.append({"kind": "changed", "day": day,
                            "message": f"{label}: an entry's times changed in Toggl after it was pushed"})
     return issues
@@ -351,11 +379,15 @@ def find_drift(entries, project_id, state, start, end):
 
 
 def _default_entries(start, end):
+    """Fresh from Toggl (1 call), never the day cache: past days are cached
+    forever once written, so a cached day could be missing hours logged after
+    it was fetched, and the push would under-report payroll. Raises on a rate
+    limit or network error rather than pushing from stale or empty data."""
     import toggl_data
 
     start_dt = datetime.combine(start, datetime.min.time()).astimezone()
     end_dt = datetime.combine(end, datetime.max.time()).astimezone()
-    return toggl_data.get_entries_for_range(start_dt, end_dt)
+    return toggl_data.fetch_entries_fresh(start_dt, end_dt)
 
 
 def _default_projects():
@@ -397,6 +429,10 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
     first_day = date.fromisoformat(first_day_pref) if first_day_pref else None
 
     start, end = window or sync_window(now, state, first_day)
+    if start > end:  # e.g. "push hours from" is in the future
+        return state, {"start": end.isoformat(), "end": end.isoformat(), "pushed": 0,
+                       "hours": 0.0, "adopted": 0, "planned": [], "issues": [], "error": None,
+                       "login_required": False, "dry_run": dry_run, "empty": True}
     summary = {"start": start.isoformat(), "end": end.isoformat(), "pushed": 0, "hours": 0.0,
                "adopted": 0,
                "planned": [], "issues": [], "error": None, "login_required": False,
@@ -412,6 +448,7 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
         if not dry_run:
             state["last_error"] = message
             state["login_required"] = login
+            state["consecutive_failures"] = int(state.get("consecutive_failures") or 0) + 1
         return state, summary
 
     if not project_name:
@@ -450,10 +487,20 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
                     except gusto_client.GustoLoginRequired:
                         raise
                     except gusto_client.GustoError as exc:
-                        label = date.fromisoformat(item["day"]).strftime("%a %b %-d")
-                        failures.append({"kind": "rejected", "day": item["day"],
-                                         "message": f"{label}: Gusto refused a shift ({exc})"})
-                        continue
+                        # The write may have landed even though the reply was
+                        # unusable. Look before recording a refusal, or the
+                        # next run would add the same hours again.
+                        day = date.fromisoformat(item["day"])
+                        landed = next(
+                            (sh for sh in session.list_shifts(tracker_id, day, day)
+                             if _same_shift(sh, item["start"], item["stop"], item["note"])),
+                            None,
+                        )
+                        if landed is None:
+                            failures.append({"kind": "rejected", "day": item["day"],
+                                             "message": f"{day.strftime('%a %b %-d')}: Gusto refused a shift ({exc})"})
+                            continue
+                        shift_id = landed.get("id")
                     state["pushed"][item["toggl_id"]] = {
                         "shift_id": shift_id,
                         "day": item["day"],
@@ -481,13 +528,64 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
         state["last_result"] = {k: summary[k] for k in ("start", "end", "pushed", "hours")}
         state["last_error"] = None
         state["login_required"] = False
+        state["consecutive_failures"] = 0
     return state, summary
+
+
+class SyncBusy(RuntimeError):
+    """Another process is already pushing to Gusto."""
+
+
+@contextmanager
+def run_lock(path: Path = LOCK_FILE):
+    """Cross-process lock for a real push (the app and the CLI share a ledger).
+
+    Without it, an overlapping `gusto_sync.py run` and the app's Monday run
+    would both push the same entries, and the last to save would drop the
+    other's ledger records.
+    """
+    with open(path, "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SyncBusy("Another Gusto push is already running.")
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def run_locked(prefs, now=None, window=None, session_factory=None, state_path: Path = STATE_FILE,
+               lock_path: Path = LOCK_FILE, **kwargs):
+    """A real push under the lock, with the ledger loaded and saved inside it.
+
+    Returns (state, summary). If another push holds the lock, nothing runs
+    and the summary carries the error; the saved state is untouched.
+    """
+    try:
+        with run_lock(lock_path):
+            state = load_state(state_path)
+            new_state, summary = run_sync(
+                prefs, state, now=now, window=window, session_factory=session_factory,
+                persist=lambda st: save_state(st, state_path), **kwargs,
+            )
+            save_state(new_state, state_path)
+            return new_state, summary
+    except SyncBusy as exc:
+        start, end = window or (date.today(), date.today())
+        return load_state(state_path), {
+            "start": start.isoformat(), "end": end.isoformat(), "pushed": 0, "hours": 0.0,
+            "adopted": 0, "planned": [], "issues": [], "error": str(exc),
+            "login_required": False, "dry_run": False, "busy": True,
+        }
 
 
 def describe_result(summary):
     """One-line status for notifications and the settings pane."""
     if summary.get("error"):
         return summary["error"]
+    if summary.get("empty"):
+        return "Nothing to push yet"
     span = f"{_short(summary['start'])}–{_short(summary['end'])}"
     if summary.get("dry_run"):
         new = [item for item in summary.get("planned", []) if not item.get("existing_shift_id")]
@@ -537,13 +635,10 @@ def main(argv=None):
             parser.error("--start and --end go together")
         window = (date.fromisoformat(args.start), date.fromisoformat(args.end))
 
-    dry_run = args.command == "dry-run"
-    new_state, summary = run_sync(
-        load_preferences(), load_state(), dry_run=dry_run, window=window,
-        persist=None if dry_run else save_state,
-    )
-    if not dry_run:
-        save_state(new_state)
+    if args.command == "dry-run":
+        _, summary = run_sync(load_preferences(), load_state(), dry_run=True, window=window)
+    else:
+        _, summary = run_locked(load_preferences(), window=window)
     for item in summary["planned"]:
         tag = "  (already in Gusto)" if item.get("existing_shift_id") else ""
         print(f"  {item['day']}  {item['start'][11:16]}-{item['stop'][11:16]}  "

@@ -1183,6 +1183,9 @@ class PreferencesWindowController:
 
         # Preserve settings not currently editable in the UI
         new_prefs = self.current_prefs.copy()
+        # Set by "Log in to Gusto" while this window may already be open; a
+        # stale copy here would log the user out of the sync on Save.
+        new_prefs['gusto_company_slug'] = load_preferences().get('gusto_company_slug', '')
         new_prefs.update({
             'cache_ttl_projects': self.widgets['cache_ttl_projects'].intValue(),
             'cache_ttl_today': self.widgets['cache_ttl_today'].intValue(),
