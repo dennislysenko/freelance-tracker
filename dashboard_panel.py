@@ -561,10 +561,19 @@ class DashboardPanelController:
         self._view = view
 
     def _assistant_entries_provider(self, start_day, end_day):
-        """Cached Toggl entries spanning the proposed days, for collision checks."""
+        """Cached Toggl entries spanning two local dates (inclusive).
+
+        Used for collision checks and for answering questions. Callers pass
+        `date`s; the data layer wants aware datetimes, so widen to day bounds
+        here (passing dates straight through raised AttributeError, which the
+        collision check swallowed, so overlaps were never flagged).
+        """
+        from datetime import datetime
         import toggl_data
 
-        return toggl_data.get_entries_for_range(start_day, end_day)
+        start_dt = datetime.combine(start_day, datetime.min.time()).astimezone()
+        end_dt = datetime.combine(end_day, datetime.max.time()).astimezone()
+        return toggl_data.get_entries_for_range(start_dt, end_dt)
 
     def assistant_ask(self, encoded_utterance):
         """Handle a submitted command. Returns immediately; work is threaded."""
