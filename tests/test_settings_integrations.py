@@ -8,7 +8,7 @@ layout and the state that makes reopening land where they left off.
 
 import unittest
 
-from settings_view import generate_settings_html
+from settings_view import generate_settings_html, generate_settings_js
 
 
 CONFIGURED = {
@@ -101,3 +101,42 @@ class TestViewStateRestoration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAgentsMcpCell(unittest.TestCase):
+    def test_mcp_cell_and_detail_render(self):
+        html = generate_settings_html({"mcp_enabled": False}, CONFIGURED)
+        self.assertIn('data-intg-cell="mcp"', html)
+        self.assertIn('data-intg-detail="mcp"', html)
+        self.assertIn('id="set_mcp_enabled"', html)
+        self.assertIn('id="set_mcp_anonymize"', html)
+        self.assertIn("claude mcp add --scope user --transport stdio freelance-tracker", html)
+        self.assertIn("[mcp_servers.freelance-tracker]", html)
+        self.assertIn("settingsTestMcp()", html)
+        self.assertIn("settings:test_mcp", generate_settings_js())
+
+    def test_mcp_cell_reads_active_only_when_enabled(self):
+        off = generate_settings_html({"mcp_enabled": False}, CONFIGURED)
+        on = generate_settings_html({"mcp_enabled": True}, CONFIGURED)
+        self.assertNotIn('id="set_mcp_enabled" checked', off)
+        self.assertIn('id="set_mcp_enabled" checked', on)
+
+    def test_form_collects_mcp_flags(self):
+        js = generate_settings_js()
+        self.assertIn("mcp_enabled: settingsReadBool('set_mcp_enabled')", js)
+        self.assertIn("mcp_anonymize: settingsReadBool('set_mcp_anonymize')", js)
+        self.assertIn("reply.type === 'mcp_test'", js)
+
+
+class TestMcpSettingsSave(unittest.TestCase):
+    def test_handler_coerces_flags_to_bool(self):
+        from unittest import mock
+        import settings_handler as H
+        from preferences import DEFAULT_PREFERENCES
+        saved = {}
+        with mock.patch.object(H, "load_preferences", lambda: dict(DEFAULT_PREFERENCES)), \
+             mock.patch.object(H, "save_preferences", lambda p: saved.update(p)):
+            result = H.apply_settings_save({"mcp_enabled": 1, "mcp_anonymize": ""})
+        self.assertTrue(result["ok"], result)
+        self.assertIs(saved["mcp_enabled"], True)
+        self.assertIs(saved["mcp_anonymize"], False)

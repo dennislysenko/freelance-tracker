@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 
+import mcp_support
+
 from carryover import get_balance, get_previous_month_str
 from preferences import CACHE_DIR
 
@@ -291,6 +293,38 @@ def generate_settings_css():
     .settings-panel:not([data-intg=""]) .intg-index { display: none; }
     .intg-detail { display: none; }
     .intg-detail.active { display: block; }
+
+    .mcp-toggle { display: flex; margin: 8px 0; }
+    .mcp-regs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 10px 0 6px;
+        font-size: 11px;
+    }
+    .mcp-reg {
+        color: #8b949e;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 999px;
+        padding: 2px 8px;
+    }
+    .mcp-reg.on { color: #3fb950; border-color: rgba(63,185,80,0.35); }
+    .mcp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+    .mcp-snippet {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0 0 6px;
+        padding: 6px 8px;
+        font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #8b949e;
+        background: rgba(0,0,0,0.25);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 6px;
+        resize: none;
+        white-space: pre;
+        overflow-x: auto;
+    }
 
     .intg-detail-head {
         display: flex;
@@ -1038,6 +1072,65 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     </div>
     """
 
+    mcp_enabled = bool(prefs.get("mcp_enabled", False))
+    mcp_anonymize = bool(prefs.get("mcp_anonymize", False))
+    regs = mcp_support.detect_registrations()
+    claude_cmd = mcp_support.claude_code_command()
+    codex_block = mcp_support.codex_config_block()
+
+    def reg_badge(label, present):
+        mark = "&#10003;" if present else "&#10007;"
+        cls = " on" if present else ""
+        return f'<span class="mcp-reg{cls}">{mark} {label}</span>'
+
+    mcp_detail = f"""
+    <div class="settings-help">
+        Lets coding agents (Claude Code, Codex, anything that speaks MCP) read your
+        hours, earnings, the month projection, per-project pacing, and your billing
+        rules, so you can ask &ldquo;how is my month going and where should I put
+        more time?&rdquo; and get an answer from real numbers.
+        <strong>Read-only:</strong> agents cannot log time or change settings.
+    </div>
+    <label class="br-toggle mcp-toggle">
+        <input type="checkbox" id="set_mcp_enabled"{' checked' if mcp_enabled else ''}>
+        <span>Enable MCP server</span>
+    </label>
+    <label class="br-toggle mcp-toggle">
+        <input type="checkbox" id="set_mcp_anonymize"{' checked' if mcp_anonymize else ''}>
+        <span>Anonymize client names and dollar amounts</span>
+    </label>
+    <div class="settings-help">
+        When off, the agent sees your real project names and rates. Turn it on if
+        the agent runs on a model you do not want client names sent to. Ratios are
+        kept so pacing still makes sense.
+    </div>
+    <div class="mcp-regs">
+        <span class="settings-help" style="margin:0">Registered in:</span>
+        {reg_badge("Claude Code", regs["claude_code"])}
+        {reg_badge("Codex", regs["codex"])}
+    </div>
+    <div class="mcp-actions">
+        <button class="settings-btn" type="button"
+                onclick="settingsCopySnippet('mcp_claude_cmd', this)">Copy Claude Code command</button>
+        <button class="settings-btn" type="button"
+                onclick="settingsCopySnippet('mcp_codex_toml', this)">Copy Codex config</button>
+        <button class="settings-btn" type="button" id="mcpTestBtn"
+                onclick="settingsTestMcp()">Test server</button>
+    </div>
+    <div class="settings-help" id="mcpTestResult"></div>
+    <textarea id="mcp_claude_cmd" class="mcp-snippet" readonly rows="2"
+              spellcheck="false">{_esc(claude_cmd)}</textarea>
+    <textarea id="mcp_codex_toml" class="mcp-snippet" readonly rows="3"
+              spellcheck="false">{_esc(codex_block)}</textarea>
+    <div class="settings-help">
+        Paste the Claude Code command in a terminal, or the TOML block into
+        <code>~/.codex/config.toml</code>. Then save here with the server enabled.
+        The data an agent reads is exactly what this dashboard shows, as of its last
+        refresh; the server never calls Toggl itself. Setup guide:
+        <code>docs/mcp-agents.md</code>.
+    </div>
+    """
+
     # (key, label, icon, configured, detail html) grouped for the index.
     groups = [
         ("Time tracking", "Where your hours come from.", [
@@ -1052,6 +1145,9 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
         ]),
         ("Planning", "Feeds the month projection.", [
             ("calendar", "Google Calendar", "&#128197;", bool(calendar_url), calendar_detail),
+        ]),
+        ("Agents", "Let Claude Code or Codex read your numbers.", [
+            ("mcp", "Agents (MCP)", "&#129302;", mcp_enabled, mcp_detail),
         ]),
     ]
 
@@ -1375,8 +1471,51 @@ def generate_settings_js():
             .filter(function (s) { return s.length > 0; });
     }
 
+    function settingsReadBool(id) {
+        var el = document.getElementById(id);
+        return !!(el && el.checked);
+    }
+
+    function settingsCopySnippet(id, btn) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        postAction('copy_text:' + encodeURIComponent(el.value || ''));
+        if (btn) {
+            var label = btn.textContent;
+            btn.textContent = 'Copied \u2713';
+            window.setTimeout(function () { btn.textContent = label; }, 1200);
+        }
+    }
+
+    function settingsTestMcp() {
+        var btn = document.getElementById('mcpTestBtn');
+        var out = document.getElementById('mcpTestResult');
+        if (btn) { btn.disabled = true; btn.textContent = 'Testing\u2026'; }
+        if (out) { out.textContent = ''; }
+        postAction('settings:test_mcp');
+    }
+
+    function onMcpTestResult(reply) {
+        var btn = document.getElementById('mcpTestBtn');
+        var out = document.getElementById('mcpTestResult');
+        if (btn) { btn.disabled = false; btn.textContent = 'Test server'; }
+        if (!out) return;
+        if (reply.ok) {
+            var msg = reply.tools + ' tools available';
+            if (reply.data_as_of) msg += ' \u00b7 data as of ' + reply.data_as_of;
+            if (reply.enabled === false) msg += ' \u00b7 server is disabled (save with it enabled to serve data)';
+            out.textContent = msg;
+            out.style.color = '#3fb950';
+        } else {
+            out.textContent = reply.error || 'Test failed';
+            out.style.color = '#f85149';
+        }
+    }
+
     function settingsCollectForm() {
         return {
+            mcp_enabled: settingsReadBool('set_mcp_enabled'),
+            mcp_anonymize: settingsReadBool('set_mcp_anonymize'),
             cache_ttl_projects: settingsReadInt('set_cache_ttl_projects', 0),
             cache_ttl_today: settingsReadInt('set_cache_ttl_today', 0),
             vacation_days_per_month: settingsReadInt('set_vacation_days', 0),
@@ -1616,6 +1755,10 @@ def generate_settings_js():
         if (!reply) return;
         if (reply.type === 'stripe_customers') {
             onStripeCustomersLoaded(reply.customers || []);
+            return;
+        }
+        if (reply.type === 'mcp_test') {
+            onMcpTestResult(reply);
             return;
         }
         if (reply.ok) {

@@ -38,6 +38,8 @@ DEFAULT_PREFERENCES = {
         "week": False,
         "month": True,
     },  # Expanded/collapsed dashboard sections, persisted across launches
+    "mcp_enabled": False,  # Let agents (Claude Code, Codex) read hours/projections via mcp_server.py
+    "mcp_anonymize": False,  # Replace client names / dollar amounts in MCP responses
 }
 
 
@@ -161,6 +163,11 @@ def validate_preferences(prefs):
                     errors.append(
                         f"'project_targets.{project_name}': must be non-negative (got {hours})"
                     )
+
+    # Optional fields: MCP server toggles (booleans)
+    for flag in ('mcp_enabled', 'mcp_anonymize'):
+        if flag in prefs and not isinstance(prefs[flag], bool):
+            errors.append(f"'{flag}': must be true or false")
 
     # Optional field: days_off_keywords (list of non-empty strings)
     if 'days_off_keywords' in prefs:

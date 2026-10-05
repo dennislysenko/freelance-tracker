@@ -682,6 +682,25 @@ class PreferencesWindowController:
         audit_btn.setTarget_(self)
         audit_btn.setAction_("handleOpenAuditLog:")
         view.addSubview_(audit_btn)
+        y -= 48
+
+        mcp_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        mcp_header.setStringValue_("Agents (MCP)")
+        mcp_header.setBezeled_(False)
+        mcp_header.setDrawsBackground_(False)
+        mcp_header.setEditable_(False)
+        mcp_header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(mcp_header)
+        y -= 28
+        self.widgets['mcp_enabled'] = self._create_checkbox(
+            view, "Enable MCP server (agents can read hours and projections)", 20, y,
+            bool(self.current_prefs.get('mcp_enabled', False)),
+        )
+        y -= 28
+        self.widgets['mcp_anonymize'] = self._create_checkbox(
+            view, "Anonymize client names and dollar amounts", 20, y,
+            bool(self.current_prefs.get('mcp_anonymize', False)),
+        )
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
@@ -1159,6 +1178,8 @@ class PreferencesWindowController:
             'stripe_project_customers': stripe_project_customers,
             'upwork_contracts': upwork_contracts,
             'billing_reminders': billing_reminders,
+            'mcp_enabled': self.widgets['mcp_enabled'].state() == NSOnState,
+            'mcp_anonymize': self.widgets['mcp_anonymize'].state() == NSOnState,
         })
 
         integration_settings = {
@@ -1275,6 +1296,8 @@ class PreferencesWindowController:
             self.widgets['toggl_workspace_id'].setStringValue_("")
             self.widgets['stripe_api_key'].setStringValue_("")
             self.widgets['calendar_ics_url'].setStringValue_("")
+            self.widgets['mcp_enabled'].setState_(NSOffState)
+            self.widgets['mcp_anonymize'].setState_(NSOffState)
 
             # Clear all project target fields
             for i in range(self.PROJECT_TARGET_ROWS):

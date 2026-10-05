@@ -123,6 +123,7 @@ class FreelanceTrackerApp(rumps.App):
                 'settings:open_gcal_settings': self._dashboard_settings_open_gcal_settings,
                 'settings:open_openai_settings': self._dashboard_settings_open_openai_settings,
                 'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
+                'settings:test_mcp': self._dashboard_settings_test_mcp,
                 'assistant_ask': self._dashboard_assistant_ask,
                 'assistant_apply': self._dashboard_assistant_apply,
                 'assistant_clear': self._dashboard_assistant_clear,
@@ -287,6 +288,26 @@ class FreelanceTrackerApp(rumps.App):
         }
         if self.dashboard is not None:
             self.dashboard.settings_ack(reply)
+
+    def _dashboard_settings_test_mcp(self):
+        """Spawn mcp_server.py and do an initialize + tools/list round trip.
+
+        Runs on a worker thread (same pattern as the OpenAI key check) so the
+        menu bar stays responsive; the reply goes back to the settings view.
+        """
+        from background_work import run_in_background
+        from mcp_support import probe_server
+
+        def done(result):
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "mcp_test", **result})
+
+        def failed(exc):
+            _debug(f"test_mcp failed: {exc}")
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "mcp_test", "ok": False, "error": str(exc)})
+
+        run_in_background(probe_server, done, failed, name="mcp-test")
 
     def _dashboard_assistant_ask(self, encoded_utterance):
         """Submit a natural-language command. Parsing happens on a worker."""

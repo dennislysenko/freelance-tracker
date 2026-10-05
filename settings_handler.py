@@ -32,6 +32,8 @@ _SETTINGS_KEYS = (
     "stripe_project_customers",
     "upwork_contracts",
     "billing_reminders",
+    "mcp_enabled",
+    "mcp_anonymize",
 )
 
 
@@ -213,7 +215,10 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
     prefs_changed = False
     for key in _SETTINGS_KEYS:
         if key in payload:
-            new_prefs[key] = payload[key]
+            value = payload[key]
+            if key in ("mcp_enabled", "mcp_anonymize"):
+                value = bool(value)
+            new_prefs[key] = value
             prefs_changed = True
 
     # Translate structured project rows into the canonical `projects` map
