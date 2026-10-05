@@ -140,3 +140,32 @@ class TestMcpSettingsSave(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertIs(saved["mcp_enabled"], True)
         self.assertIs(saved["mcp_anonymize"], False)
+
+
+class TestGustoCell(unittest.TestCase):
+    def test_gusto_cell_renders_and_form_collects_fields(self):
+        html = generate_settings_html(
+            {"gusto_sync_enabled": True, "gusto_project": "Acme Retainer",
+             "gusto_company_slug": "acme-inc"},
+            CONFIGURED,
+        )
+        self.assertIn('data-intg-cell="gusto"', html)
+        self.assertIn('id="set_gusto_sync_enabled" checked', html)
+        self.assertIn('value="Acme Retainer" selected', html)
+        self.assertIn("acme-inc", html)
+        js = generate_settings_js()
+        self.assertIn("gusto_sync_enabled: settingsReadBool('set_gusto_sync_enabled')", js)
+        self.assertIn("settings:gusto_login", js)
+        self.assertIn("reply.type === 'gusto_login'", js)
+
+    def test_handler_coerces_gusto_fields(self):
+        from unittest import mock
+        import settings_handler as H
+        from preferences import DEFAULT_PREFERENCES
+        saved = {}
+        with mock.patch.object(H, "load_preferences", lambda: dict(DEFAULT_PREFERENCES)), \
+             mock.patch.object(H, "save_preferences", lambda p: saved.update(p)):
+            result = H.apply_settings_save({"gusto_sync_enabled": 1, "gusto_project": " Acme "})
+        self.assertTrue(result["ok"], result)
+        self.assertIs(saved["gusto_sync_enabled"], True)
+        self.assertEqual(saved["gusto_project"], "Acme")

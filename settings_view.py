@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 
+import gusto_sync
 import mcp_support
 
 from carryover import get_balance, get_previous_month_str
@@ -295,6 +296,11 @@ def generate_settings_css():
     .intg-detail.active { display: block; }
 
     .mcp-toggle { display: flex; margin: 8px 0; }
+    .gusto-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12px; }
+    .gusto-row select { flex: 1; }
+    .gusto-status { font-size: 11px; color: #8b949e; margin: 4px 0; line-height: 1.5; }
+    .gusto-status strong { color: #c9d1d9; font-weight: 600; }
+    .gusto-status.warn { color: #f0883e; }
     .mcp-regs {
         display: flex;
         align-items: center;
@@ -1131,6 +1137,65 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     </div>
     """
 
+    gusto_status = gusto_sync.status_view(prefs, gusto_sync.load_state())
+    gusto_enabled = bool(prefs.get("gusto_sync_enabled", False))
+    gusto_project = prefs.get("gusto_project") or ""
+    gusto_names = list(toggl_names)
+    if gusto_project and gusto_project not in gusto_names:
+        gusto_names.insert(0, gusto_project)
+    gusto_options = '<option value="">Choose a project</option>' + "".join(
+        f'<option value="{_esc(n)}"{" selected" if n == gusto_project else ""}>{_esc(n)}</option>'
+        for n in gusto_names
+    )
+    gusto_company = gusto_status["company"]
+    gusto_login_line = (
+        f'Logged in as <strong>{_esc(gusto_company)}</strong>'
+        if gusto_company and not gusto_status["login_required"] else
+        '<span class="warn">Not logged in</span>' if not gusto_company else
+        '<span class="warn">Gusto login expired</span>'
+    )
+    gusto_issue_lines = "".join(
+        f'<div class="gusto-status warn">&#9888; {_esc(msg)}</div>' for msg in gusto_status["issues"]
+    )
+    gusto_error_line = (
+        f'<div class="gusto-status warn">{_esc(gusto_status["error"])}</div>'
+        if gusto_status["error"] else ""
+    )
+    gusto_detail = f"""
+    <div class="settings-help">
+        Pushes one project&rsquo;s Toggl hours into your Gusto contractor timesheet as
+        shifts on their real dates, with each entry&rsquo;s description as the note.
+        Runs Mondays at 9:00 for the previous week, or any time from
+        <strong>Export/Invoice &rarr; Push to Gusto</strong>. It only ever adds shifts;
+        if you edit or delete an entry in Toggl after it was pushed, it is flagged here
+        for you to fix in Gusto.
+    </div>
+    <label class="br-toggle mcp-toggle">
+        <input type="checkbox" id="set_gusto_sync_enabled"{' checked' if gusto_enabled else ''}>
+        <span>Push hours to Gusto</span>
+    </label>
+    <div class="gusto-row">
+        <span>Project</span>
+        <select id="set_gusto_project">{gusto_options}</select>
+    </div>
+    <div class="gusto-status">{gusto_login_line} &middot; {_esc(gusto_status["meta"])}</div>
+    <div class="gusto-status">Next payday: {_esc(gusto_status["next_payday"])}</div>
+    {f'<div class="gusto-status">Last push: {_esc(gusto_status["last_result"])}</div>' if gusto_status["last_result"] else ''}
+    {gusto_error_line}
+    {gusto_issue_lines}
+    <div class="mcp-actions">
+        <button class="settings-btn" type="button" id="gustoLoginBtn"
+                onclick="settingsGustoLogin()">Log in to Gusto</button>
+    </div>
+    <div class="settings-help" id="gustoLoginResult"></div>
+    <div class="settings-help">
+        Gusto opens in its own Chrome window. Log in with your passkey there; the
+        window stays open afterwards so you can check or fix anything by hand.
+        Gusto&rsquo;s session ends when that window is closed, so a push may ask
+        for your passkey again.
+    </div>
+    """
+
     # (key, label, icon, configured, detail html) grouped for the index.
     groups = [
         ("Time tracking", "Where your hours come from.", [
@@ -1142,6 +1207,8 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
         ("Billing &amp; invoicing", "Turn tracked hours into invoices.", [
             ("stripe", "Stripe", "&#128179;", bool(stripe_key), stripe_detail),
             ("mapping", "Project Mapping", "&#128279;", bool(all_names), mapping_detail),
+            ("gusto", "Gusto", "&#128181;", gusto_status["configured"] and bool(gusto_status["company"]),
+             gusto_detail),
         ]),
         ("Planning", "Feeds the month projection.", [
             ("calendar", "Google Calendar", "&#128197;", bool(calendar_url), calendar_detail),
@@ -1495,6 +1562,23 @@ def generate_settings_js():
         postAction('settings:test_mcp');
     }
 
+    function settingsGustoLogin() {
+        var btn = document.getElementById('gustoLoginBtn');
+        var out = document.getElementById('gustoLoginResult');
+        if (btn) { btn.disabled = true; btn.textContent = 'Waiting for Gusto\u2026'; }
+        if (out) { out.textContent = 'Log in with your passkey in the Gusto window.'; out.style.color = ''; }
+        postAction('settings:gusto_login');
+    }
+
+    function onGustoLoginResult(reply) {
+        var btn = document.getElementById('gustoLoginBtn');
+        var out = document.getElementById('gustoLoginResult');
+        if (btn) { btn.disabled = false; btn.textContent = 'Log in to Gusto'; }
+        if (!out) return;
+        out.textContent = reply.ok ? ('Logged in to Gusto (' + reply.company + ')') : (reply.error || 'Login failed');
+        out.style.color = reply.ok ? '#3fb950' : '#f85149';
+    }
+
     function onMcpTestResult(reply) {
         var btn = document.getElementById('mcpTestBtn');
         var out = document.getElementById('mcpTestResult');
@@ -1514,6 +1598,8 @@ def generate_settings_js():
 
     function settingsCollectForm() {
         return {
+            gusto_sync_enabled: settingsReadBool('set_gusto_sync_enabled'),
+            gusto_project: (document.getElementById('set_gusto_project') || {}).value || '',
             mcp_enabled: settingsReadBool('set_mcp_enabled'),
             mcp_anonymize: settingsReadBool('set_mcp_anonymize'),
             cache_ttl_projects: settingsReadInt('set_cache_ttl_projects', 0),
@@ -1759,6 +1845,10 @@ def generate_settings_js():
         }
         if (reply.type === 'mcp_test') {
             onMcpTestResult(reply);
+            return;
+        }
+        if (reply.type === 'gusto_login') {
+            onGustoLoginResult(reply);
             return;
         }
         if (reply.ok) {

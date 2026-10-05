@@ -40,6 +40,10 @@ DEFAULT_PREFERENCES = {
     },  # Expanded/collapsed dashboard sections, persisted across launches
     "mcp_enabled": False,  # Let agents (Claude Code, Codex) read hours/projections via mcp_server.py
     "mcp_anonymize": False,  # Replace client names / dollar amounts in MCP responses
+    "gusto_sync_enabled": False,  # Push a project's Toggl hours into Gusto contractor shifts weekly
+    "gusto_project": "",  # Toggl project whose hours go to Gusto
+    "gusto_company_slug": "",  # Gusto company in app.gusto.com/<slug>; set by "Log in to Gusto"
+    "gusto_sync_start_date": "",  # Optional YYYY-MM-DD: earliest day ever pushed (backfill floor)
 }
 
 
@@ -168,6 +172,20 @@ def validate_preferences(prefs):
     for flag in ('mcp_enabled', 'mcp_anonymize'):
         if flag in prefs and not isinstance(prefs[flag], bool):
             errors.append(f"'{flag}': must be true or false")
+
+    # Optional fields: Gusto sync
+    if 'gusto_sync_enabled' in prefs and not isinstance(prefs['gusto_sync_enabled'], bool):
+        errors.append("'gusto_sync_enabled': must be true or false")
+    for key in ('gusto_project', 'gusto_company_slug', 'gusto_sync_start_date'):
+        if key in prefs and not isinstance(prefs[key], str):
+            errors.append(f"'{key}': must be a string")
+    start_date = prefs.get('gusto_sync_start_date')
+    if isinstance(start_date, str) and start_date.strip():
+        try:
+            from datetime import date as _date
+            _date.fromisoformat(start_date.strip())
+        except ValueError:
+            errors.append("'gusto_sync_start_date': must be a date like 2026-10-01")
 
     # Optional field: days_off_keywords (list of non-empty strings)
     if 'days_off_keywords' in prefs:
