@@ -4,6 +4,14 @@ Quick reference for AI agents working on this project.
 
 > **Note on this file:** `AGENTS.md` is the real file. `CLAUDE.md` is a symlink to it (`CLAUDE.md -> AGENTS.md`). Edit `AGENTS.md` and both Claude Code and other agentic tooling will see the same content. Do not replace the symlink with a separate copy or the two will drift out of sync.
 
+## CRITICAL: Only Generic Code in Git
+
+Everything committed must be generic plumbing that anyone could use. Never commit personal or account-specific data: no credentials, cookies, tokens, or captured request headers, but also no real names, emails, client or company names, account/company slugs, IDs from real systems (tracker ids, shift ids, Toggl entry ids), real time entries or descriptions, or local home-directory paths.
+
+- Tests and examples use placeholders (`Acme`, `acme-inc`, `12345`, `design review`).
+- Real values live only in local, untracked files: `~/Library/Application Support/TogglMenuBar/` (preferences, state), `.env`, `.claude/settings.local.json`, `.playwright-mcp/`.
+- Before committing, scan the diff for real identifiers, not just secrets.
+
 ## CRITICAL: Primary Interface
 
 **The WebKit dashboard popover in `dashboard_panel.py` is the canonical user interface.** It is what the user actually sees and interacts with.
