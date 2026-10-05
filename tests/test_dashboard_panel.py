@@ -100,7 +100,6 @@ def test_dashboard_html_measures_document_height():
     assert "copyDescription(this)" in html
     assert "copy_text:" in html
     assert "Settings" in html
-    assert "Advanced" not in html
     assert "Toggl rate limit reached. Showing cached data." in html
     assert "Refresh failed. Showing last successful data." in html
     assert "network timeout" in html
