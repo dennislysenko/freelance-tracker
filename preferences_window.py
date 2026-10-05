@@ -701,6 +701,25 @@ class PreferencesWindowController:
             view, "Anonymize client names and dollar amounts", 20, y,
             bool(self.current_prefs.get('mcp_anonymize', False)),
         )
+        y -= 40
+
+        gusto_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        gusto_header.setStringValue_("Gusto (log in from the dashboard: Settings → Integrations → Gusto)")
+        gusto_header.setBezeled_(False)
+        gusto_header.setDrawsBackground_(False)
+        gusto_header.setEditable_(False)
+        gusto_header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(gusto_header)
+        y -= 28
+        self.widgets['gusto_sync_enabled'] = self._create_checkbox(
+            view, "Push hours to Gusto weekly. Project:", 20, y,
+            bool(self.current_prefs.get('gusto_sync_enabled', False)),
+        )
+        gusto_project_field = NSTextField.alloc().initWithFrame_(NSMakeRect(300, y, 240, 24))
+        gusto_project_field.setStringValue_(self.current_prefs.get('gusto_project', '') or '')
+        gusto_project_field.setPlaceholderString_("Toggl project name")
+        view.addSubview_(gusto_project_field)
+        self.widgets['gusto_project'] = gusto_project_field
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
@@ -1180,6 +1199,8 @@ class PreferencesWindowController:
             'billing_reminders': billing_reminders,
             'mcp_enabled': self.widgets['mcp_enabled'].state() == NSOnState,
             'mcp_anonymize': self.widgets['mcp_anonymize'].state() == NSOnState,
+            'gusto_sync_enabled': self.widgets['gusto_sync_enabled'].state() == NSOnState,
+            'gusto_project': str(self.widgets['gusto_project'].stringValue() or '').strip(),
         })
 
         integration_settings = {
@@ -1298,6 +1319,8 @@ class PreferencesWindowController:
             self.widgets['calendar_ics_url'].setStringValue_("")
             self.widgets['mcp_enabled'].setState_(NSOffState)
             self.widgets['mcp_anonymize'].setState_(NSOffState)
+            self.widgets['gusto_sync_enabled'].setState_(NSOffState)
+            self.widgets['gusto_project'].setStringValue_("")
 
             # Clear all project target fields
             for i in range(self.PROJECT_TARGET_ROWS):
