@@ -58,6 +58,8 @@ Current API usage per operation:
 
 **MCP server rule:** anything added to `mcp_server.py` must keep working under `toggl_data.CACHE_ONLY` (0 Toggl calls). If a tool needs data the dashboard does not already keep warm, it returns a `CacheMissError` message rather than fetching.
 
+**Gusto rule:** `gusto_client.py` must only ever drive a **visible** Chrome window (never headless) and never try to get past Gusto's Cloudflare check; never enter passwords or approve passkeys; never save Gusto request headers/cookies to disk. Tests must use fake sessions, never real Gusto. Don't submit test shifts: the only real writes are the user's own Toggl hours. When Gusto's API changes, use the `gusto-recapture` skill.
+
 **Cache TTLs:**
 - Projects: 24 hours (`cache_ttl_projects`)
 - Today's entries: 30 minutes (`cache_ttl_today`)
@@ -126,6 +128,8 @@ rm -rf ~/Library/Caches/TogglMenuBar/*    # Clear cache
 - `pacing.py` - Pure monthly pacing decision tree shared by the dashboard bars and the MCP server
 - `mcp_server.py` - Read-only stdio MCP server for agents (Claude Code, Codex); runs the data layer in cache-only mode, never calls Toggl
 - `mcp_support.py` - Registration snippets, registration detection, and the settings "Test server" probe
+- `gusto_client.py` - Gusto contractor timesheet access via Gusto's internal GraphQL API, from inside a logged-in page in the app's own visible Chrome window
+- `gusto_sync.py` - Weekly/manual push of a Toggl project's hours into Gusto shifts: schedule, ledger, drift flags, payday, dashboard status; CLI `login | dry-run | run`
 - `.env` - API credentials (never commit!)
 
 ## File Locations

@@ -206,6 +206,27 @@ That project-mapping grid also has an **Upwork Contract ID** column. Add the Upw
 
 The current Upwork integration is intentionally a deep-link shortcut, not a direct API write. Upwork’s documented GraphQL docs expose work-diary reads, but they do not document a manual-time creation mutation, so the app currently opens the contract-specific work diary URL instead of attempting an unsupported write.
 
+### Gusto — push contractor hours automatically
+
+If you are paid as a contractor through Gusto, the app can copy one Toggl
+project's hours into your Gusto timesheet: each Toggl entry becomes a Gusto
+shift on its real date, with the description as the note.
+
+1. Settings → Integrations → **Gusto**: tick **Push hours to Gusto**, pick the
+   Toggl project, Save.
+2. Click **Log in to Gusto**. A Chrome window opens; log in with your passkey.
+   Leave the window open (closing it ends Gusto's session).
+3. Every Monday at 9:00 the previous week is pushed. You can also push any time
+   from **Export/Invoice → Push to Gusto**. An orange dot on Export/Invoice means
+   last week isn't in Gusto yet or something needs you (passkey, a Toggl entry
+   edited after it was pushed).
+
+The app only ever adds shifts; it never edits or deletes anything in Gusto. It
+uses Gusto's web app in a visible Chrome window (Gusto has no API contractors
+can use), so a Gusto change can break it; the sync then fails with an error
+rather than logging wrong hours. Terminal: `python gusto_sync.py dry-run`
+shows what would be pushed without sending anything.
+
 ### Agents (MCP) — let Claude Code or Codex read your numbers
 
 The app ships a read-only [MCP](https://modelcontextprotocol.io) server so a coding

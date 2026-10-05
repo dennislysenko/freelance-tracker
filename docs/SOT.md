@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-09-15
+**Last Updated:** 2026-10-05
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -28,7 +28,7 @@ The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user in
 - Preferences view relaxes the native quirks where doing so has no persistence impact: add/remove rows instead of fixed-count grids, masked credential inputs with a show/hide eye toggle, and inline validation errors at the top of the panel in addition to modal alerts for bulk issues
 - Reminder configuration lives in the `Billing` tab and diagnostics stay in `Advanced`
 - Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, `Clear All Caches`, or `Open Cache Folder`), `Settings`, `Update`, and `Quit`
-- Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`
+- Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV`, `Create Stripe Invoice`, `Open Upwork Diary`, or (once configured) `Push to Gusto`. An orange dot on the `Export/Invoice` button means Gusto is stale (see "Gusto Shift Sync")
 - Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
 - Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
 - Local billing reminders can be configured in Preferences to fire weekly macOS notifications without touching Toggl or Stripe APIs
@@ -221,7 +221,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Project definitions with billing types (`projects` key)
 - Integrations tab is a **grid of integration cells** grouped by purpose (Time tracking, Assistant, Billing & invoicing, Planning). Each cell shows the integration name and its status — green "✓ Active" when configured, "Configure integration" when not — so the whole tab fits on one screen with no scrolling
 - Clicking a cell **drills into a detail pane** containing only that integration's fields and setup guidance, with a back arrow to the grid. Replaces the previous single long scrolling column of every credential
-- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), Google Calendar (days off), and Agents (MCP) (read-only agent access, see "Agent access (MCP server)"). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
+- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), Gusto (contractor shift sync), Google Calendar (days off), and Agents (MCP) (read-only agent access, see "Agent access (MCP server)"). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
 - The active tab **and** the open integration are mirrored to Python (`settings_tab:` / `settings_intg:` bridge messages) and re-rendered on the next load. The popover is transient, so leaving to fetch a credential in a browser dismisses it; without this the user was dropped back on the first tab and had to re-navigate every time
 - Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
 - The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
@@ -278,6 +278,24 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - API call cost:
   - Toggl: 0-1 calls per invoice range (reuses the same shared day-based entry cache as the dashboard and CSV export)
   - Stripe: 1 customer-list call only when associating an unmapped project, then 2 write calls per invoice (draft invoice + invoice item)
+
+### Gusto Shift Sync (contractor hours → Gusto timesheet)
+- Pushes one Toggl project's hours (`gusto_project`) into the user's Gusto **contractor** timesheet as shifts on their real dates, with each entry's start/end and its description as the shift note (Gusto requires a note; empty descriptions become "Logged from Toggl")
+- **Why a browser:** Gusto's public API is partner-only and its CLI/MCP need a company admin, so a contractor cannot log their own hours through them. The app drives the same internal GraphQL API Gusto's web app uses (`addHours`, `tracker.groupedShiftsWithTotals`), issuing `fetch` calls from inside a logged-in Gusto page. It is undocumented and can change; when it does, the run fails loudly and the `gusto-recapture` project skill (`.claude/skills/gusto-recapture/`) re-captures the request shapes
+- **Visible Chrome only.** Gusto sits behind a Cloudflare bot check that blocks headless Chrome; the app never runs headless and never tries to defeat a challenge. It uses the installed Google Chrome with a dedicated profile (`~/Library/Application Support/TogglMenuBar/gusto-browser`), started as its own process with a DevTools port bound to `127.0.0.1:9333`; each run attaches, works, and detaches. The window is **never closed by the app**, so the user can take over, and Gusto's session (a browser-session cookie Chrome drops on quit) survives between runs while it stays open. Trade-off: while that window is logged in, local processes can drive it through the port
+- **Login is a passkey.** If Gusto asks to log in, the app picks the remembered account and the user approves the passkey (Touch ID); a notification asks for it. The app never enters a password or approves a passkey. Settings → Integrations → **Gusto** → `Log in to Gusto` does the same on demand and stores the company (`gusto_company_slug`)
+- **Schedule:** Mondays from 09:00 local the app pushes the previous Monday–Sunday week (`check_gusto_sync`, 60-second timer). A run that needs a login waits 10 minutes for the passkey, then stops and does not retry until the user pushes manually or logs in; other failures retry hourly
+- **Manual:** `Export/Invoice` → `Push to Gusto` pushes every finished day up to yesterday (today is excluded) and shows a result card with anything that needs attention
+- **Stale badge:** an orange dot on `Export/Invoice` (and an orange status on the `Push to Gusto` row) from Monday 09:00 until last week is in Gusto, and whenever something needs the user: an expired login, a failed push, a shift Gusto refused, or a pushed entry later edited/deleted in Toggl
+- **Only ever adds.** Each pushed Toggl entry is recorded in a local ledger (`gusto_sync_state.json`) and never pushed twice; the ledger is saved after every write. A Toggl entry already matching a Gusto shift's start/end is adopted into the ledger instead of added, so a lost ledger cannot double-log. Entries edited or deleted in Toggl after pushing are flagged (Settings card, result card, badge), never mirrored: the app does not edit or delete Gusto shifts. Late additions to the last 35 days are pushed on the next run; Gusto may refuse a locked day, which is reported
+- First run pushes only the target week unless `gusto_sync_start_date` sets an earlier floor
+- Settings card also shows the next payday and submission deadline: payday is the 1st of the month, or the last business day before it when the 1st is a weekend or US federal holiday; hours are due 2 days before payday
+- Preferences: `gusto_sync_enabled`, `gusto_project`, `gusto_company_slug` (set by login), `gusto_sync_start_date` (optional). Also on the fallback AppKit window's Advanced tab (enable + project)
+- CLI: `python gusto_sync.py login | dry-run | run [--start YYYY-MM-DD --end YYYY-MM-DD]`; `dry-run` lists what would be pushed and writes nothing
+- Implemented in `gusto_client.py` (Chrome session, GraphQL calls) and `gusto_sync.py` (schedule, planning, ledger, payday, status). Dependency: `playwright` Python package (drives the installed Chrome; no `playwright install`)
+- API call cost:
+  - Toggl: 0–1 calls per run (35-day window of mostly cached, permanently immutable past days)
+  - Gusto: 1 REST call (tracker id) + 1 GraphQL read for the window, then per new shift 1 read + 1 `addHours` write
 
 ### Upwork Work Diary Shortcut
 - Footer `Export/Invoice` drop-up includes an `Open Upwork Diary` workflow that lists Toggl projects and shows whether each one is linked to an Upwork contract id
