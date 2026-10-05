@@ -72,6 +72,13 @@ def generate_assistant_css():
     .assistant-turn.user {
         text-align: right;
     }
+    /* The document disables selection globally (it is a popover, not a
+       page); transcript text is the exception since people copy from it. */
+    .assistant-bubble, .prop-when, .prop-meta, .prop-warn, .assistant-empty code {
+        -webkit-user-select: text;
+        user-select: text;
+        cursor: text;
+    }
     .assistant-bubble {
         display: inline-block;
         max-width: 88%;

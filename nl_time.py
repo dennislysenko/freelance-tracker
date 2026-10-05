@@ -327,6 +327,14 @@ Rules:
 - One object per day: "1 hour at 9am for the past 2 days" is TWO entries.
 - If the project, duration, or date is genuinely ambiguous, use intent
   "unclear" and say what you need in `message`. Do not guess a project.
+- The conversation so far may be included. Earlier assistant turns list the
+  entries that were proposed, with absolute dates. If the new message refines
+  or corrects an earlier proposal ("round to the half hour", "make it 2 hours",
+  "actually that was yesterday", "same again for Globex"), return intent "log"
+  with the COMPLETE corrected entries: every field restated, date_kind
+  "absolute" with the date from the earlier proposal unless the user changed
+  it. Never return "unclear" for a message that clearly modifies the previous
+  proposal.
 """
 
 
@@ -352,7 +360,7 @@ def _calendar_reference(now, back=14, forward=7):
     return "Date reference:\n" + "\n".join(lines)
 
 
-def interpret(utterance, project_names, now=None, api_key=None):
+def interpret(utterance, project_names, now=None, api_key=None, history=None):
     """
     Classify an utterance and return the raw structured result.
 
@@ -361,6 +369,10 @@ def interpret(utterance, project_names, now=None, api_key=None):
         project_names: list of Toggl project names the user can log against.
         now: local aware/naive datetime treated as "now" (defaults to now).
         api_key: override; defaults to the configured key.
+        history: prior conversation as [{"role": "user"|"assistant",
+            "content": str}, ...], oldest first. Lets a follow-up like "round
+            to the half hour" refine the previous proposal instead of reading
+            as a command with no subject.
 
     Returns the parsed dict: {intent, entries, query, message}.
     """
@@ -386,6 +398,11 @@ def interpret(utterance, project_names, now=None, api_key=None):
             "model": _model(),
             "input": [
                 {"role": "system", "content": SYSTEM_PROMPT},
+                *[
+                    {"role": m["role"], "content": m["content"]}
+                    for m in (history or [])
+                    if m.get("role") in ("user", "assistant") and m.get("content")
+                ],
                 {"role": "user", "content": f"{context}\n\nCommand: {utterance}"},
             ],
             "text": {"format": _schema(project_names)},

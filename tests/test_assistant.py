@@ -198,3 +198,133 @@ class TestResolve(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConversationHistory(unittest.TestCase):
+    """Follow-ups must reach the model with the earlier turns, or "round to
+    the half hour mark" parses as a command with no subject."""
+
+    def _session_with_proposal(self):
+        session = AssistantSession(projects_provider=lambda: {"1": {"name": "Acme"}})
+        session.add_user_turn("log an hour of Acme, past hour")
+        proposal = session.accept({
+            "kind": "proposal",
+            "entries": _resolved(1),
+            "collisions": [],
+            "message": "Interpreted 'past hour' as 12:34-13:34.",
+        })
+        return session, proposal
+
+    def test_history_spells_out_proposal_with_absolute_date(self):
+        session, proposal = self._session_with_proposal()
+        history = session.history_for_model()
+        self.assertEqual([m["role"] for m in history], ["user", "assistant"])
+        self.assertEqual(history[0]["content"], "log an hour of Acme, past hour")
+        body = history[1]["content"]
+        item = proposal.entries[0]
+        self.assertIn("Interpreted 'past hour'", body)
+        self.assertIn(f"date {item['day'].isoformat()}", body)
+        self.assertIn(f"start_time {item['start'].strftime('%H:%M')}", body)
+        self.assertIn(f"duration_minutes {item['duration_seconds'] // 60}", body)
+        self.assertIn("project 'Acme'", body)
+        self.assertIn("not yet logged", body)
+
+    def test_applied_proposal_is_marked_in_history(self):
+        session, proposal = self._session_with_proposal()
+        proposal.applied = True
+        proposal.applied_count = 1
+        self.assertIn("Applied (1 logged", session.history_for_model()[1]["content"])
+
+    def test_history_is_bounded(self):
+        session = AssistantSession()
+        for i in range(30):
+            session.add_user_turn(f"u{i}")
+        self.assertEqual(len(session.history_for_model(limit=4)), 4)
+        self.assertEqual(session.history_for_model(limit=4)[-1]["content"], "u29")
+
+    def test_resolve_passes_history_to_interpret(self):
+        session, _ = self._session_with_proposal()
+        captured = {}
+
+        def fake_interpret(utterance, names, history=None, **kw):
+            captured["utterance"] = utterance
+            captured["history"] = history
+            return {"intent": "unclear", "message": "stub"}
+
+        original = nl_time.interpret
+        nl_time.interpret = fake_interpret
+        try:
+            session.resolve("round to half hour mark")
+        finally:
+            nl_time.interpret = original
+        self.assertEqual(captured["utterance"], "round to half hour mark")
+        self.assertEqual(len(captured["history"]), 2)
+        self.assertIn("Proposed entries", captured["history"][1]["content"])
+
+
+class TestQuestions(unittest.TestCase):
+    """A question must be answered from the cache, not just acknowledged."""
+
+    def _session(self, entries):
+        projects = {"1": {"name": "Acme"}, "2": {"name": "Globex"}}
+        calls = []
+
+        def provider(start, end):
+            calls.append((start, end))
+            return entries
+
+        session = AssistantSession(projects_provider=lambda: projects,
+                                   entries_provider=provider)
+        session._calls = calls
+        return session
+
+    def _entry(self, pid, start_iso, minutes, desc=""):
+        return {"project_id": pid, "start": start_iso, "duration": minutes * 60,
+                "description": desc}
+
+    def _ask(self, session, query):
+        original = nl_time.interpret
+        nl_time.interpret = lambda *a, **k: {"intent": "question", "query": query,
+                                              "message": "Listing."}
+        try:
+            return session.resolve("what did I log")
+        finally:
+            nl_time.interpret = original
+
+    def test_single_day_lists_entries_with_totals(self):
+        session = self._session([
+            self._entry(1, "2026-09-15T13:00:00Z", 60, "MCP fixes"),
+            self._entry(2, "2026-09-15T15:30:00Z", 30),
+            self._entry(1, "2026-09-15T16:00:00Z", -1),  # running timer
+        ])
+        result = self._ask(session, {"project": None, "start_date": "2026-09-15",
+                                     "end_date": "2026-09-15"})
+        self.assertEqual(result["kind"], "answer")
+        msg = result["message"]
+        self.assertIn("Tue Sep 15: 1.50h total", msg)
+        self.assertIn("Acme: 1.00h", msg)
+        self.assertIn("Globex: 0.50h", msg)
+        self.assertIn("MCP fixes", msg)
+        self.assertEqual(session._calls, [(date(2026, 9, 15), date(2026, 9, 15))])
+
+    def test_project_filter_and_empty_result(self):
+        session = self._session([self._entry(2, "2026-09-15T15:30:00Z", 30)])
+        result = self._ask(session, {"project": "Acme", "start_date": "2026-09-15",
+                                     "end_date": "2026-09-15"})
+        self.assertEqual(result["message"], "No Acme time logged for Tue Sep 15.")
+
+    def test_long_range_gives_day_totals_only(self):
+        entries = [self._entry(1, f"2026-09-{d:02d}T13:00:00Z", 60, "note")
+                   for d in range(1, 15)]
+        session = self._session(entries)
+        result = self._ask(session, {"project": None, "start_date": "2026-09-01",
+                                     "end_date": "2026-09-14"})
+        msg = result["message"]
+        self.assertIn("14.00h total", msg)
+        self.assertIn("Mon Sep 14: 1.00h", msg)
+        self.assertNotIn("note", msg)
+
+    def test_bad_query_is_reported_not_raised(self):
+        session = self._session([])
+        result = self._ask(session, {"project": None, "start_date": "??", "end_date": "??"})
+        self.assertIn("could not look that up", result["message"])

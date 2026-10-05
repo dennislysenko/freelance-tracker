@@ -303,3 +303,36 @@ class TestConfigGuards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInterpretHistory(unittest.TestCase):
+    def test_history_is_threaded_between_system_and_command(self):
+        sent = {}
+
+        def fake_post(api_key, payload):
+            sent.update(payload)
+            return {"output": [{"type": "message", "content": [
+                {"type": "output_text", "text": '{"intent":"unclear","message":"x"}'}]}]}
+
+        original = nl_time._post
+        nl_time._post = fake_post
+        try:
+            nl_time.interpret(
+                "round to half hour", ["Acme"], api_key="sk-test",
+                history=[
+                    {"role": "user", "content": "log an hour of Acme"},
+                    {"role": "assistant", "content": "Proposed entries: ..."},
+                    {"role": "tool", "content": "ignored"},
+                    {"role": "user", "content": ""},
+                ],
+            )
+        finally:
+            nl_time._post = original
+
+        roles = [m["role"] for m in sent["input"]]
+        self.assertEqual(roles, ["system", "user", "assistant", "user"])
+        self.assertEqual(sent["input"][1]["content"], "log an hour of Acme")
+        self.assertTrue(sent["input"][-1]["content"].endswith("Command: round to half hour"))
+
+    def test_prompt_tells_model_how_to_handle_follow_ups(self):
+        self.assertIn("modifies the previous\n  proposal", nl_time.SYSTEM_PROMPT)
