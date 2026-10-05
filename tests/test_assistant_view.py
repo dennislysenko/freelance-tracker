@@ -140,7 +140,7 @@ class TestBridgeEncoding(unittest.TestCase):
         for encoded, expected in [
             ("bm90ZTogc3ByaW50IHBsYW5uaW5nLCAyOjMwIHN0YW5kdXA=",
              "note: sprint planning, 2:30 standup"),
-            ("Y2Fmw6kg4piVIDJoIG9uIFRyaVNob3Q=", "café ☕ 2h on TriShot"),
+            ("Y2Fmw6kg4piVIDJoIG9uIEluaXRlY2g=", "café ☕ 2h on Initech"),
         ]:
             self.assertEqual(base64.b64decode(encoded).decode("utf-8"), expected)
 

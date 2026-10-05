@@ -226,7 +226,7 @@ Bring your own OpenAI key and you can type entries in plain English instead of
 filling in a form:
 
 ```
-put 1 hour of Randonautica retainer at 9am for the past 2 days, no note
+put 1 hour of Globex retainer at 9am for the past 2 days, no note
 ```
 
 The app proposes the entries it would create — one row per day, with the
@@ -245,8 +245,8 @@ you to the Assistant view, which shows what it plans to log:
 
 ```
 Proposed 2 entries · 1 overlap existing time
- [x] Mon Aug 3 · 9:00am-10:00am    Randonautica Retainer · 1.00h
- [ ] Tue Aug 4 · 9:00am-10:00am    Randonautica Retainer · 1.00h
+ [x] Mon Aug 3 · 9:00am-10:00am    Globex Retainer · 1.00h
+ [ ] Tue Aug 4 · 9:00am-10:00am    Globex Retainer · 1.00h
      Overlaps time already logged
                              [ Dismiss ]  [ Apply ]
 ```

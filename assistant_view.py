@@ -321,7 +321,7 @@ EMPTY_STATE = """
 <div class="assistant-empty">
     Type what you worked on and confirm before anything is written.<br><br>
     <code>1 hour of Acme retainer at 9am the past 2 days, no note</code><br>
-    <code>90 minutes on TriShot friday afternoon</code><br>
+    <code>90 minutes on Initech friday afternoon</code><br>
     <code>how many hours on Acme this month?</code>
 </div>
 """

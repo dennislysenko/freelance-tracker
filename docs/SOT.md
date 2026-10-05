@@ -290,8 +290,8 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
   - Upwork: 0 app-side API calls; the app only opens the diary URL in the browser
 
 ### Natural-Language Time Logging (optional, bring-your-own OpenAI key)
-- Lets the user type shorthand — "put 1 hour of Randonautica retainer at 9am for the past 2 days, no note" — and have it turned into proposed Toggl entries
-- **Nothing is written without confirmation.** The parse produces a *proposal* (one row per entry, e.g. "mon aug 3, 9:00am · 1.00h · Randonautica - Retainer"), which the user applies or cancels
+- Lets the user type shorthand — "put 1 hour of Globex retainer at 9am for the past 2 days, no note" — and have it turned into proposed Toggl entries
+- **Nothing is written without confirmation.** The parse produces a *proposal* (one row per entry, e.g. "mon aug 3, 9:00am · 1.00h · Globex - Retainer"), which the user applies or cancels
 - Also classifies read questions ("how many hours on Acme this month?") into a local date-range query answered from the existing entry cache — **zero Toggl API calls**. The answer lists the total, a per-project breakdown, and per-entry rows (time range, project, note) for ranges of 7 days or less; longer ranges (max 92 days) get day totals only
 - **Follow-ups**: the last 8 transcript turns are sent with each command, proposals spelled out with absolute dates and whether they were applied, so "round to the half hour mark" or "actually that was yesterday" refines the previous proposal into a new, complete one instead of reading as a command with no subject
 - **Entry point**: a one-line input pinned to the top of the dashboard, shown only when an OpenAI key is configured (the absent key is the feature's off switch, so there is no separate preference). Submitting routes to a dedicated **Assistant view** — transcript, proposal cards, back arrow — so a long conversation never resizes the content-sized popover

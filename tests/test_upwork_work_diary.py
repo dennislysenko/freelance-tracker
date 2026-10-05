@@ -20,4 +20,4 @@ def test_build_work_diary_url_uses_expected_query_string():
 def test_build_work_diary_url_rejects_non_numeric_contract_ids():
     """Only digits are valid in stored Upwork contract ids."""
     with pytest.raises(ValueError):
-        build_work_diary_url("worldchat-12345678", "2026-04-14")
+        build_work_diary_url("acme-12345678", "2026-04-14")
