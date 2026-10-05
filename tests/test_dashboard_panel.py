@@ -456,3 +456,41 @@ def test_assistant_apply_runs_off_main_thread_and_reports_back(monkeypatch):
     # A second click on an applied card is a no-op.
     controller.assistant_apply(proposal.id, "0", on_written=reported.append)
     assert reported == [2]
+
+
+def _gusto_html(controller):
+    return controller._generate_html(
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": []},
+        {"total": 0, "all_projects": [], "projection": {}},
+    )
+
+
+def test_gusto_push_option_and_stale_badge():
+    controller = _make_controller()
+    assert 'onclick="gustoPush(event)"' not in _gusto_html(controller)
+
+    controller.set_gusto_status({"configured": True, "stale": True, "running": False,
+                                 "meta": "Oct 5–Oct 11 not pushed"})
+    html = _gusto_html(controller)
+    assert "Push to Gusto" in html
+    assert "gustoPush(event)" in html
+    assert '<span class="export-badge"' in html
+    assert "Oct 5–Oct 11 not pushed" in html
+
+    controller.set_gusto_status({"configured": True, "stale": False, "running": False,
+                                 "meta": "Up to date through Oct 11"})
+    html = _gusto_html(controller)
+    assert "Push to Gusto" in html
+    assert '<span class="export-badge"' not in html
+
+
+def test_gusto_result_card():
+    controller = _make_controller()
+    controller.set_gusto_card({"status": "success", "title": "Pushed to Gusto",
+                               "detail": "Pushed 3 shifts (5.50h) for Oct 5–Oct 11",
+                               "issues": ["Tue Oct 6: an entry's times changed in Toggl after it was pushed"]})
+    html = _gusto_html(controller)
+    assert "Pushed 3 shifts (5.50h)" in html
+    assert "times changed in Toggl" in html
+    assert "postAction('gusto_dismiss')" in html

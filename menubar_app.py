@@ -26,6 +26,7 @@ from preferences_window import PreferencesWindowController
 from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
 from upwork_work_diary import build_work_diary_url
+import gusto_sync
 from billing_reminders import (
     collect_due_reminders,
     load_reminder_state,
@@ -95,6 +96,7 @@ class FreelanceTrackerApp(rumps.App):
         self._dashboard_enabled = DashboardPanelController is not None
         self.dashboard = None
         self._billing_reminder_state = load_reminder_state()
+        self._gusto_running = False
 
         if self._dashboard_enabled:
             # Set up dashboard popover with action callbacks
@@ -124,6 +126,9 @@ class FreelanceTrackerApp(rumps.App):
                 'settings:open_openai_settings': self._dashboard_settings_open_openai_settings,
                 'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
                 'settings:test_mcp': self._dashboard_settings_test_mcp,
+                'settings:gusto_login': self._dashboard_settings_gusto_login,
+                'gusto_push': self._dashboard_gusto_push,
+                'gusto_dismiss': self._dashboard_gusto_dismiss,
                 'assistant_ask': self._dashboard_assistant_ask,
                 'assistant_apply': self._dashboard_assistant_apply,
                 'assistant_clear': self._dashboard_assistant_clear,
@@ -308,6 +313,132 @@ class FreelanceTrackerApp(rumps.App):
                 self.dashboard.settings_ack({"type": "mcp_test", "ok": False, "error": str(exc)})
 
         run_in_background(probe_server, done, failed, name="mcp-test")
+
+    # --- Gusto sync -------------------------------------------------------
+
+    def _refresh_gusto_status(self, rerender=True):
+        """Recompute the Export/Invoice badge and Push to Gusto row."""
+        if self.dashboard is None:
+            return
+        prefs = load_preferences()
+        status = (
+            gusto_sync.status_view(prefs, gusto_sync.load_state(), running=self._gusto_running)
+            if gusto_sync.is_configured(prefs) else None
+        )
+        self.dashboard.set_gusto_status(status)
+        if rerender:
+            self.dashboard.refresh_contents()
+
+    def _start_gusto_sync(self, manual):
+        """Push Toggl hours to Gusto on a worker thread.
+
+        Manual pushes (Export/Invoice -> Push to Gusto) cover every finished
+        day up to yesterday and show a result card; the Monday run covers the
+        scheduled window and only notifies. Gusto runs in its own visible
+        Chrome window, which is left open afterwards.
+        """
+        if self._gusto_running:
+            return
+        prefs = load_preferences()
+        if not gusto_sync.is_configured(prefs):
+            return
+        from background_work import on_main_thread, run_in_background
+        import gusto_client
+
+        state = gusto_sync.load_state()
+        now = datetime.now()
+        first_day_pref = prefs.get('gusto_sync_start_date') or ''
+        first_day = datetime.strptime(first_day_pref, "%Y-%m-%d").date() if first_day_pref else None
+        window = gusto_sync.manual_window(now, state, first_day) if manual else None
+        self._gusto_running = True
+        if manual and self.dashboard is not None:
+            start, end = window
+            self.dashboard.set_gusto_card({
+                "status": "running",
+                "title": "Pushing to Gusto…",
+                "detail": f"{prefs.get('gusto_project')} · {start.strftime('%b %-d')}–{end.strftime('%b %-d')}",
+            })
+        self._refresh_gusto_status()
+
+        def notify_login():
+            on_main_thread(lambda: rumps.notification(
+                "Gusto", "Approve your passkey",
+                "Log in to Gusto in the Chrome window to push your hours.",
+            ))
+
+        def session_factory(slug):
+            return gusto_client.open_session(slug, on_login_needed=notify_login)
+
+        def work():
+            return gusto_sync.run_sync(
+                prefs, state, now=now, window=window,
+                session_factory=session_factory, persist=gusto_sync.save_state,
+            )
+
+        def done(result):
+            new_state, summary = result
+            gusto_sync.save_state(new_state)
+            self._gusto_running = False
+            text = gusto_sync.describe_result(summary)
+            _debug(f"Gusto sync ({'manual' if manual else 'scheduled'}): {text}")
+            if summary.get("error"):
+                rumps.notification(
+                    "Gusto", "Needs your passkey" if summary.get("login_required") else "Push failed",
+                    f"{text} Use Export/Invoice → Push to Gusto to retry.",
+                )
+            elif not manual and (summary.get("pushed") or summary.get("issues")):
+                rumps.notification("Gusto", prefs.get('gusto_project') or "", text)
+            if manual and self.dashboard is not None:
+                self.dashboard.set_gusto_card({
+                    "status": "error" if summary.get("error") else "success",
+                    "title": "Gusto push failed" if summary.get("error") else "Pushed to Gusto",
+                    "detail": text,
+                    "issues": [issue["message"] for issue in summary.get("issues") or []],
+                })
+            self._refresh_gusto_status()
+
+        def failed(exc):
+            self._gusto_running = False
+            _debug(f"Gusto sync crashed: {exc}")
+            if manual and self.dashboard is not None:
+                self.dashboard.set_gusto_card({
+                    "status": "error", "title": "Gusto push failed", "detail": str(exc),
+                })
+            self._refresh_gusto_status()
+
+        run_in_background(work, done, failed, name="gusto-sync")
+
+    def _dashboard_gusto_push(self):
+        self._start_gusto_sync(manual=True)
+
+    def _dashboard_gusto_dismiss(self):
+        if self.dashboard is not None:
+            self.dashboard.set_gusto_card(None)
+            self.dashboard.refresh_contents()
+
+    def _dashboard_settings_gusto_login(self):
+        """Open the Gusto window and wait for a passkey login (worker thread)."""
+        from background_work import run_in_background
+        import gusto_client
+
+        def done(result):
+            prefs = load_preferences()
+            prefs['gusto_company_slug'] = result["company_slug"]
+            save_preferences(prefs)
+            state = gusto_sync.load_state()
+            state["login_required"] = False
+            state["last_error"] = None
+            gusto_sync.save_state(state)
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "gusto_login", "ok": True,
+                                             "company": result["company_slug"]})
+            self._refresh_gusto_status(rerender=False)
+
+        def failed(exc):
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "gusto_login", "ok": False, "error": str(exc)})
+
+        run_in_background(gusto_client.login, done, failed, name="gusto-login")
 
     def _dashboard_assistant_ask(self, encoded_utterance):
         """Submit a natural-language command. Parsing happens on a worker."""
@@ -831,6 +962,7 @@ class FreelanceTrackerApp(rumps.App):
                 self.dashboard.set_rate_limited(is_rate_limited())
                 self.dashboard.set_error_message(None)
                 self.dashboard.set_exportable_projects(self._build_dashboard_projects())
+                self._refresh_gusto_status(rerender=False)
                 self.dashboard.update_data(daily, weekly, monthly)
             else:
                 self._update_fallback_menu(daily, weekly, monthly, next_refresh_calls)
@@ -1078,6 +1210,20 @@ class FreelanceTrackerApp(rumps.App):
         if delivered_any:
             save_reminder_state(self._billing_reminder_state)
             _debug("Billing reminder state saved")
+
+    @rumps.timer(60)
+    def check_gusto_sync(self, _):
+        """Start the weekly Gusto push once it is due (Mondays from 09:00)."""
+        if self._gusto_running:
+            return
+        try:
+            prefs = load_preferences()
+            if gusto_sync.is_configured(prefs) and gusto_sync.sync_due(
+                datetime.now(), gusto_sync.load_state()
+            ):
+                self._start_gusto_sync(manual=False)
+        except Exception as exc:
+            _debug(f"Gusto schedule check failed: {exc}")
 
     def refresh(self, _):
         force_refresh_entries()
