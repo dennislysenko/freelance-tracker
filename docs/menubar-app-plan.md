@@ -30,7 +30,7 @@ Connect the working UI to your actual Toggl data from `toggl_earnings.py`.
 ### Step 1.1: Install rumps
 
 ```bash
-cd /Users/dennis/dev/freelance-workflow
+cd path/to/freelance-workflow
 source venv/bin/activate
 pip install rumps
 ```
