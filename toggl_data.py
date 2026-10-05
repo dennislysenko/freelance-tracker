@@ -18,6 +18,29 @@ BASE_URL = "https://api.track.toggl.com/api/v9"
 
 # Rate limit state
 _rate_limited = False
+
+# Cache-only mode: never call Toggl, serve whatever is on disk. Set by the MCP
+# server (FREELANCE_TRACKER_CACHE_ONLY=1) so a second process can read the
+# shared cache without spending the menu bar app's API budget. Stale shards
+# are served as-is; only a shard that does not exist at all is an error.
+CACHE_ONLY = os.getenv("FREELANCE_TRACKER_CACHE_ONLY") == "1"
+
+
+class CacheMissError(RuntimeError):
+    """Raised in cache-only mode when required data has never been cached."""
+
+    def __init__(self, days=None, what="time entries"):
+        self.days = sorted(set(days or []))
+        if self.days:
+            first, last = self.days[0], self.days[-1]
+            span = first.isoformat() if first == last else f"{first.isoformat()} to {last.isoformat()}"
+            detail = f"{what} for {span} are not cached"
+        else:
+            detail = f"{what} are not cached"
+        super().__init__(
+            f"{detail}. Open the Freelance Tracker dashboard (or press Refresh Now) "
+            "to populate the cache, then retry."
+        )
 ENTRY_CACHE_VERSION = 1
 ENTRY_CACHE_DIR = CACHE_DIR / "entries" / "by_day"
 ENTRY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -247,7 +270,14 @@ def get_entries_for_range(start_date, end_date, force_refresh=False):
     if end_local < start_local:
         start_local, end_local = end_local, start_local
 
-    if force_refresh:
+    if CACHE_ONLY:
+        absent = [
+            day for day in _list_days_in_range(start_local, end_local)
+            if not _entry_cache_file_for_day(day).exists()
+        ]
+        if absent:
+            raise CacheMissError(absent)
+    elif force_refresh:
         refresh_entry_ranges([(start_local, end_local)])
     else:
         missing_ranges = _missing_entry_ranges(start_local, end_local)
@@ -327,10 +357,12 @@ def get_projects():
     # Check if cache exists and is still valid
     if cache_file.exists():
         cache_age = datetime.now().timestamp() - cache_file.stat().st_mtime
-        if cache_age < cache_ttl:
+        if cache_age < cache_ttl or CACHE_ONLY:
             log_api_request("/me/projects", "GET", cached=True)
             with open(cache_file, 'r') as f:
                 return json.load(f)
+    if CACHE_ONLY:
+        raise CacheMissError(what="projects")
 
     # Fetch fresh data
     url = f"{BASE_URL}/me/projects"
