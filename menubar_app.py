@@ -47,6 +47,11 @@ except ModuleNotFoundError as exc:
 
 # Hide dock icon - must be set before app creation
 from AppKit import NSBundle, NSObject, NSPasteboard, NSPasteboardTypeString
+from Foundation import (
+    NSDistributedNotificationCenter,
+    NSNotificationSuspensionBehaviorDeliverImmediately,
+)
+from app_notify import NOTIFICATION_NAME, marker_mtime
 bundle = NSBundle.mainBundle()
 info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
 if info:
@@ -63,6 +68,31 @@ def create_progress_bar(percent, width=12):
     filled = min(int(width * percent / 100), width)
     bar = '█' * filled + '░' * (width - filled)
     return f"[{bar}]"
+
+
+class DataChangedObserver(NSObject):
+    """Listens for another process announcing that the cache changed.
+
+    The MCP server writes time entries from its own process and patches the
+    day shard; this is how the 💰 total catches up at once instead of at the
+    next half-hourly refresh. The re-read is served from the patched cache,
+    so it costs no Toggl calls.
+    """
+
+    def initWithApp_(self, app):
+        self = objc.super(DataChangedObserver, self).init()
+        if self is None:
+            return None
+        self._app = app
+        return self
+
+    def dataChanged_(self, notification):
+        try:
+            info = notification.userInfo() or {}
+            _debug(f"data changed externally: {dict(info)}")
+            self._app.note_external_change()
+        except Exception as exc:
+            _debug(f"dataChanged_ failed: {exc}")
 
 
 class StatusItemClickHandler(NSObject):
@@ -96,6 +126,10 @@ class FreelanceTrackerApp(rumps.App):
         self._dashboard_enabled = DashboardPanelController is not None
         self.dashboard = None
         self._billing_reminder_state = load_reminder_state()
+        # Seen marker time, so the one-minute poll only fires on a change it
+        # has not already handled via the instant notification.
+        self._seen_data_change = marker_mtime()
+        self._data_observer = None
         self._gusto_running = False
 
         if self._dashboard_enabled:
@@ -136,6 +170,25 @@ class FreelanceTrackerApp(rumps.App):
         else:
             _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
 
+        self.update_display()
+
+    def _start_data_change_observer(self):
+        """Subscribe to cross-process cache-change announcements."""
+        try:
+            self._data_observer = DataChangedObserver.alloc().initWithApp_(self)
+            NSDistributedNotificationCenter.defaultCenter().addObserver_selector_name_object_suspensionBehavior_(
+                self._data_observer,
+                "dataChanged:",
+                NOTIFICATION_NAME,
+                None,
+                NSNotificationSuspensionBehaviorDeliverImmediately,
+            )
+        except Exception as exc:
+            _debug(f"data change observer failed to start: {exc}")
+
+    def note_external_change(self):
+        """Another process changed the cache: re-read it and update the title."""
+        self._seen_data_change = marker_mtime()
         self.update_display()
 
     def _hook_status_item(self):
@@ -1169,10 +1222,24 @@ class FreelanceTrackerApp(rumps.App):
         """One-shot timer to hook the status item after rumps finishes launching."""
         timer.stop()
         self._hook_status_item()
+        self._start_data_change_observer()
 
     @rumps.timer(1800)
     def auto_refresh(self, _):
         self.update_display()
+
+    @rumps.timer(60)
+    def check_external_changes(self, _):
+        """Catch a cache change whose notification never arrived.
+
+        The distributed notification normally gets here first and this is a
+        no-op; it exists so a dropped notification costs a minute of
+        staleness rather than half an hour.
+        """
+        changed_at = marker_mtime()
+        if changed_at > self._seen_data_change:
+            _debug("picked up an external data change from the marker file")
+            self.note_external_change()
 
     @rumps.timer(60)
     def check_billing_reminders(self, _):
