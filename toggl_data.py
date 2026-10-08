@@ -583,6 +583,120 @@ def update_time_entry(entry_id, **fields):
         raise
 
 
+def delete_time_entry(entry_id):
+    """
+    Delete a single time entry in Toggl.
+
+    Returns True on success. A 404 is treated as success: the entry is gone,
+    which is what the caller asked for.
+    """
+    global _rate_limited
+    workspace_id = _get_workspace_id()
+    if workspace_id is None:
+        raise ValueError("TOGGL_WORKSPACE_ID not found. Add it in Settings > Integrations.")
+    api_token = _get_api_token()
+
+    url = f"{BASE_URL}/workspaces/{workspace_id}/time_entries/{entry_id}"
+    endpoint = f"/workspaces/{workspace_id}/time_entries/{entry_id}"
+
+    try:
+        response = requests.delete(url, auth=(api_token, "api_token"), timeout=10)
+
+        if response.status_code == 402:
+            _rate_limited = True
+            log_api_request(endpoint, "DELETE", status_code=402, rate_limited=True)
+            raise RuntimeError("Toggl API is rate limited (402); time entry not deleted.")
+
+        if response.status_code != 404:
+            response.raise_for_status()
+        _rate_limited = False
+        log_api_request(endpoint, "DELETE", status_code=response.status_code)
+        return True
+
+    except requests.exceptions.RequestException as e:
+        log_api_request(endpoint, "DELETE", error=str(e))
+        raise
+
+
+# --- keeping the shared cache coherent after a write ----------------------
+#
+# A write invalidates what the day shard says, but deleting the shard would
+# make the next cache-only read (the MCP server) raise CacheMissError until
+# the user opens the dashboard. Toggl hands back the authoritative entry on
+# create/update, so patch the shard in place instead: coherent cache, zero
+# extra API calls. Shards that do not exist are left alone — writing one
+# would misrepresent a never-fetched day as fully cached.
+
+
+def entry_local_day(entry):
+    """The local calendar day a raw Toggl entry starts on, or None."""
+    start = (entry or {}).get("start")
+    if not start:
+        return None
+    try:
+        return datetime.fromisoformat(start.replace("Z", "+00:00")).astimezone().date()
+    except (AttributeError, ValueError):
+        return None
+
+
+def _rewrite_shard(day, mutate):
+    """Apply `mutate(entries)` to an existing day shard. No-op if absent."""
+    if day is None:
+        return False
+    payload = _load_entry_day_payload(day)
+    if payload is None:
+        return False
+    entries = list(payload.get("entries", []))
+    mutate(entries)
+    _store_entry_day_payload(day, entries)
+    return True
+
+
+def upsert_cached_entry(entry, previous_day=None):
+    """Insert or replace a raw Toggl entry in its day shard.
+
+    `previous_day` is the day the entry used to sit on, when an update moved
+    it; the stale copy is dropped from that shard.
+    """
+    day = entry_local_day(entry)
+    entry_id = (entry or {}).get("id")
+    if previous_day is not None and previous_day != day:
+        remove_cached_entry(entry_id, previous_day)
+
+    def mutate(entries):
+        for index, existing in enumerate(entries):
+            if existing.get("id") == entry_id:
+                entries[index] = entry
+                return
+        entries.append(entry)
+
+    return _rewrite_shard(day, mutate)
+
+
+def remove_cached_entry(entry_id, day):
+    """Drop an entry from its day shard after a delete."""
+    def mutate(entries):
+        entries[:] = [e for e in entries if e.get("id") != entry_id]
+
+    return _rewrite_shard(day, mutate)
+
+
+def find_cached_entry(entry_id, start_date, end_date):
+    """Locate a cached entry by id within a date range.
+
+    Returns (entry, day) or (None, None). Reads only what is already cached,
+    so it is safe under CACHE_ONLY.
+    """
+    for day in _list_days_in_range(start_date, end_date):
+        payload = _load_entry_day_payload(day)
+        if payload is None:
+            continue
+        for entry in payload.get("entries", []):
+            if str(entry.get("id")) == str(entry_id):
+                return entry, day
+    return None, None
+
+
 def get_cached_entries(cache_key, start_date, end_date):
     """Get cached time entries if they exist and are valid."""
     cache_file = CACHE_DIR / f"{cache_key}.json"
