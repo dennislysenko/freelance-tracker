@@ -100,7 +100,12 @@ def probe_server(timeout_seconds: float = 20.0) -> dict:
                 await session.initialize()
                 tools = await session.list_tools()
                 fresh = await session.call_tool("get_data_freshness", {})
-                data = getattr(fresh, "structuredContent", None) or {}
+                # The SDK has spelled this both ways across versions.
+                data = (
+                    getattr(fresh, "structured_content", None)
+                    or getattr(fresh, "structuredContent", None)
+                    or {}
+                )
                 if not data:
                     for block in fresh.content or []:
                         text = getattr(block, "text", None)
@@ -116,6 +121,7 @@ def probe_server(timeout_seconds: float = 20.0) -> dict:
                     "ok": True,
                     "tools": len(tools.tools),
                     "enabled": bool(data.get("mcp_enabled", False)) if isinstance(data, dict) else None,
+                    "writable": bool(data.get("mcp_write_enabled", False)) if isinstance(data, dict) else None,
                     "data_as_of": data.get("this_month_as_of") if isinstance(data, dict) else None,
                 }
 

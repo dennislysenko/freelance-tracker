@@ -40,6 +40,7 @@ DEFAULT_PREFERENCES = {
     },  # Expanded/collapsed dashboard sections, persisted across launches
     "mcp_enabled": False,  # Let agents (Claude Code, Codex) read hours/projections via mcp_server.py
     "mcp_anonymize": False,  # Replace client names / dollar amounts in MCP responses
+    "mcp_write_enabled": False,  # Let agents log/edit/delete one time entry at a time (confirmed)
     "gusto_sync_enabled": False,  # Push a project's Toggl hours into Gusto contractor shifts weekly
     "gusto_project": "",  # Toggl project whose hours go to Gusto
     "gusto_company_slug": "",  # Gusto company in app.gusto.com/<slug>; set by "Log in to Gusto"
@@ -169,7 +170,7 @@ def validate_preferences(prefs):
                     )
 
     # Optional fields: MCP server toggles (booleans)
-    for flag in ('mcp_enabled', 'mcp_anonymize'):
+    for flag in ('mcp_enabled', 'mcp_anonymize', 'mcp_write_enabled'):
         if flag in prefs and not isinstance(prefs[flag], bool):
             errors.append(f"'{flag}': must be true or false")
 

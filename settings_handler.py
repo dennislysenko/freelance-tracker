@@ -34,6 +34,7 @@ _SETTINGS_KEYS = (
     "billing_reminders",
     "mcp_enabled",
     "mcp_anonymize",
+    "mcp_write_enabled",
     "gusto_sync_enabled",
     "gusto_project",
     "gusto_sync_start_date",
@@ -219,7 +220,8 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
     for key in _SETTINGS_KEYS:
         if key in payload:
             value = payload[key]
-            if key in ("mcp_enabled", "mcp_anonymize", "gusto_sync_enabled"):
+            if key in ("mcp_enabled", "mcp_anonymize", "mcp_write_enabled",
+                       "gusto_sync_enabled"):
                 value = bool(value)
             elif key in ("gusto_project", "gusto_sync_start_date"):
                 value = str(value or "").strip()

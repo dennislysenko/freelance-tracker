@@ -1080,6 +1080,7 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
 
     mcp_enabled = bool(prefs.get("mcp_enabled", False))
     mcp_anonymize = bool(prefs.get("mcp_anonymize", False))
+    mcp_write = bool(prefs.get("mcp_write_enabled", False))
     regs = mcp_support.detect_registrations()
     claude_cmd = mcp_support.claude_code_command()
     codex_block = mcp_support.codex_config_block()
@@ -1095,12 +1096,24 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
         hours, earnings, the month projection, per-project pacing, and your billing
         rules, so you can ask &ldquo;how is my month going and where should I put
         more time?&rdquo; and get an answer from real numbers.
-        <strong>Read-only:</strong> agents cannot log time or change settings.
+        <strong>Reading is the default</strong>; logging and editing time is a
+        separate switch below.
     </div>
     <label class="br-toggle mcp-toggle">
         <input type="checkbox" id="set_mcp_enabled"{' checked' if mcp_enabled else ''}>
         <span>Enable MCP server</span>
     </label>
+    <label class="br-toggle mcp-toggle">
+        <input type="checkbox" id="set_mcp_write_enabled"{' checked' if mcp_write else ''}>
+        <span>Allow agents to log and edit time</span>
+    </label>
+    <div class="settings-help">
+        Off by default. When on, an agent can log a new entry, edit one, or delete
+        one &mdash; <strong>one entry per request, never in bulk</strong>. Every
+        write is two-step: the agent first gets a preview of the exact change and
+        has to come back with a confirmation token, so you see what is about to
+        happen before it does. Deleting is not undoable from the agent.
+    </div>
     <label class="br-toggle mcp-toggle">
         <input type="checkbox" id="set_mcp_anonymize"{' checked' if mcp_anonymize else ''}>
         <span>Anonymize client names and dollar amounts</span>
@@ -1108,7 +1121,8 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     <div class="settings-help">
         When off, the agent sees your real project names and rates. Turn it on if
         the agent runs on a model you do not want client names sent to. Ratios are
-        kept so pacing still makes sense.
+        kept so pacing still makes sense. Anonymizing blocks writing, since an
+        agent cannot safely edit hours on a project it cannot name.
     </div>
     <div class="mcp-regs">
         <span class="settings-help" style="margin:0">Registered in:</span>
@@ -1586,6 +1600,7 @@ def generate_settings_js():
         if (!out) return;
         if (reply.ok) {
             var msg = reply.tools + ' tools available';
+            msg += reply.writable ? ' \u00b7 read + write' : ' \u00b7 read-only';
             if (reply.data_as_of) msg += ' \u00b7 data as of ' + reply.data_as_of;
             if (reply.enabled === false) msg += ' \u00b7 server is disabled (save with it enabled to serve data)';
             out.textContent = msg;
@@ -1602,6 +1617,7 @@ def generate_settings_js():
             gusto_project: (document.getElementById('set_gusto_project') || {}).value || '',
             mcp_enabled: settingsReadBool('set_mcp_enabled'),
             mcp_anonymize: settingsReadBool('set_mcp_anonymize'),
+            mcp_write_enabled: settingsReadBool('set_mcp_write_enabled'),
             cache_ttl_projects: settingsReadInt('set_cache_ttl_projects', 0),
             cache_ttl_today: settingsReadInt('set_cache_ttl_today', 0),
             vacation_days_per_month: settingsReadInt('set_vacation_days', 0),

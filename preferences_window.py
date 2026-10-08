@@ -701,6 +701,11 @@ class PreferencesWindowController:
             view, "Anonymize client names and dollar amounts", 20, y,
             bool(self.current_prefs.get('mcp_anonymize', False)),
         )
+        y -= 28
+        self.widgets['mcp_write_enabled'] = self._create_checkbox(
+            view, "Allow agents to log and edit time (one entry at a time)", 20, y,
+            bool(self.current_prefs.get('mcp_write_enabled', False)),
+        )
         y -= 40
 
         gusto_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
@@ -1202,6 +1207,7 @@ class PreferencesWindowController:
             'billing_reminders': billing_reminders,
             'mcp_enabled': self.widgets['mcp_enabled'].state() == NSOnState,
             'mcp_anonymize': self.widgets['mcp_anonymize'].state() == NSOnState,
+            'mcp_write_enabled': self.widgets['mcp_write_enabled'].state() == NSOnState,
             'gusto_sync_enabled': self.widgets['gusto_sync_enabled'].state() == NSOnState,
             'gusto_project': str(self.widgets['gusto_project'].stringValue() or '').strip(),
         })
@@ -1322,6 +1328,7 @@ class PreferencesWindowController:
             self.widgets['calendar_ics_url'].setStringValue_("")
             self.widgets['mcp_enabled'].setState_(NSOffState)
             self.widgets['mcp_anonymize'].setState_(NSOffState)
+            self.widgets['mcp_write_enabled'].setState_(NSOffState)
             self.widgets['gusto_sync_enabled'].setState_(NSOffState)
             self.widgets['gusto_project'].setStringValue_("")
 
