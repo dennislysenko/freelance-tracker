@@ -24,7 +24,9 @@ from datetime import date, datetime, timedelta  # noqa: E402
 from typing import Any, Dict, List, Optional  # noqa: E402
 
 from mcp.server.mcpserver import MCPServer  # noqa: E402
+from mcp.types import ToolAnnotations  # noqa: E402
 
+import mcp_write  # noqa: E402
 import toggl_data  # noqa: E402
 from carryover import get_previous_month_balance  # noqa: E402
 from diagnostics import _excel_label  # noqa: E402
@@ -49,11 +51,17 @@ SERVER_NAME = "freelance-tracker"
 MAX_ENTRY_RANGE_DAYS = 92
 
 INSTRUCTIONS = """\
-Read-only access to the user's Freelance Tracker: Toggl hours, earnings, the
-monthly projection, per-project pacing, and the billing rules behind them.
-Data comes from the app's local cache and is as fresh as its last refresh;
-every response carries `data_as_of`. This server cannot log time or change
-settings. Start with `get_month_status` when asked how the month is going.
+The user's Freelance Tracker: Toggl hours, earnings, the monthly projection,
+per-project pacing, and the billing rules behind them. Reads come from the
+app's local cache and are as fresh as its last refresh; every response carries
+`data_as_of`. Start with `get_month_status` when asked how the month is going.
+
+Writing (log_time, update_entry, delete_entry) is off unless the user has
+turned it on, acts on exactly ONE time entry per call, and is always two-step:
+call without `confirm` to get a preview plus a token, show that preview to the
+user, and only call again with the token once they say yes. Never chain writes
+to cover several entries without checking back in between, and never confirm
+on the user's behalf.
 """
 
 mcp = MCPServer(SERVER_NAME, instructions=INSTRUCTIONS)
@@ -491,6 +499,7 @@ def build_time_entries(start: str, end: str, project: Optional[str] = None) -> D
         day_key = start_local.date().isoformat()
         bucket = days.setdefault(day_key, {"date": day_key, "hours": 0.0, "entries": []})
         bucket["entries"].append({
+            "entry_id": e.get("id"),
             "project": pname,
             "description": e.get("description") or "",
             "start": start_local.isoformat(timespec="minutes"),
@@ -529,6 +538,7 @@ def build_data_freshness() -> Dict[str, Any]:
     return {
         "mcp_enabled": bool(prefs.get("mcp_enabled", False)),
         "mcp_anonymize": bool(prefs.get("mcp_anonymize", False)),
+        "mcp_write_enabled": bool(prefs.get("mcp_write_enabled", False)),
         "today_date": today.isoformat(),
         "today_shard_as_of": today_mtime.isoformat(timespec="minutes") if today_mtime else None,
         "today_shard_stale": (today_age is None) or (today_age > ttl),
@@ -554,40 +564,153 @@ def _run(fn, *args, **kwargs) -> Dict[str, Any]:
         return _tool_error(exc)
 
 
-@mcp.tool()
+def _run_write(fn, **kwargs) -> Dict[str, Any]:
+    """Writes report every failure as a tool error.
+
+    A half-finished write must come back as a message the agent can read out,
+    not an exception that drops the connection mid-conversation.
+    """
+    _enforce_cache_only()
+    try:
+        prefs = load_preferences()
+        _require_enabled(prefs)
+        return fn(prefs=prefs, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - deliberate: see docstring
+        return _tool_error(exc)
+
+
+@mcp.tool(annotations=ToolAnnotations(title='Earnings overview', read_only_hint=True))
 def get_overview() -> Dict[str, Any]:
     """Today / this week / this month totals and hours, per-project, plus the month projection summary."""
     return _run(build_overview)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Month status and pacing', read_only_hint=True))
 def get_month_status() -> Dict[str, Any]:
     """Per-project month status with pacing (percentage, pace_ratio, hours needed per remaining business day) and a ranked `attention` list of projects that need hours. Start here for 'how is my month going'."""
     return _run(build_month_status)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Month projection', read_only_hint=True))
 def get_projection() -> Dict[str, Any]:
     """The full monthly earnings projection including the raw `trace` terms and days-off dates."""
     return _run(build_projection)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Project billing rules', read_only_hint=True))
 def get_project_rules() -> Dict[str, Any]:
     """Billing rules per project (hourly / capped / fixed monthly, caps, targets, last billed date), rev share, vacation settings, plus a plain-English rendering of each rule."""
     return _run(build_project_rules)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='List time entries', read_only_hint=True))
 def get_time_entries(start: str, end: str, project: Optional[str] = None) -> Dict[str, Any]:
     """Cached Toggl time entries between two YYYY-MM-DD dates (inclusive, max 92 days), grouped by day. Optional exact project-name filter."""
     return _run(build_time_entries, start, end, project)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Cache freshness', read_only_hint=True))
 def get_data_freshness() -> Dict[str, Any]:
     """How fresh the cached data is, whether the server is enabled, and how to refresh."""
     return _run(build_data_freshness)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Log one time entry", read_only_hint=False, destructive_hint=False
+    )
+)
+def log_time(
+    date: str,
+    start_time: str,
+    duration_minutes: int,
+    project: str,
+    description: Optional[str] = None,
+    billable: bool = True,
+    confirm: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Log ONE new time entry to Toggl. `date` is YYYY-MM-DD and `start_time` is
+    local 24-hour HH:MM. The preview flags any existing entry it would overlap.
+
+    Two-step: call WITHOUT `confirm` to validate and get a preview plus a
+    one-shot token, show that preview to the user, then call again with the
+    SAME arguments plus `confirm=<token>` once they agree. One entry per call."""
+    return _run_write(
+        mcp_write.build_log_time,
+        date_=date,
+        start_time=start_time,
+        duration_minutes=duration_minutes,
+        project=project,
+        description=description,
+        billable=billable,
+        confirm=confirm,
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit one time entry",
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+    )
+)
+def update_entry(
+    entry_id: int,
+    date: Optional[str] = None,
+    start_time: Optional[str] = None,
+    duration_minutes: Optional[int] = None,
+    project: Optional[str] = None,
+    description: Optional[str] = None,
+    billable: Optional[bool] = None,
+    on_date: Optional[str] = None,
+    confirm: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Change ONE existing time entry, given its `entry_id` from get_time_entries.
+    Pass only the fields to change; the rest stay as they are. `on_date` narrows
+    the lookup when you already know which day the entry is on. The preview shows
+    before and after.
+
+    Two-step: call WITHOUT `confirm` to validate and get a preview plus a
+    one-shot token, show that preview to the user, then call again with the
+    SAME arguments plus `confirm=<token>` once they agree. One entry per call."""
+    return _run_write(
+        mcp_write.build_update_entry,
+        entry_id=entry_id,
+        date_=date,
+        start_time=start_time,
+        duration_minutes=duration_minutes,
+        project=project,
+        description=description,
+        billable=billable,
+        on_date=on_date,
+        confirm=confirm,
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete one time entry", read_only_hint=False, destructive_hint=True
+    )
+)
+def delete_entry(
+    entry_id: int,
+    on_date: Optional[str] = None,
+    confirm: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete ONE time entry, given its `entry_id`. Destructive and not undoable
+    from here, so the preview must be read back to the user and explicitly agreed
+    to. Delete one entry per call; never loop over a list of ids.
+
+    Two-step: call WITHOUT `confirm` to validate and get a preview plus a
+    one-shot token, show that preview to the user, then call again with the
+    SAME arguments plus `confirm=<token>` once they agree. One entry per call."""
+    return _run_write(
+        mcp_write.build_delete_entry,
+        entry_id=entry_id,
+        on_date=on_date,
+        confirm=confirm,
+    )
 
 
 @mcp.prompt()
@@ -605,7 +728,9 @@ def progress_checkin() -> str:
         "4. Be direct. If I am behind, say so plainly; do not soften it.\n"
         "5. If a response contains `error`, tell me what it says instead of guessing. "
         "Data is only as fresh as `data_as_of`.\n"
-        "6. You cannot log time or change settings through these tools. Do not offer to."
+        "6. This is a check-in, not a logging session: do not propose writing or "
+        "changing entries unless I ask. If I do ask, one entry per call, and show "
+        "me the preview before you confirm."
     )
 
 

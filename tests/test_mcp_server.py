@@ -199,6 +199,7 @@ def test_registered_tools_and_prompt():
     assert tool_names == {
         "get_overview", "get_month_status", "get_projection",
         "get_project_rules", "get_time_entries", "get_data_freshness",
+        "log_time", "update_entry", "delete_entry",
     }
     assert {p.name for p in S.mcp._prompt_manager.list_prompts()} == {"progress_checkin"}
 
