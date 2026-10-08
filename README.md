@@ -229,11 +229,15 @@ shows what would be pushed without sending anything.
 
 ### Agents (MCP) — let Claude Code or Codex read your numbers
 
-The app ships a read-only [MCP](https://modelcontextprotocol.io) server so a coding
-agent can answer "how is my month going, and where should I put more hours?" from
-your real Toggl data: hours, earnings, the month projection, per-project pacing, and
-your billing rules. It never calls Toggl (it reads the app's cache) and cannot log
-time or change settings.
+The app ships an [MCP](https://modelcontextprotocol.io) server so a coding agent can
+answer "how is my month going, and where should I put more hours?" from your real
+Toggl data: hours, earnings, the month projection, per-project pacing, and your
+billing rules. Reading never calls Toggl — it reads the app's cache.
+
+Optionally, the agent can also **log, edit, or delete time** for you. That is a
+separate switch, off by default, and it works on **one entry at a time**: the agent
+first shows you exactly what it would change and has to come back with your
+confirmation before anything is written.
 
 1. Settings → Integrations → **Agents (MCP)** → tick **Enable MCP server** → Save.
 2. Click **Copy Claude Code command** (or **Copy Codex config**) and run / paste it.

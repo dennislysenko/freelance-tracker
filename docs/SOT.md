@@ -1,6 +1,6 @@
 # Source of Truth - Freelance Tracker Features & Benefits
 
-**Last Updated:** 2026-10-05
+**Last Updated:** 2026-10-08
 
 Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
 
@@ -221,7 +221,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 - Project definitions with billing types (`projects` key)
 - Integrations tab is a **grid of integration cells** grouped by purpose (Time tracking, Assistant, Billing & invoicing, Planning). Each cell shows the integration name and its status — green "✓ Active" when configured, "Configure integration" when not — so the whole tab fits on one screen with no scrolling
 - Clicking a cell **drills into a detail pane** containing only that integration's fields and setup guidance, with a back arrow to the grid. Replaces the previous single long scrolling column of every credential
-- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), Gusto (contractor shift sync), Google Calendar (days off), and Agents (MCP) (read-only agent access, see "Agent access (MCP server)"). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
+- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), Gusto (contractor shift sync), Google Calendar (days off), and Agents (MCP) (agent read access, plus optional one-entry-at-a-time write access, see "Agent access (MCP server)"). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
 - The active tab **and** the open integration are mirrored to Python (`settings_tab:` / `settings_intg:` bridge messages) and re-rendered on the next load. The popover is transient, so leaving to fetch a credential in a browser dismisses it; without this the user was dropped back on the first tab and had to re-navigate every time
 - Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
 - The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
@@ -340,7 +340,7 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
 
 ### Agent access (MCP server)
 - `mcp_server.py` is a stdio [MCP](https://modelcontextprotocol.io) server that lets coding agents (Claude Code, Codex, any MCP host) read the same numbers the dashboard shows. Setup guide: `docs/mcp-agents.md`; design: `docs/mcp-server-plan.md`
-- **Read-only.** No tool writes to Toggl, preferences, or carryover. Time logging stays with the in-app assistant and its confirm-before-write contract
+- **Reads are read-only and free.** The six `get_*` tools never write and never call Toggl
 - **Never calls Toggl.** The server runs the data layer in **cache-only mode** (`FREELANCE_TRACKER_CACHE_ONLY=1` → `toggl_data.CACHE_ONLY`): it reads the shared day-shard cache and projects cache as-is, serves a stale today shard rather than refetching, and raises `CacheMissError` ("open the dashboard or press Refresh Now") only for a day that has never been cached. Every response carries `data_as_of` (oldest shard mtime in the range)
 - It calls `calculate_period_earnings` / `calculate_monthly_projection` directly, never `get_monthly_earnings`, so the auto-carryover write never runs from the agent process
 - Tools: `get_overview` (today / week / month + projection summary), `get_month_status` (per-project pacing plus a ranked `attention` list: cap out of reach / way behind → behind → capped cycle ending within 3 business days with hours unfilled → over target → well ahead), `get_projection` (full projection incl. `trace`), `get_project_rules` (definitions, targets, rev share, vacation settings, plus plain-English rules), `get_time_entries` (cached entries between two dates, max 92 days, optional project filter), `get_data_freshness`. One prompt, `progress_checkin`, tells the host model to lead with `attention` and quote hours per remaining business day rather than labels
@@ -350,7 +350,32 @@ Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
   - `mcp_anonymize` (default `false`). When on, project names become `Project A`, `Project B`, … and every dollar value is rescaled by one undisclosed constant (same approach as the diagnostics export); plain-English rules are hidden
 - The detail pane shows best-effort, read-only detection of existing registrations (`~/.claude.json` and `~/.codex/config.toml`), copy buttons for the Claude Code `claude mcp add` command and the Codex TOML block with real paths filled in, and a **Test server** button that spawns the server on a worker thread (`background_work`) and reports tool count and data freshness. The app never edits agent config files
 - stdio owns stdout, so the server redirects `sys.stdout` to stderr before importing project modules (some `print()` on error paths) and hands the real stdout back to the transport
-- API call cost: **0 Toggl calls** for every tool, always. The server makes no network calls of any kind. Dependency: `mcp>=2.0` (Python SDK)
+- API call cost: **0 Toggl calls** for every read tool, always. Writes cost exactly 1 call each (see below). Dependency: `mcp>=2.0` (Python SDK)
+- Tools carry MCP annotations so a host can style them: the six readers are `read_only_hint`, `delete_entry` is `destructive_hint`
+
+#### Agent write access (optional, off by default)
+
+Three write tools let an agent change tracked time: `log_time`, `update_entry`, `delete_entry`. Implemented in `mcp_write.py`.
+
+- **Off by default.** Gated behind `mcp_write_enabled` (Settings → Integrations → Agents (MCP) → "Allow agents to log and edit time"), *in addition to* `mcp_enabled`. With it off, every write tool returns a message naming the setting; reads are unaffected
+- **Exactly one time entry per call.** None of the three takes a list, a date range, or a count. Changing two entries means two previews and two confirmations. The tool descriptions tell the model not to loop
+- **Two-step confirmation, always.** The first call validates arguments, resolves the project, and returns a preview with a one-shot `confirm` token; nothing reaches Toggl. The second call replays the *same* arguments with that token and performs the write. This mirrors the in-app assistant's propose-then-apply contract: the user reads the exact change in the conversation before it happens
+  - Tokens are single-use, expire after 10 minutes, and are fingerprinted against the operation plus its arguments — a token issued to delete entry 1 cannot confirm deleting entry 2, and one issued for a 1-hour entry cannot confirm an 8-hour one
+  - Tokens live in the server process only, so they never outlive the agent session that created them
+- **`log_time`** takes a date, local 24-hour start time, duration in minutes, project name, optional description, and billable flag. The preview flags any existing cached entry the new one would overlap, so re-logging the same block warns instead of silently double-counting
+- **`update_entry`** takes an `entry_id` (from `get_time_entries`, which now returns one per entry) plus only the fields to change; everything else keeps its current value. The preview shows before, after, and the specific fields that differ. An update to values the entry already has is a no-op costing 0 calls. Moving an entry to another day relocates it between day shards
+- **`delete_entry`** takes an `entry_id` and carries a `destructive_hint` annotation; its preview restates the entry and warns that it cannot be undone from the agent
+- **Anonymization and writing are mutually exclusive.** With `mcp_anonymize` on, writes are refused: an agent that sees "Project A" cannot safely be trusted to edit hours on the right client
+- **Cache stays coherent without a refetch.** Toggl returns the authoritative entry on create/update, so the affected day shard is *patched in place* (`upsert_cached_entry` / `remove_cached_entry`) rather than invalidated. Invalidating would make the next cache-only read raise `CacheMissError` until the user opened the dashboard. Shards that were never fetched are left alone, so a never-cached day is never misrepresented as complete
+- Entry lookup for update/delete reads cached shards only (default window: the last 92 days, narrowed by the optional `on_date`). An id that is not cached returns an actionable message rather than a fetch
+- Every write failure — rate limit, network, bad id, expired token — comes back as a tool error the agent can read out, never as an exception that drops the connection
+- `toggl_data.delete_time_entry` is the new DELETE path; a 404 counts as success, since the entry is gone either way
+- **The menu bar catches up immediately.** The MCP server is its own process, so after a confirmed write it announces the change (`app_notify.notify_data_changed`) and the running app re-reads and re-renders at once, instead of showing a stale 💰 total until its next half-hourly refresh. Two signals, because they fail differently:
+  - A macOS **distributed notification** (`com.freelancetracker.dataChanged`), which the app observes and which arrives instantly. This is the one that normally does the work
+  - A **marker file** in the cache directory, polled once a minute by `check_external_changes`. It covers a notification that was never delivered (no PyObjC in the writing process, or a dropped post), so the worst case is a minute of staleness rather than thirty
+  - Neither costs a Toggl call: the writer already patched the day shard, so the app's re-read is served entirely from disk. Posting is best-effort and never fails a write
+  - Only *confirmed* writes announce. Previews, no-op updates, and failed writes stay silent
+- API call cost: **1 Toggl call per confirmed write**, 0 for every preview, 0 for a no-op update, 0 for the menu bar refresh that follows. All writes are recorded in the Toggl audit log (`~/Library/Logs/toggl-api-audit.log`) like every other call
 
 ---
 

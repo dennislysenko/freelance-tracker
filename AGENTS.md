@@ -56,7 +56,9 @@ Current API usage per operation:
 3. UPDATE this documentation with new call patterns
 4. Use the audit log to verify call counts: `~/Library/Logs/toggl-api-audit.log`
 
-**MCP server rule:** anything added to `mcp_server.py` must keep working under `toggl_data.CACHE_ONLY` (0 Toggl calls). If a tool needs data the dashboard does not already keep warm, it returns a `CacheMissError` message rather than fetching.
+**MCP server rule:** every *read* added to `mcp_server.py` must keep working under `toggl_data.CACHE_ONLY` (0 Toggl calls). If a read needs data the dashboard does not already keep warm, it returns a `CacheMissError` message rather than fetching.
+
+**MCP write rule:** writes (`mcp_write.py`) are the one exception, at 1 Toggl call each. Any new write must keep all three properties: gated behind `mcp_write_enabled` (off by default), **one entry per call** with no bulk form, and two-step — preview with a one-shot fingerprinted `confirm` token, then execute. After writing, patch the day shard in place (`upsert_cached_entry` / `remove_cached_entry`); never invalidate it, or the next cache-only read breaks until the user opens the dashboard. Then call `app_notify.notify_data_changed(...)` so the running menu bar app re-reads and the 💰 total is current at once (0 Toggl calls; the cache is already patched).
 
 **Gusto push:** 1 Toggl call per run (fetched fresh via `fetch_entries_fresh`, never the day cache, so payroll is never under-reported).
 
@@ -128,7 +130,9 @@ rm -rf ~/Library/Caches/TogglMenuBar/*    # Clear cache
 - `preferences.py` - Settings
 - `preferences_window.py` - Native preferences UI
 - `pacing.py` - Pure monthly pacing decision tree shared by the dashboard bars and the MCP server
-- `mcp_server.py` - Read-only stdio MCP server for agents (Claude Code, Codex); runs the data layer in cache-only mode, never calls Toggl
+- `mcp_server.py` - stdio MCP server for agents (Claude Code, Codex); reads run the data layer in cache-only mode and never call Toggl
+- `mcp_write.py` - Agent write path: log/update/delete one entry at a time, each previewed and confirmed
+- `app_notify.py` - Cross-process "the cache changed" signal (distributed notification + marker file) so the menu bar refreshes right after an MCP write
 - `mcp_support.py` - Registration snippets, registration detection, and the settings "Test server" probe
 - `gusto_client.py` - Gusto contractor timesheet access via Gusto's internal GraphQL API, from inside a logged-in page in the app's own visible Chrome window
 - `gusto_sync.py` - Weekly/manual push of a Toggl project's hours into Gusto shifts: schedule, ledger, drift flags, payday, dashboard status; CLI `login | dry-run | run`
