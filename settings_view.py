@@ -1179,7 +1179,8 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     <div class="settings-help">
         Pushes one project&rsquo;s Toggl hours into your Gusto contractor timesheet as
         shifts on their real dates, with each entry&rsquo;s description as the note.
-        Runs Mondays at 9:00 for the previous week, or any time from
+        Runs Mondays at 9:00 for the previous week and at 1 PM on the month&rsquo;s
+        last business day (hours are due by 3 PM), or any time from
         <strong>Export/Invoice &rarr; Push to Gusto</strong>. It only ever adds shifts;
         if you edit or delete an entry in Toggl after it was pushed, it is flagged here
         for you to fix in Gusto.
@@ -1193,7 +1194,7 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
         <select id="set_gusto_project">{gusto_options}</select>
     </div>
     <div class="gusto-status">{gusto_login_line} &middot; {_esc(gusto_status["meta"])}</div>
-    <div class="gusto-status">Next payday: {_esc(gusto_status["next_payday"])}</div>
+    <div class="gusto-status">{_esc(gusto_status["next_deadline"])}</div>
     {f'<div class="gusto-status">Last push: {_esc(gusto_status["last_result"])}</div>' if gusto_status["last_result"] else ''}
     {gusto_error_line}
     {gusto_issue_lines}

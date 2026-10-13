@@ -119,22 +119,65 @@ def test_manual_window_ends_yesterday():
     assert (start, end) == (date(2026, 10, 5), date(2026, 10, 7))
 
 
-# --- payday ------------------------------------------------------------------
+# --- month-end deadline and payday -------------------------------------------
 
 
-@pytest.mark.parametrize("year,month,expected", [
-    (2026, 11, date(2026, 10, 30)),  # Nov 1 is a Sunday (the Slack example)
-    (2026, 12, date(2026, 12, 1)),  # Tuesday
-    (2028, 1, date(2027, 12, 30)),  # Jan 1 Sat, observed Fri Dec 31 -> Thu Dec 30
-    (2025, 9, date(2025, 8, 29)),  # Labor Day Mon Sep 1 -> Fri Aug 29
+@pytest.mark.parametrize("year,month,cutoff,payday", [
+    (2026, 10, date(2026, 10, 30), date(2026, 11, 2)),  # Oct 31 Sat; Nov 1 Sun
+    (2027, 12, date(2027, 12, 30), date(2028, 1, 3)),  # Dec 31 observed New Year's
+    (2025, 8, date(2025, 8, 29), date(2025, 9, 2)),  # Aug 31 Sun; Sep 1 Labor Day
+    (2026, 11, date(2026, 11, 30), date(2026, 12, 1)),  # plain weekdays
 ])
-def test_payday_rolls_back_over_weekends_and_holidays(year, month, expected):
-    assert g.payday_for(year, month) == expected
+def test_cutoff_is_last_business_day_and_payday_the_next_one(year, month, cutoff, payday):
+    assert g.last_business_day(year, month) == cutoff
+    assert g.payday_after(year, month) == payday
 
 
-def test_next_payday_and_deadline():
-    assert g.next_payday(date(2026, 10, 5)) == (date(2026, 10, 30), date(2026, 10, 28))
-    assert g.next_payday(date(2026, 10, 31)) == (date(2026, 12, 1), date(2026, 11, 29))
+def test_next_deadline_rolls_over_at_the_cutoff_hour():
+    assert g.next_deadline(datetime(2026, 10, 13, 10)) == (date(2026, 10, 30), date(2026, 11, 2))
+    assert g.next_deadline(datetime(2026, 10, 30, 14, 59)) == (date(2026, 10, 30), date(2026, 11, 2))
+    assert g.next_deadline(datetime(2026, 10, 30, 15, 0)) == (date(2026, 11, 30), date(2026, 12, 1))
+
+
+def test_deadline_push_window_and_retries():
+    assert g.deadline_push_due(datetime(2026, 10, 30, 13, 0), {})
+    assert not g.deadline_push_due(datetime(2026, 10, 30, 12, 59), {})
+    assert not g.deadline_push_due(datetime(2026, 10, 30, 15, 0), {})
+    assert not g.deadline_push_due(datetime(2026, 10, 29, 13, 30), {})
+    assert not g.deadline_push_due(datetime(2026, 10, 30, 13, 0), {}, enabled=False)
+    assert not g.deadline_push_due(datetime(2026, 10, 30, 14, 0), {"deadline_pushed": "2026-10-30"})
+    # A pending login does not stop the month-end push (unlike the weekly one).
+    assert g.deadline_push_due(datetime(2026, 10, 30, 13, 0), {"login_required": True})
+    failed = {"last_error": "passkey", "last_attempt": "2026-10-30T13:00:00"}
+    assert not g.deadline_push_due(datetime(2026, 10, 30, 13, 15), failed)
+    assert g.deadline_push_due(datetime(2026, 10, 30, 13, 21), failed)
+
+
+def test_deadline_and_manual_windows_include_the_cutoff_day():
+    state = {"first_day": "2026-10-05"}
+    assert g.deadline_window(datetime(2026, 10, 30, 13), state) == (date(2026, 10, 5), date(2026, 10, 30))
+    assert g.manual_window(datetime(2026, 10, 30, 11), state)[1] == date(2026, 10, 30)
+    assert g.manual_window(datetime(2026, 10, 29, 11), state)[1] == date(2026, 10, 28)
+
+
+def test_run_on_cutoff_day_marks_month_pushed_and_clears_stale():
+    now = datetime(2026, 10, 30, 13, 5)
+    entries = [_entry(1, _local(2026, 10, 30, 9), 120, "morning")]
+    session, (state, summary) = _run(entries, now=now,
+                                     state={"pushed": {}, "synced_through": "2026-10-25"},
+                                     window=(date(2026, 10, 26), date(2026, 10, 30)))
+    assert summary["pushed"] == 1 and session.added[0]["note"] == "morning"
+    assert state["deadline_pushed"] == "2026-10-30"
+    assert not g.deadline_push_due(datetime(2026, 10, 30, 13, 30), state)
+    view = g.status_view(PREFS, state, now=datetime(2026, 10, 30, 13, 30))
+    assert not view["stale"]
+    assert view["next_deadline"] == "Hours due Fri Oct 30 by 3 PM \u00b7 payday Mon Nov 2"
+
+
+def test_cutoff_day_is_stale_until_the_month_is_pushed():
+    state = {"synced_through": "2026-10-25", "pushed": {}}
+    view = g.status_view(PREFS, state, now=datetime(2026, 10, 30, 9))
+    assert view["stale"] and view["meta"] == "Month's hours due today by 3 PM"
 
 
 # --- planning ----------------------------------------------------------------

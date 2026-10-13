@@ -216,10 +216,12 @@ shift on its real date, with the description as the note.
    Toggl project, Save.
 2. Click **Log in to Gusto**. A Chrome window opens; log in with your passkey.
    Leave the window open (closing it ends Gusto's session).
-3. Every Monday at 9:00 the previous week is pushed. You can also push any time
-   from **Export/Invoice → Push to Gusto**. An orange dot on Export/Invoice means
-   last week isn't in Gusto yet or something needs you (passkey, a Toggl entry
-   edited after it was pushed).
+3. Every Monday at 9:00 the previous week is pushed. On the last business day of
+   the month (when the month's hours are due by 3 PM), the app pushes again at
+   1 PM, including that day's finished entries, and retries until 3 PM. You can
+   also push any time from **Export/Invoice → Push to Gusto**. An orange dot on
+   Export/Invoice means last week or the month isn't in Gusto yet, or something
+   needs you (passkey, a Toggl entry edited after it was pushed).
 
 The app only ever adds shifts; it never edits or deletes anything in Gusto. It
 uses Gusto's web app in a visible Chrome window (Gusto has no API contractors
