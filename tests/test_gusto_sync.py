@@ -143,7 +143,7 @@ def test_deadline_push_window_and_retries():
     assert g.deadline_push_due(datetime(2026, 10, 30, 13, 0), {})
     assert not g.deadline_push_due(datetime(2026, 10, 30, 12, 59), {})
     assert not g.deadline_push_due(datetime(2026, 10, 30, 15, 0), {})
-    assert not g.deadline_push_due(datetime(2026, 10, 29, 13, 30), {})
+    assert not g.deadline_push_due(datetime(2026, 10, 28, 13, 30), {})  # neither cutoff nor the day before
     assert not g.deadline_push_due(datetime(2026, 10, 30, 13, 0), {}, enabled=False)
     assert not g.deadline_push_due(datetime(2026, 10, 30, 14, 0), {"deadline_pushed": "2026-10-30"})
     # A pending login does not stop the month-end push (unlike the weekly one).
@@ -428,3 +428,26 @@ def test_cutoff_missed_reads_as_missed_not_a_week_label():
     state = {"synced_through": "2026-10-25", "pushed": {}}
     view = g.status_view(PREFS, state, now=datetime(2026, 10, 30, 15, 30))
     assert view["stale"] and view["meta"] == "Month's hours missed the 3 PM cutoff"
+
+
+def test_early_redundancy_push_the_business_day_before_the_cutoff():
+    assert g.month_end_push_kind(date(2026, 10, 29)) == "early"
+    assert g.month_end_push_kind(date(2026, 10, 30)) == "cutoff"
+    assert g.month_end_push_kind(date(2026, 10, 28)) is None
+    # Cutoff Fri Aug 29 2025 (Aug 31 is a Sunday): early is Thu Aug 28.
+    assert g.month_end_push_kind(date(2025, 8, 28)) == "early"
+    assert g.deadline_push_due(datetime(2026, 10, 29, 13, 0), {})
+    assert not g.deadline_push_due(datetime(2026, 10, 29, 14, 0), {"deadline_pushed": "2026-10-29"})
+    # The early push does not stand in for the cutoff-day push.
+    assert g.deadline_push_due(datetime(2026, 10, 30, 13, 0), {"deadline_pushed": "2026-10-29"})
+
+
+def test_early_push_marks_its_day_but_cutoff_day_stays_due():
+    now = datetime(2026, 10, 29, 13, 5)
+    entries = [_entry(1, _local(2026, 10, 29, 9), 60, "thursday")]
+    session, (state, summary) = _run(entries, now=now, state={"pushed": {}, "synced_through": "2026-10-25"},
+                                     window=(date(2026, 10, 26), date(2026, 10, 29)))
+    assert summary["pushed"] == 1
+    assert state["deadline_pushed"] == "2026-10-29"
+    assert not g.status_view(PREFS, state, now=datetime(2026, 10, 29, 16))["stale"]
+    assert g.status_view(PREFS, state, now=datetime(2026, 10, 30, 9))["stale"]

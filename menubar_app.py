@@ -388,8 +388,10 @@ class FreelanceTrackerApp(rumps.App):
         Manual pushes (Export/Invoice -> Push to Gusto) cover every finished
         day up to yesterday (through today on the month's deadline day) and
         show a result card; the Monday run covers the scheduled window and
-        only notifies. The month-end `deadline` run covers through today and
-        always notifies, since the cutoff is hours away. Gusto runs in its own
+        only notifies. A month-end `deadline` run ("early" the business day
+        before the cutoff, "cutoff" on it) covers through today and notifies
+        its result; cutoff-day failures notify every time, since the cutoff
+        is hours away. Gusto runs in its own
         visible Chrome window, which is left open afterwards.
         """
         if self._gusto_running:
@@ -410,6 +412,7 @@ class FreelanceTrackerApp(rumps.App):
             window = gusto_sync.deadline_window(now, state, first_day)
         else:
             window = None
+        month_end = gusto_sync.month_end_push_kind(now.date()) if deadline else None
         self._gusto_running = True
         if manual and self.dashboard is not None:
             start, end = window
@@ -441,13 +444,13 @@ class FreelanceTrackerApp(rumps.App):
             _new_state, summary = result
             self._gusto_running = False
             text = gusto_sync.describe_result(summary)
-            kind = "manual" if manual else "month-end" if deadline else "weekly"
+            kind = "manual" if manual else f"month-end ({month_end})" if deadline else "weekly"
             _debug(f"Gusto sync ({kind}): {text}")
             # A weekly run only notifies about an error the first time it
             # appears; retries of the same failure stay quiet. Month-end
             # retries always notify: the cutoff is hours away.
             new_error = summary.get("error") and (
-                manual or deadline or summary["error"] != prior_error
+                manual or month_end == "cutoff" or summary["error"] != prior_error
             )
             if summary.get("busy") and not manual:
                 pass
@@ -455,10 +458,15 @@ class FreelanceTrackerApp(rumps.App):
                 rumps.notification(
                     "Gusto", "Needs your passkey" if summary.get("login_required") else "Push failed",
                     (f"Month-end hours are due by {gusto_sync._hour_label(gusto_sync.DEADLINE_HOUR)} today. "
-                     if deadline else "") + f"{text} Use Export/Invoice → Push to Gusto to retry.",
+                     if month_end == "cutoff" else "") + f"{text} Use Export/Invoice → Push to Gusto to retry.",
                 )
             elif deadline:
-                rumps.notification("Gusto", "Month-end hours submitted", text)
+                rumps.notification(
+                    "Gusto",
+                    "Month-end hours submitted" if month_end == "cutoff"
+                    else "Month so far submitted (cutoff is tomorrow)",
+                    text,
+                )
             elif not manual and (summary.get("pushed") or summary.get("issues")):
                 rumps.notification("Gusto", prefs.get('gusto_project') or "", text)
             if manual and self.dashboard is not None:
@@ -1300,8 +1308,9 @@ class FreelanceTrackerApp(rumps.App):
 
     @rumps.timer(60)
     def check_gusto_sync(self, _):
-        """Start a due Gusto push: the month-end one (last business day from
-        13:00) takes priority over the weekly one (Mondays from 09:00)."""
+        """Start a due Gusto push: the month-end ones (the last business day and
+        the one before it, from 13:00) take priority over the weekly one
+        (Mondays from 09:00)."""
         if self._gusto_running:
             return
         try:

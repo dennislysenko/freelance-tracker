@@ -218,7 +218,9 @@ shift on its real date, with the description as the note.
    Leave the window open (closing it ends Gusto's session).
 3. Every Monday at 9:00 the previous week is pushed. On the last business day of
    the month (when the month's hours are due by 3 PM), the app pushes again at
-   1 PM, including that day's finished entries, and retries until 3 PM. You can
+   1 PM, including that day's finished entries, and retries until 3 PM. It also
+   pushes at 1 PM the business day before, so a missed cutoff-day run leaves
+   only that day's hours outstanding. You can
    also push any time from **Export/Invoice → Push to Gusto**. An orange dot on
    Export/Invoice means last week or the month isn't in Gusto yet, or something
    needs you (passkey, a Toggl entry edited after it was pushed).
