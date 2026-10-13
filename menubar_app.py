@@ -382,13 +382,15 @@ class FreelanceTrackerApp(rumps.App):
         if rerender:
             self.dashboard.refresh_contents()
 
-    def _start_gusto_sync(self, manual):
+    def _start_gusto_sync(self, manual, deadline=False):
         """Push Toggl hours to Gusto on a worker thread.
 
         Manual pushes (Export/Invoice -> Push to Gusto) cover every finished
-        day up to yesterday and show a result card; the Monday run covers the
-        scheduled window and only notifies. Gusto runs in its own visible
-        Chrome window, which is left open afterwards.
+        day up to yesterday (through today on the month's deadline day) and
+        show a result card; the Monday run covers the scheduled window and
+        only notifies. The month-end `deadline` run covers through today and
+        always notifies, since the cutoff is hours away. Gusto runs in its own
+        visible Chrome window, which is left open afterwards.
         """
         if self._gusto_running:
             return
@@ -402,7 +404,12 @@ class FreelanceTrackerApp(rumps.App):
         now = datetime.now()
         first_day_pref = prefs.get('gusto_sync_start_date') or ''
         first_day = datetime.strptime(first_day_pref, "%Y-%m-%d").date() if first_day_pref else None
-        window = gusto_sync.manual_window(now, state, first_day) if manual else None
+        if manual:
+            window = gusto_sync.manual_window(now, state, first_day)
+        elif deadline:
+            window = gusto_sync.deadline_window(now, state, first_day)
+        else:
+            window = None
         self._gusto_running = True
         if manual and self.dashboard is not None:
             start, end = window
@@ -434,17 +441,24 @@ class FreelanceTrackerApp(rumps.App):
             _new_state, summary = result
             self._gusto_running = False
             text = gusto_sync.describe_result(summary)
-            _debug(f"Gusto sync ({'manual' if manual else 'scheduled'}): {text}")
-            # A scheduled run only notifies about an error the first time it
-            # appears; retries of the same failure stay quiet.
-            new_error = summary.get("error") and (manual or summary["error"] != prior_error)
+            kind = "manual" if manual else "month-end" if deadline else "weekly"
+            _debug(f"Gusto sync ({kind}): {text}")
+            # A weekly run only notifies about an error the first time it
+            # appears; retries of the same failure stay quiet. Month-end
+            # retries always notify: the cutoff is hours away.
+            new_error = summary.get("error") and (
+                manual or deadline or summary["error"] != prior_error
+            )
             if summary.get("busy") and not manual:
                 pass
             elif new_error:
                 rumps.notification(
                     "Gusto", "Needs your passkey" if summary.get("login_required") else "Push failed",
-                    f"{text} Use Export/Invoice → Push to Gusto to retry.",
+                    (f"Month-end hours are due by {gusto_sync._hour_label(gusto_sync.DEADLINE_HOUR)} today. "
+                     if deadline else "") + f"{text} Use Export/Invoice → Push to Gusto to retry.",
                 )
+            elif deadline:
+                rumps.notification("Gusto", "Month-end hours submitted", text)
             elif not manual and (summary.get("pushed") or summary.get("issues")):
                 rumps.notification("Gusto", prefs.get('gusto_project') or "", text)
             if manual and self.dashboard is not None:
@@ -1286,14 +1300,19 @@ class FreelanceTrackerApp(rumps.App):
 
     @rumps.timer(60)
     def check_gusto_sync(self, _):
-        """Start the weekly Gusto push once it is due (Mondays from 09:00)."""
+        """Start a due Gusto push: the month-end one (last business day from
+        13:00) takes priority over the weekly one (Mondays from 09:00)."""
         if self._gusto_running:
             return
         try:
             prefs = load_preferences()
-            if gusto_sync.is_configured(prefs) and gusto_sync.sync_due(
-                datetime.now(), gusto_sync.load_state()
-            ):
+            if not gusto_sync.is_configured(prefs):
+                return
+            now = datetime.now()
+            state = gusto_sync.load_state()
+            if gusto_sync.deadline_push_due(now, state):
+                self._start_gusto_sync(manual=False, deadline=True)
+            elif gusto_sync.sync_due(now, state):
                 self._start_gusto_sync(manual=False)
         except Exception as exc:
             _debug(f"Gusto schedule check failed: {exc}")

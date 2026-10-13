@@ -41,6 +41,12 @@ SYNC_WEEKDAY = 0  # Monday
 SYNC_HOUR = 9  # 09:00 local
 RETRY_AFTER = timedelta(hours=1)  # first retry after a non-login failure; doubles each time
 MAX_RETRY_AFTER = timedelta(hours=24)
+# Month-end cutoff: all of a month's hours are due by DEADLINE_HOUR (local) on
+# its last business day. The month-end push starts DEADLINE_PUSH_HOUR, leaving
+# time for a passkey approval or a retry before the cutoff.
+DEADLINE_HOUR = 15
+DEADLINE_PUSH_HOUR = 13
+DEADLINE_RETRY = timedelta(minutes=20)
 LOOKBACK_DAYS = 35  # how far back late additions and edits are noticed
 DEFAULT_NOTE = "Logged from Toggl"
 ENTRY_TOLERANCE = timedelta(minutes=1)  # Gusto works in whole minutes
@@ -133,10 +139,43 @@ def retry_delay(state):
 def manual_window(now, state, first_day=None):
     """Dates a "Push to Gusto" click covers: the lookback window up to
     yesterday, so a mid-week push also sends this week's finished days.
-    Today is left out because it is not over yet."""
+    Today is left out because it is not over yet, except on the month's
+    deadline day, when today's finished entries are due too."""
     start, _ = sync_window(now, state, first_day)
-    end = now.date() - timedelta(days=1)
+    today = now.date()
+    end = today if today == last_business_day(today.year, today.month) else today - timedelta(days=1)
     return start, end  # start > end means nothing to push yet
+
+
+def deadline_push_due(now, state, enabled=True):
+    """True when the month-end push should start: the month's last business
+    day, between DEADLINE_PUSH_HOUR and DEADLINE_HOUR, not yet done today.
+
+    Unlike the weekly run this ignores a pending login (the cutoff matters
+    more than not nagging) and retries every DEADLINE_RETRY until the cutoff.
+    """
+    today = now.date()
+    if not enabled or today != last_business_day(today.year, today.month):
+        return False
+    if state.get("deadline_pushed") == today.isoformat():
+        return False
+    if not (DEADLINE_PUSH_HOUR <= now.hour < DEADLINE_HOUR):
+        return False
+    last_attempt = state.get("last_attempt")
+    if last_attempt and state.get("last_error"):
+        try:
+            attempted = datetime.fromisoformat(last_attempt)
+            if attempted.date() == today and now - attempted < DEADLINE_RETRY:
+                return False
+        except (TypeError, ValueError):
+            pass
+    return True
+
+
+def deadline_window(now, state, first_day=None):
+    """The month-end push covers the lookback window through today."""
+    start, _ = sync_window(now, state, first_day)
+    return start, now.date()
 
 
 def is_configured(prefs):
@@ -153,7 +192,11 @@ def is_stale(now, state):
     _, end = target_week(now)
     synced = state.get("synced_through")
     behind = not synced or date.fromisoformat(synced) < end
-    return bool(behind or state.get("login_required") or state.get("issues") or state.get("last_error"))
+    today = now.date()
+    month_due = (today == last_business_day(today.year, today.month)
+                 and state.get("deadline_pushed") != today.isoformat())
+    return bool(behind or month_due or state.get("login_required") or state.get("issues")
+                or state.get("last_error"))
 
 
 def status_view(prefs, state, now=None, running=False):
@@ -161,7 +204,9 @@ def status_view(prefs, state, now=None, running=False):
     now = now or datetime.now()
     configured = is_configured(prefs)
     week_start, week_end = target_week(now)
-    payday, deadline = next_payday(now.date())
+    due_day, payday = next_deadline(now)
+    today = now.date()
+    due_today = today == due_day and state.get("deadline_pushed") != today.isoformat()
     issues = [issue.get("message", "") for issue in state.get("issues") or []]
 
     if running:
@@ -172,6 +217,8 @@ def status_view(prefs, state, now=None, running=False):
         meta = "Last push failed"
     elif issues:
         meta = f"{len(issues)} need{'s' if len(issues) == 1 else ''} attention"
+    elif due_today:
+        meta = f"Month's hours due today by {_hour_label(DEADLINE_HOUR)}"
     elif is_stale(now, state):
         meta = f"{_short(week_start.isoformat())}\u2013{_short(week_end.isoformat())} not pushed"
     else:
@@ -198,7 +245,8 @@ def status_view(prefs, state, now=None, running=False):
         "login_required": bool(state.get("login_required")),
         "last_result": last_text,
         "last_success": state.get("last_success") or "",
-        "next_payday": f"{payday.strftime('%a %b %-d')} (hours due {deadline.strftime('%a %b %-d')})",
+        "next_deadline": (f"Hours due {due_day.strftime('%a %b %-d')} by {_hour_label(DEADLINE_HOUR)}"
+                          f" \u00b7 payday {payday.strftime('%a %b %-d')}"),
         "project": prefs.get("gusto_project") or "",
         "company": prefs.get("gusto_company_slug") or "",
     }
@@ -243,27 +291,39 @@ def us_bank_holidays(year):
     return days
 
 
-def payday_for(year, month):
-    """Payday for the month: the 1st, or the last business day
-    before it when the 1st is a weekend or bank holiday."""
-    day = date(year, month, 1)
-    holidays = us_bank_holidays(year) | us_bank_holidays(year - 1)
-    while day.weekday() >= 5 or day in holidays:
+def is_business_day(day):
+    return day.weekday() < 5 and day not in (us_bank_holidays(day.year) | us_bank_holidays(day.year - 1))
+
+
+def last_business_day(year, month):
+    """The month's last weekday that is not a bank holiday: the hours cutoff."""
+    nxt = date(year + (month == 12), month % 12 + 1, 1)
+    day = nxt - timedelta(days=1)
+    while not is_business_day(day):
         day -= timedelta(days=1)
     return day
 
 
-def next_payday(today):
-    """(payday, submission deadline) for the first payday on or after `today`.
+def payday_after(year, month):
+    """Payday for a month's hours: the first business day after it ends."""
+    day = date(year + (month == 12), month % 12 + 1, 1)
+    while not is_business_day(day):
+        day += timedelta(days=1)
+    return day
 
-    Hours are due two days before payday.
-    """
-    year, month = today.year, today.month
-    while True:
-        payday = payday_for(year, month)
-        if payday >= today:
-            return payday, payday - timedelta(days=2)
+
+def next_deadline(now):
+    """(cutoff day, payday) for the month whose cutoff has not passed yet."""
+    year, month = now.year, now.month
+    cutoff = last_business_day(year, month)
+    if now.date() > cutoff or (now.date() == cutoff and now.hour >= DEADLINE_HOUR):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        cutoff = last_business_day(year, month)
+    return cutoff, payday_after(year, month)
+
+
+def _hour_label(hour):
+    return f"{hour % 12 or 12} {'AM' if hour < 12 else 'PM'}"
 
 
 # --- planning --------------------------------------------------------------
@@ -529,6 +589,9 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
         state["last_error"] = None
         state["login_required"] = False
         state["consecutive_failures"] = 0
+        today = now.date()
+        if today == last_business_day(today.year, today.month) and end >= today:
+            state["deadline_pushed"] = today.isoformat()
     return state, summary
 
 
