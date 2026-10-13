@@ -147,15 +147,28 @@ def manual_window(now, state, first_day=None):
     return start, end  # start > end means nothing to push yet
 
 
+def month_end_push_kind(day):
+    """"cutoff" on the month's last business day, "early" on the business day
+    before it (a redundancy push, so a missed cutoff-day run leaves only that
+    day's hours outstanding), else None."""
+    cutoff = last_business_day(day.year, day.month)
+    if day == cutoff:
+        return "cutoff"
+    if day == previous_business_day(cutoff):
+        return "early"
+    return None
+
+
 def deadline_push_due(now, state, enabled=True):
-    """True when the month-end push should start: the month's last business
-    day, between DEADLINE_PUSH_HOUR and DEADLINE_HOUR, not yet done today.
+    """True when a month-end push should start: the month's last business day
+    or the one before it, between DEADLINE_PUSH_HOUR and DEADLINE_HOUR, not
+    yet done that day.
 
     Unlike the weekly run this ignores a pending login (the cutoff matters
     more than not nagging) and retries every DEADLINE_RETRY until the cutoff.
     """
     today = now.date()
-    if not enabled or today != last_business_day(today.year, today.month):
+    if not enabled or month_end_push_kind(today) is None:
         return False
     if state.get("deadline_pushed") == today.isoformat():
         return False
@@ -304,6 +317,13 @@ def last_business_day(year, month):
     """The month's last weekday that is not a bank holiday: the hours cutoff."""
     nxt = date(year + (month == 12), month % 12 + 1, 1)
     day = nxt - timedelta(days=1)
+    while not is_business_day(day):
+        day -= timedelta(days=1)
+    return day
+
+
+def previous_business_day(day):
+    day -= timedelta(days=1)
     while not is_business_day(day):
         day -= timedelta(days=1)
     return day
@@ -595,7 +615,7 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
         state["login_required"] = False
         state["consecutive_failures"] = 0
         today = now.date()
-        if today == last_business_day(today.year, today.month) and end >= today:
+        if month_end_push_kind(today) and end >= today:
             state["deadline_pushed"] = today.isoformat()
     return state, summary
 
