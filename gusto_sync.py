@@ -206,7 +206,10 @@ def status_view(prefs, state, now=None, running=False):
     week_start, week_end = target_week(now)
     due_day, payday = next_deadline(now)
     today = now.date()
-    due_today = today == due_day and state.get("deadline_pushed") != today.isoformat()
+    month_open = (today == last_business_day(today.year, today.month)
+                  and state.get("deadline_pushed") != today.isoformat())
+    due_today = month_open and now.hour < DEADLINE_HOUR
+    missed_today = month_open and now.hour >= DEADLINE_HOUR
     issues = [issue.get("message", "") for issue in state.get("issues") or []]
 
     if running:
@@ -219,6 +222,8 @@ def status_view(prefs, state, now=None, running=False):
         meta = f"{len(issues)} need{'s' if len(issues) == 1 else ''} attention"
     elif due_today:
         meta = f"Month's hours due today by {_hour_label(DEADLINE_HOUR)}"
+    elif missed_today:
+        meta = f"Month's hours missed the {_hour_label(DEADLINE_HOUR)} cutoff"
     elif is_stale(now, state):
         meta = f"{_short(week_start.isoformat())}\u2013{_short(week_end.isoformat())} not pushed"
     else:
