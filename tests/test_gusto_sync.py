@@ -422,3 +422,9 @@ def test_fresh_fetch_raises_instead_of_returning_cached_or_empty(monkeypatch):
     with pytest.raises(toggl_data.TogglFetchError, match="rate limit"):
         toggl_data.fetch_entries_fresh(_local(2026, 10, 5, 0), _local(2026, 10, 11, 23))
     assert stored == []
+
+
+def test_cutoff_missed_reads_as_missed_not_a_week_label():
+    state = {"synced_through": "2026-10-25", "pushed": {}}
+    view = g.status_view(PREFS, state, now=datetime(2026, 10, 30, 15, 30))
+    assert view["stale"] and view["meta"] == "Month's hours missed the 3 PM cutoff"
