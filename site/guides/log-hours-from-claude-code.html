@@ -400,6 +400,39 @@
     }
   }
 
+  .safety {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 14px;
+    align-items: start;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    padding: 16px 18px;
+    margin: 8px 0 24px;
+  }
+
+  .safety-icon {
+    width: 28px;
+    height: 28px;
+    fill: var(--accent-glow);
+    stroke: var(--accent);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .safety-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    margin: 3px 0 6px;
+  }
+
+  .safety p { font-size: 15px; margin: 0; }
+
   /* Callouts and guardrails */
   .callout {
     border: 1px solid var(--border);
@@ -591,8 +624,15 @@
   </ul>
 
   <h2><span class="step">04</span> Read the preview, then say yes</h2>
-  <p>The first <code>log_time</code> call writes nothing. It checks the project against your Toggl projects and returns a preview with the date, the time range, the hours, the project and the note. If you already logged some of that time by hand, the preview flags the overlap, so you don&apos;t bill it twice.</p>
-  <p>The preview comes with a one-time token, and the agent only uses it after you say yes. The token works once, expires after 10 minutes, and is tied to the exact entry you saw: a token for a 1.5-hour entry can&apos;t confirm an 8-hour one.</p>
+  <p>Before anything reaches Toggl, the agent shows you each entry: the date, the time range, the hours, the client and a short note. If you already logged some of that time yourself, it points out the overlap so you don&apos;t bill it twice.</p>
+  <p>Say yes and the entry is logged. Say no, or ask for a change, and nothing is written.</p>
+  <aside class="safety">
+    <svg class="safety-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.9c0 4.7-3.2 8.9-7.5 10.3-4.3-1.4-7.5-5.6-7.5-10.3V5.3L12 2.5z"/><path d="M8.6 12.1l2.4 2.4 4.4-4.8"/></svg>
+    <div>
+      <div class="safety-label">Safety</div>
+      <p>Your yes only counts once. Each preview comes with a one-time code the agent needs to actually log the entry. The code works once, expires after 10 minutes, and only matches the exact entry you saw, so a yes to a 1.5-hour entry can&apos;t be used to log 8 hours.</p>
+    </div>
+  </aside>
   <div class="callout">
     <p><strong>Two blocks mean two confirmations.</strong> Every write covers exactly one entry, so you see each one before it lands, and an agent can&apos;t log a week in one go.</p>
   </div>
