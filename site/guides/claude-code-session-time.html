@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Have Claude Code log the session you just finished · Freelance Tracker</title>
+<meta name="description" content="Let Claude Code turn its own session timestamps into Toggl time entries through Freelance Tracker's MCP server, one previewed entry at a time.">
+<meta property="og:title" content="Have Claude Code log the session you just finished">
+<meta property="og:description" content="Your agent already knows when you started and stopped. Here's how to let it log the time, with a preview before anything is written.">
+<meta property="og:image" content="https://freelance-tracker-landing.vercel.app/og.png">
+<meta property="og:type" content="article">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #08080a;
+    --bg-elevated: #111114;
+    --bg-card: #16161a;
+    --border: #222228;
+    --border-subtle: #1a1a1f;
+    --text: #e8e8ec;
+    --text-secondary: #8a8a9a;
+    --text-tertiary: #55555f;
+    --accent: #34d399;
+    --accent-dim: #1a7a52;
+    --accent-glow: rgba(52, 211, 153, 0.08);
+    --warn: #f59e0b;
+    --serif: 'DM Serif Display', Georgia, serif;
+    --sans: 'Outfit', -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', 'SF Mono', monospace;
+  }
+
+  :root.light {
+    --bg: #f5f5f7;
+    --bg-elevated: #ffffff;
+    --bg-card: #ffffff;
+    --border: #d8d8de;
+    --border-subtle: #e8e8ec;
+    --text: #1a1a1f;
+    --text-secondary: #5a5a6a;
+    --text-tertiary: #8a8a9a;
+    --accent: #0d9668;
+    --accent-dim: #0d9668;
+    --accent-glow: rgba(13, 150, 104, 0.06);
+    --warn: #c2710c;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection { background: var(--accent); color: var(--bg); }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Navigation ── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    padding: 16px 0;
+    background: rgba(8, 8, 10, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  :root.light nav { background: rgba(245, 245, 247, 0.85); }
+
+  .nav-inner {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .nav-brand {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .nav-brand span { color: var(--accent); }
+  .nav-brand:hover { text-decoration: none; }
+
+  .nav-right { display: flex; align-items: center; gap: 20px; }
+
+  .nav-right a {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .nav-right a:hover { color: var(--text); text-decoration: none; }
+
+  .theme-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .theme-toggle:hover { color: var(--text); border-color: var(--text-tertiary); }
+
+  /* ── Article ── */
+  article {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 72px 24px 96px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(32px, 5vw, 46px);
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+    text-wrap: balance;
+  }
+
+  .lede {
+    font-size: clamp(17px, 2vw, 19px);
+    font-weight: 300;
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 48px;
+  }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 4px 12px;
+    background: var(--bg-elevated);
+  }
+
+  h2 {
+    font-family: var(--sans);
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 56px 0 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  h2 .step {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  article p, article li {
+    font-size: 16px;
+    font-weight: 300;
+    color: var(--text-secondary);
+  }
+
+  article p { margin-bottom: 16px; }
+  article strong { color: var(--text); font-weight: 500; }
+
+  article ul, article ol { margin: 0 0 16px 20px; }
+  article li { margin-bottom: 6px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    color: var(--text);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .path {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-tertiary);
+    margin: 0 0 16px;
+  }
+
+  /* Copyable code block */
+  .codeblock {
+    position: relative;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin: 4px 0 20px;
+  }
+
+  .codeblock pre {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+    padding: 16px 18px;
+    padding-right: 84px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .codeblock pre.wrap { white-space: pre-wrap; }
+
+  .codeblock pre .hl { color: var(--accent); }
+
+  .copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 6px 12px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .copy-btn:hover { filter: brightness(1.1); }
+
+  /* Terminal mock */
+  .term {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.65;
+    margin: 8px 0 24px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25), 0 0 80px var(--accent-glow);
+  }
+
+  .term-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-tertiary);
+    font-size: 10px;
+  }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot:nth-child(1) { background: #ff5f57; }
+  .dot:nth-child(2) { background: #febc2e; }
+  .dot:nth-child(3) { background: #28c840; }
+  .term-bar span:last-child { margin-left: 8px; }
+
+  .term-body { padding: 16px 18px; color: var(--text-secondary); }
+  .term-body p { font-size: 12px; font-weight: 400; margin-bottom: 10px; color: var(--text-secondary); }
+  .term-body p:last-child { margin-bottom: 0; }
+  .t-user { color: var(--text) !important; }
+  .t-user::before { content: '> '; color: var(--accent); }
+  .t-tool { color: var(--text-tertiary) !important; font-size: 11px !important; }
+  .t-tool::before { content: '⏺ '; color: var(--accent); }
+  .t-num { color: var(--accent); }
+  .t-warn { color: var(--warn); }
+  .t-box {
+    border-left: 2px solid var(--accent-dim);
+    padding: 6px 12px;
+    margin: 4px 0 10px;
+    background: var(--accent-glow);
+    font-size: 11.5px;
+  }
+
+  /* Timeline figure */
+  .timeline {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 18px 14px;
+    margin: 8px 0 24px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .tl-track {
+    position: relative;
+    height: 26px;
+    background: var(--border-subtle);
+    border-radius: 6px;
+    margin-bottom: 8px;
+  }
+
+  .tl-block {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--accent);
+    border-radius: 6px;
+    opacity: 0.85;
+  }
+
+  .tl-gap {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--text-secondary);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .tl-ticks {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .tl-legend {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+    display: grid;
+    gap: 4px;
+  }
+
+  .tl-legend .t-num { margin-right: 6px; }
+
+  /* Callouts and guardrails */
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 14px 18px;
+    background: var(--bg-elevated);
+    margin: 4px 0 24px;
+  }
+
+  .callout p { margin: 0; font-size: 15px; }
+  .callout p + p { margin-top: 8px; }
+
+  .rules {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin: 8px 0 24px;
+  }
+
+  .rule {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    background: var(--bg-elevated);
+  }
+
+  .rule h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .rule p { font-size: 14px; margin: 0; line-height: 1.6; }
+
+  dl.trouble { margin: 8px 0 24px; }
+  dl.trouble dt {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    margin-top: 14px;
+  }
+  dl.trouble dd {
+    font-size: 15px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+
+  .next {
+    margin-top: 64px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 14px;
+  }
+
+  footer {
+    padding: 32px 24px;
+    border-top: 1px solid var(--border-subtle);
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  @media (max-width: 680px) {
+    article { padding: 48px 20px 72px; }
+    .rules { grid-template-columns: 1fr; }
+    .nav-right .hide-sm { display: none; }
+    .codeblock pre { padding-right: 18px; padding-top: 44px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-brand" href="/"><span>$</span> freelance-tracker</a>
+    <div class="nav-right">
+      <a class="hide-sm" href="/#agents">Agents</a>
+      <a href="/#install">Install</a>
+      <a href="https://github.com/dennislysenko/freelance-tracker">GitHub</a>
+      <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn" aria-label="Toggle theme">&#9789;</button>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <div class="eyebrow">Guide &middot; Agents</div>
+  <h1>Have Claude Code log the session you just finished</h1>
+  <p class="lede">You spent the afternoon in Claude Code on a client&apos;s repo. You never started a timer, and now you&apos;re rebuilding the afternoon from memory. Claude Code already knows when you started and when you stopped. With Freelance Tracker&apos;s MCP server, it can log that time to Toggl for you, and you check every entry before it&apos;s written.</p>
+  <div class="meta">
+    <span class="chip">~5 min setup</span>
+    <span class="chip">Claude Code</span>
+    <span class="chip">Toggl</span>
+    <span class="chip">1 Toggl call per entry</span>
+  </div>
+
+  <h2>Where you&apos;ll end up</h2>
+  <p>At the end of a session, one sentence turns into a Toggl entry:</p>
+  <div class="term">
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>claude &middot; ~/dev/acme-storefront</span></div>
+    <div class="term-body">
+      <p class="t-user">/log-session Acme Corp</p>
+      <p>This session runs from <span class="t-num">1:40pm</span> to <span class="t-num">5:25pm</span>, with a 45-minute gap after 3:10pm. That makes two entries. Here&apos;s the first:</p>
+      <p class="t-tool">freelance-tracker &middot; log_time (preview)</p>
+      <div class="t-box">
+        Log Tue Oct 20 1:40pm&ndash;3:10pm (1.50h) to Acme Corp &mdash; checkout flow refactor<br>
+        <span class="t-warn">Nothing has been written yet.</span>
+      </div>
+      <p>Log it?</p>
+      <p class="t-user">yes</p>
+      <p class="t-tool">freelance-tracker &middot; log_time (confirm)</p>
+      <p>Logged. Second entry: Tue Oct 20 3:55pm&ndash;5:25pm (1.50h), &ldquo;cart tests and PR review&rdquo;. Log it?</p>
+    </div>
+  </div>
+  <p>The 💰 total in your menu bar updates as soon as each entry lands. You don&apos;t need to press Refresh.</p>
+
+  <h2><span class="step">01</span> Turn on agent access</h2>
+  <p>Open the dashboard, then <strong>&middot;&middot;&middot; &rarr; Settings &rarr; Integrations &rarr; Agents (MCP)</strong>, and tick two boxes:</p>
+  <ul>
+    <li><strong>Enable MCP server.</strong> This lets agents read your hours, pacing and projection. Reads come from the app&apos;s cache and never call Toggl.</li>
+    <li><strong>Allow agents to log and edit time.</strong> This is the switch for this guide. It&apos;s off by default.</li>
+  </ul>
+  <p>Leave <strong>Anonymize client names</strong> off. With it on, writes are refused: an agent that only sees &ldquo;Project A&rdquo; shouldn&apos;t be logging billable hours.</p>
+
+  <h2><span class="step">02</span> Register the server with Claude Code</h2>
+  <p>Run this once. User scope makes the server available in every project, which is what you want: you&apos;ll log time from whichever repo you&apos;re working in.</p>
+  <div class="codeblock">
+    <pre><span class="hl">claude</span> mcp add --scope user freelance-tracker -- \
+  ~/.freelance-tracker/venv/bin/python \
+  ~/.freelance-tracker/mcp_server.py</pre>
+    <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+  </div>
+  <p>Check that it connected with <code>claude mcp list</code>. The Settings pane also has a <strong>Test server</strong> button and a copy button with your real paths filled in, if you installed somewhere else.</p>
+
+  <h2><span class="step">03</span> Where the times come from</h2>
+  <p>Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, in a folder named after your working directory. Each message in it carries a UTC timestamp. The newest file in that folder is the session you&apos;re in.</p>
+  <p>That gives the agent everything it needs: your first message is the start, your last message is the end, and any long silence in between is a break.</p>
+  <div class="timeline" aria-label="A session from 1:40pm to 5:25pm with a 45-minute break, split into two entries">
+    <div class="tl-track">
+      <div class="tl-block" style="left:0%; width:40%"></div>
+      <span class="tl-gap" style="left:50%">45 min away</span>
+      <div class="tl-block" style="left:60%; width:40%"></div>
+    </div>
+    <div class="tl-ticks"><span>1:40pm</span><span>3:10</span><span>3:55</span><span>5:25pm</span></div>
+    <div class="tl-legend">
+      <div><span class="t-num">Entry 1</span>1:40pm&ndash;3:10pm &middot; 1.50h</div>
+      <div><span class="t-num">Entry 2</span>3:55pm&ndash;5:25pm &middot; 1.50h</div>
+    </div>
+  </div>
+  <p>The agent has to convert those UTC times to your local time, because <code>log_time</code> takes a local date and a 24-hour start time. The prompt below spells that out, along with how to round and where to split.</p>
+
+  <h2><span class="step">04</span> Ask for it</h2>
+  <p>Paste this at the end of a session, with your Toggl project name in place of Acme Corp:</p>
+  <div class="codeblock">
+    <pre class="wrap">Log the time for this session to <span class="hl">Acme Corp</span> using freelance-tracker.
+
+Get the times from this session's transcript: the newest .jsonl file in ~/.claude/projects/ for this working directory. Use the timestamps of my messages, not tool output. Convert them from UTC to my local time.
+
+- Start at my first message and end at my last one.
+- Wherever I was silent for more than 30 minutes, split into separate entries.
+- Round each entry to the nearest 15 minutes.
+- For the note, describe what we worked on in a few words.
+
+Preview each entry with log_time and wait for my yes before logging it.</pre>
+    <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+  </div>
+  <p>Change the numbers to suit how you bill. If you charge in 6-minute increments, say &ldquo;round up to the next 6 minutes&rdquo;.</p>
+
+  <h2><span class="step">05</span> Read the preview, then say yes</h2>
+  <p>The first <code>log_time</code> call writes nothing. It checks the project name against your Toggl projects and returns a preview with the date, the time range, the hours, the project and the note. If you already logged part of that afternoon by hand, the preview flags the overlap, so you don&apos;t bill it twice.</p>
+  <p>The preview comes with a one-time token. Only when you say yes does the agent call again with it. The token:</p>
+  <ul>
+    <li>works once,</li>
+    <li>expires after 10 minutes,</li>
+    <li>is tied to the exact entry you saw. A token for a 1.5-hour entry can&apos;t confirm an 8-hour one.</li>
+  </ul>
+  <div class="callout">
+    <p><strong>Two blocks mean two confirmations.</strong> Every write covers exactly one entry, so a split session asks you twice. That&apos;s deliberate: you see each entry before it lands, and an agent can&apos;t log a week in one go.</p>
+  </div>
+
+  <h2><span class="step">06</span> Make it one command (optional)</h2>
+  <p>Save the prompt as a custom slash command and you&apos;ll never paste it again. Create this file:</p>
+  <p class="path">~/.claude/commands/log-session.md</p>
+  <div class="codeblock">
+    <pre class="wrap">---
+description: Log this session's time to Toggl via Freelance Tracker
+argument-hint: &lt;Toggl project name&gt;
+---
+
+Log the time for this session to <span class="hl">$ARGUMENTS</span> using freelance-tracker.
+
+Get the times from this session's transcript: the newest .jsonl file in ~/.claude/projects/ for this working directory. Use the timestamps of my messages, not tool output. Convert them from UTC to my local time.
+
+- Start at my first message and end at my last one.
+- Wherever I was silent for more than 30 minutes, split into separate entries.
+- Round each entry to the nearest 15 minutes.
+- For the note, describe what we worked on in a few words.
+
+Preview each entry with log_time and wait for my yes before logging it.</pre>
+    <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+  </div>
+  <p>Then end any session with <code>/log-session Acme Corp</code>.</p>
+
+  <h2>What the agent can and can&apos;t do</h2>
+  <div class="rules">
+    <div class="rule">
+      <h3>One entry per call</h3>
+      <p>No lists, no date ranges, no &ldquo;log the whole week&rdquo;.</p>
+    </div>
+    <div class="rule">
+      <h3>Nothing without your yes</h3>
+      <p>Every write is previewed first and needs its own token.</p>
+    </div>
+    <div class="rule">
+      <h3>Time entries only</h3>
+      <p>It can log, edit or delete one entry. It can&apos;t touch projects, rates or settings.</p>
+    </div>
+    <div class="rule">
+      <h3>Recorded</h3>
+      <p>Each confirmed write is 1 Toggl call, logged in <code>~/Library/Logs/toggl-api-audit.log</code>. Previews are free.</p>
+    </div>
+  </div>
+  <p>Logged something wrong? Ask the agent to fix it: &ldquo;that last entry should have been 2 hours&rdquo; or &ldquo;delete the duplicate from Tuesday&rdquo;. Edits and deletes are previewed and confirmed the same way.</p>
+
+  <h2>If something goes wrong</h2>
+  <dl class="trouble">
+    <dt>&ldquo;Write access is off&rdquo;</dt>
+    <dd>Tick <strong>Allow agents to log and edit time</strong> in Settings &rarr; Integrations &rarr; Agents (MCP), and Save.</dd>
+    <dt>&ldquo;Unknown project&rdquo;</dt>
+    <dd>The name has to match a Toggl project. The error lists the ones it knows, so the agent can usually correct itself.</dd>
+    <dt>&ldquo;That confirmation is unknown or has expired&rdquo;</dt>
+    <dd>More than 10 minutes passed, or the token was already used. Ask the agent to preview the entry again.</dd>
+    <dt>The times are off by hours</dt>
+    <dd>The agent skipped the UTC conversion. Tell it your time zone and ask it to redo the preview.</dd>
+  </dl>
+
+  <div class="next">
+    <a href="/#agents">&larr; Back to Agents</a>
+    <a href="https://github.com/dennislysenko/freelance-tracker/blob/main/docs/mcp-agents.md">Full MCP reference &rarr;</a>
+  </div>
+</article>
+
+<footer>Freelance Tracker &middot; free and open source &middot; <a href="https://github.com/dennislysenko/freelance-tracker">source</a></footer>
+
+<script>
+function toggleTheme() {
+  const root = document.documentElement;
+  root.classList.toggle('light');
+  const isLight = root.classList.contains('light');
+  document.getElementById('themeBtn').innerHTML = isLight ? '&#9790;' : '&#9789;';
+  try { localStorage.setItem('theme', isLight ? 'light' : 'dark'); } catch (e) {}
+}
+
+(function() {
+  let saved = null;
+  try { saved = localStorage.getItem('theme'); } catch (e) {}
+  if (saved === 'light') {
+    document.documentElement.classList.add('light');
+    document.getElementById('themeBtn').innerHTML = '&#9790;';
+  }
+})();
+
+function copyBlock(btn) {
+  const pre = btn.previousElementSibling;
+  const select = () => {
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+  if (!navigator.clipboard) { select(); return; }
+  navigator.clipboard.writeText(pre.textContent).then(() => {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  }).catch(select);
+}
+</script>
+
+</body>
+</html>
