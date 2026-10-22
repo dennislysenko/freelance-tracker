@@ -382,13 +382,30 @@
   }
 
   .how-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-family: var(--mono);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.12em;
     color: var(--accent);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
+
+  .how-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    fill: var(--accent-glow);
+    stroke: var(--accent);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .how-icon path { fill: none; }
+  .how-icon .how-dot { fill: var(--accent); }
 
   .how p { font-size: 14px; line-height: 1.6; margin: 0; }
 
@@ -601,7 +618,7 @@
     <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
   </div>
   <aside class="how">
-    <div class="how-label">How?</div>
+    <div class="how-label"><svg class="how-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M9.4 9.4a2.7 2.7 0 0 1 5.2 1c0 1.9-2.6 2.3-2.6 4"/><circle class="how-dot" cx="12" cy="17.4" r="0.6"/></svg>How?</div>
     <p>Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, and each message in it has a timestamp. The agent reads today&apos;s transcripts, treats long silences as breaks, and turns each stretch of work into an entry. It picks the project from the repo you were in, and asks when that isn&apos;t clear.</p>
   </aside>
   <div class="timeline" aria-label="Two working blocks today, 9:10 to 11:40am and 1:40 to 3:10pm, with a lunch gap between them">
