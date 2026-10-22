@@ -413,22 +413,45 @@
   .callout p { margin: 0; font-size: 15px; }
   .callout p + p { margin-top: 8px; }
 
-  .rules {
+  .canlist {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-    margin: 8px 0 24px;
+    gap: 32px;
+    margin: 8px 0 12px;
   }
 
-  .rule {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    background: var(--bg-elevated);
+  .canlist h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-tertiary);
+    margin-bottom: 10px;
   }
 
-  .rule h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-  .rule p { font-size: 14px; margin: 0; line-height: 1.6; }
+  .canlist ul { list-style: none; margin: 0; }
+
+  .canlist li {
+    font-size: 16px;
+    color: var(--text);
+    font-weight: 400;
+    padding: 10px 0 10px 28px;
+    border-top: 1px solid var(--border-subtle);
+    position: relative;
+    margin: 0;
+  }
+
+  .canlist li::before {
+    position: absolute;
+    left: 2px;
+    font-weight: 600;
+  }
+
+  .canlist li.yes::before { content: '✓'; color: var(--accent); }
+  .canlist li.no::before { content: '✕'; color: var(--text-tertiary); }
+
+  article p.fineprint { font-size: 13px; color: var(--text-tertiary); margin-bottom: 24px; }
 
   dl.trouble { margin: 8px 0 24px; }
   dl.trouble dt {
@@ -466,7 +489,7 @@
 
   @media (max-width: 680px) {
     article { padding: 48px 20px 72px; }
-    .rules { grid-template-columns: 1fr; }
+    .canlist { grid-template-columns: 1fr; gap: 20px; }
     .nav-right .hide-sm { display: none; }
     .codeblock pre { padding-right: 18px; padding-top: 44px; }
   }
@@ -575,24 +598,25 @@
   </div>
 
   <h2>What the agent can and can&apos;t do</h2>
-  <div class="rules">
-    <div class="rule">
-      <h3>One entry per call</h3>
-      <p>No lists, no date ranges, no &ldquo;log the whole week&rdquo;.</p>
+  <div class="canlist">
+    <div>
+      <h3>Can</h3>
+      <ul>
+        <li class="yes">Log a time entry</li>
+        <li class="yes">Edit or delete an entry</li>
+        <li class="yes">Read your hours and forecast</li>
+      </ul>
     </div>
-    <div class="rule">
-      <h3>Nothing without your yes</h3>
-      <p>Every write is previewed first and needs its own token.</p>
-    </div>
-    <div class="rule">
-      <h3>Time entries only</h3>
-      <p>It can log, edit or delete one entry. It can&apos;t touch projects, rates or settings.</p>
-    </div>
-    <div class="rule">
-      <h3>Recorded</h3>
-      <p>Each confirmed write is 1 Toggl call, logged in <code>~/Library/Logs/toggl-api-audit.log</code>. Previews are free.</p>
+    <div>
+      <h3>Can&apos;t</h3>
+      <ul>
+        <li class="no">Write anything without your yes</li>
+        <li class="no">Do more than one entry at a time</li>
+        <li class="no">Change projects, rates or settings</li>
+      </ul>
     </div>
   </div>
+  <p class="fineprint">Each entry you confirm costs one Toggl API call and is recorded in <code>~/Library/Logs/toggl-api-audit.log</code>. Previews are free.</p>
   <p>Logged something wrong? Ask the agent to fix it: &ldquo;that last entry should have been 2 hours&rdquo; or &ldquo;delete the duplicate from Tuesday&rdquo;. Edits and deletes are previewed and confirmed the same way.</p>
 
   <h2>If something goes wrong</h2>
