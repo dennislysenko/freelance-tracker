@@ -1,0 +1,1367 @@
+#!/usr/bin/env python3
+"""Freelance Tracker - Menu Bar App
+
+Uses NSPopover (like Claude Usage Tracker) to show a rich dashboard
+when clicking the status bar icon.
+"""
+
+import objc
+import rumps
+import subprocess
+import os
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import unquote
+from toggl_data import (
+    get_daily_earnings,
+    get_weekly_earnings,
+    get_monthly_earnings,
+    is_rate_limited,
+    force_refresh_entries,
+    clear_all_caches,
+    estimate_manual_refresh_entry_api_calls,
+)
+from preferences import CACHE_DIR, load_preferences, save_preferences
+from preferences_window import PreferencesWindowController
+from update_window import UpdateWindowController
+from carryover import get_previous_month_balance
+from upwork_work_diary import build_work_diary_url
+import gusto_sync
+from billing_reminders import (
+    collect_due_reminders,
+    load_reminder_state,
+    mark_reminder_sent,
+    reminder_key,
+    reminder_notification,
+    save_reminder_state,
+)
+
+try:
+    from dashboard_panel import DashboardPanelController
+    DASHBOARD_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    if exc.name != "WebKit":
+        raise
+    DashboardPanelController = None
+    DASHBOARD_IMPORT_ERROR = exc
+
+# Hide dock icon - must be set before app creation
+from AppKit import NSBundle, NSObject, NSPasteboard, NSPasteboardTypeString
+from Foundation import (
+    NSDistributedNotificationCenter,
+    NSNotificationSuspensionBehaviorDeliverImmediately,
+)
+from app_notify import NOTIFICATION_NAME, marker_mtime
+bundle = NSBundle.mainBundle()
+info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+if info:
+    info['LSUIElement'] = '1'
+
+
+def _debug(msg):
+    with open('/tmp/freelance_dashboard_debug.log', 'a') as f:
+        f.write(f"{datetime.now().isoformat()} {msg}\n")
+
+
+def create_progress_bar(percent, width=12):
+    """Create a Unicode block-based progress bar."""
+    filled = min(int(width * percent / 100), width)
+    bar = '█' * filled + '░' * (width - filled)
+    return f"[{bar}]"
+
+
+class DataChangedObserver(NSObject):
+    """Listens for another process announcing that the cache changed.
+
+    The MCP server writes time entries from its own process and patches the
+    day shard; this is how the 💰 total catches up at once instead of at the
+    next half-hourly refresh. The re-read is served from the patched cache,
+    so it costs no Toggl calls.
+    """
+
+    def initWithApp_(self, app):
+        self = objc.super(DataChangedObserver, self).init()
+        if self is None:
+            return None
+        self._app = app
+        return self
+
+    def dataChanged_(self, notification):
+        try:
+            info = notification.userInfo() or {}
+            _debug(f"data changed externally: {dict(info)}")
+            self._app.note_external_change()
+        except Exception as exc:
+            _debug(f"dataChanged_ failed: {exc}")
+
+
+class StatusItemClickHandler(NSObject):
+    """Handles clicks on the status bar item to toggle the popover."""
+
+    def initWithApp_(self, app):
+        self = objc.super(StatusItemClickHandler, self).init()
+        if self is None:
+            return None
+        self._app = app
+        return self
+
+    @objc.typedSelector(b'v@:@')
+    def togglePopover_(self, sender):
+        _debug("togglePopover_ called")
+        self._app.toggle_dashboard()
+
+
+class FreelanceTrackerApp(rumps.App):
+    def __init__(self):
+        super(FreelanceTrackerApp, self).__init__(
+            "Freelance Tracker",
+            "💰 Loading...",
+            quit_button=None
+        )
+        self.last_update = None
+        self.prefs_controller = PreferencesWindowController()
+        self.update_controller = UpdateWindowController()
+        self._click_handler = None
+        self._status_item_hooked = False
+        self._dashboard_enabled = DashboardPanelController is not None
+        self.dashboard = None
+        self._billing_reminder_state = load_reminder_state()
+        # Seen marker time, so the one-minute poll only fires on a change it
+        # has not already handled via the instant notification.
+        self._seen_data_change = marker_mtime()
+        self._data_observer = None
+        self._gusto_running = False
+
+        if self._dashboard_enabled:
+            # Set up dashboard popover with action callbacks
+            self.dashboard = DashboardPanelController()
+            self.dashboard.set_callbacks({
+                'refresh': self._dashboard_refresh,
+                'refresh_projects': self._dashboard_refresh_projects,
+                'clear_all_caches': self._dashboard_clear_all_caches,
+                'open_cache_folder': self._dashboard_open_cache_folder,
+                'settings': self._dashboard_preferences,
+                'update_app': self._dashboard_update_app,
+                'quit': self._dashboard_quit,
+                'export_csv': self._dashboard_export_csv,
+                'stripe_invoice_prepare': self._dashboard_prepare_stripe_invoice,
+                'stripe_invoice_create': self._dashboard_create_stripe_invoice,
+                'stripe_invoice_open': self._dashboard_open_stripe_invoice,
+                'stripe_invoice_dismiss': self._dashboard_dismiss_stripe_invoice,
+                'open_upwork_diary': self._dashboard_open_upwork_diary,
+                'save_upwork_contract': self._dashboard_save_upwork_contract,
+                'copy_text': self._dashboard_copy_text,
+                'copy_diagnostics': self._dashboard_copy_diagnostics,
+                # In-popover settings view (settings:<name> bridge messages)
+                'settings:save': self._dashboard_settings_save,
+                'settings:test_notification': self._dashboard_settings_test_notification,
+                'settings:open_audit_log': self._dashboard_settings_open_audit_log,
+                'settings:open_gcal_settings': self._dashboard_settings_open_gcal_settings,
+                'settings:open_openai_settings': self._dashboard_settings_open_openai_settings,
+                'settings:refresh_stripe': self._dashboard_settings_refresh_stripe,
+                'settings:test_mcp': self._dashboard_settings_test_mcp,
+                'settings:gusto_login': self._dashboard_settings_gusto_login,
+                'gusto_push': self._dashboard_gusto_push,
+                'gusto_dismiss': self._dashboard_gusto_dismiss,
+                'assistant_ask': self._dashboard_assistant_ask,
+                'assistant_apply': self._dashboard_assistant_apply,
+                'assistant_clear': self._dashboard_assistant_clear,
+            })
+        else:
+            _debug(f"Dashboard disabled: missing optional dependency ({DASHBOARD_IMPORT_ERROR})")
+
+        self.update_display()
+
+    def _start_data_change_observer(self):
+        """Subscribe to cross-process cache-change announcements."""
+        try:
+            self._data_observer = DataChangedObserver.alloc().initWithApp_(self)
+            NSDistributedNotificationCenter.defaultCenter().addObserver_selector_name_object_suspensionBehavior_(
+                self._data_observer,
+                "dataChanged:",
+                NOTIFICATION_NAME,
+                None,
+                NSNotificationSuspensionBehaviorDeliverImmediately,
+            )
+        except Exception as exc:
+            _debug(f"data change observer failed to start: {exc}")
+
+    def note_external_change(self):
+        """Another process changed the cache: re-read it and update the title."""
+        self._seen_data_change = marker_mtime()
+        self.update_display()
+
+    def _hook_status_item(self):
+        """Replace the default menu with a click handler that shows the NSPopover."""
+        if not self._dashboard_enabled or self._status_item_hooked:
+            return
+
+        try:
+            nsstatusitem = self._nsapp.nsstatusitem
+
+            # Remove the rumps menu - we'll use the popover instead
+            nsstatusitem.setMenu_(None)
+
+            # Set the button's target/action to our handler
+            self._click_handler = StatusItemClickHandler.alloc().initWithApp_(self)
+            button = nsstatusitem.button()
+            button.setTarget_(self._click_handler)
+            button.setAction_(self._click_handler.togglePopover_)
+            # Must explicitly set which mouse events trigger the action
+            button.sendActionOn_(1 << 1)  # NSLeftMouseDownMask
+
+            self._status_item_hooked = True
+            _debug(f"Popover hooked to status item. action={button.action()}, target={button.target()}")
+        except Exception as e:
+            _debug(f"Failed to hook status item: {e}")
+            import traceback
+            _debug(traceback.format_exc())
+
+    def toggle_dashboard(self):
+        """Toggle the dashboard popover relative to the status item button."""
+        if not self._dashboard_enabled or self.dashboard is None:
+            return
+        try:
+            button = self._nsapp.nsstatusitem.button()
+            _debug(f"toggle_dashboard: button={button}")
+            self.dashboard.toggle(status_item_button=button)
+        except Exception as e:
+            _debug(f"toggle_dashboard error: {e}")
+            import traceback
+            _debug(traceback.format_exc())
+
+    def _dashboard_refresh(self):
+        """Called from dashboard Refresh button — update in-place, don't dismiss."""
+        force_refresh_entries()
+        self.update_display()
+
+    def _dashboard_refresh_projects(self):
+        """Called from dashboard Projects button — refresh project cache and update in-place."""
+        self.refresh_projects(None)
+
+    def _dashboard_clear_all_caches(self):
+        """Called from dashboard cache-clear action — wipe caches and repopulate current data."""
+        clear_all_caches()
+        self.update_display()
+
+    def _dashboard_open_cache_folder(self):
+        """Called from dashboard cache action — reveal the cache folder in Finder."""
+        subprocess.run(["open", str(CACHE_DIR)], check=False)
+
+    def _dashboard_preferences(self):
+        """Legacy callback for the dashboard Settings action.
+
+        The dashboard now switches to an in-popover settings view, so this
+        callback is no longer invoked from the popover. Kept as an emergency
+        fallback (and still used by the rumps `Edit Preferences` item).
+        """
+        if self.dashboard is not None:
+            self.dashboard.hide()
+        self.prefs_controller.show_window()
+
+    def _dashboard_settings_save(self, payload):
+        """Save settings payload from the in-popover settings view.
+
+        Phase 1: empty payload, no-op ack. Real save assembly lives in
+        `settings_handler.apply_settings_save` once fields are wired in
+        Phase 2+.
+        """
+        try:
+            from settings_handler import apply_settings_save
+            result = apply_settings_save(payload or {})
+        except Exception as exc:
+            _debug(f"settings_save failed: {exc}")
+            result = {"ok": False, "errors": [f"Save failed: {exc}"]}
+        if self.dashboard is not None:
+            self.dashboard.settings_ack(result)
+        # Do NOT call self.update_display() here: it reloads the popover HTML
+        # and wipes the "Saved ✓" flash. The dashboard picks up the new
+        # preferences on the next auto-refresh cycle, and also refreshes
+        # immediately when the user navigates back to the dashboard view.
+
+    def _dashboard_settings_test_notification(self):
+        """Post a sample billing-reminder notification."""
+        from billing_reminders import reminder_notification
+        title, subtitle, message = reminder_notification({
+            "project_name": "Example Project",
+            "task": "invoice",
+        })
+        try:
+            rumps.notification(title, subtitle, message)
+        except Exception as exc:
+            _debug(f"test notification failed: {exc}")
+
+    def _dashboard_settings_open_audit_log(self):
+        """Open the Toggl API audit log via Terminal."""
+        from pathlib import Path
+        log_path = Path.home() / "Library" / "Logs" / "toggl-api-audit.log"
+        applescript = f'''
+        tell application "Terminal"
+            activate
+            do script "tail -f {log_path}"
+        end tell
+        '''
+        try:
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as exc:
+            _debug(f"open_audit_log failed: {exc}")
+
+    def _dashboard_settings_open_gcal_settings(self):
+        """Open Google Calendar's settings page (secret iCal URL lives under
+        the specific calendar's "Integrate calendar" section)."""
+        try:
+            subprocess.run(
+                ["open", "https://calendar.google.com/calendar/u/0/r/settings"],
+                check=False,
+            )
+        except Exception as exc:
+            _debug(f"open_gcal_settings failed: {exc}")
+
+    def _dashboard_settings_open_openai_settings(self):
+        """Open the OpenAI API keys page so the user can mint a scoped key."""
+        try:
+            subprocess.run(
+                ["open", "https://platform.openai.com/api-keys"],
+                check=False,
+            )
+        except Exception as exc:
+            _debug(f"open_openai_settings failed: {exc}")
+
+    def _dashboard_settings_refresh_stripe(self, payload):
+        """Refresh the Stripe customer list using the supplied API key."""
+        api_key = (payload or {}).get("api_key") or ""
+        try:
+            from stripe_invoice import list_customers
+            customers = list_customers(api_key=api_key)
+        except Exception as exc:
+            _debug(f"refresh_stripe failed: {exc}")
+            customers = []
+        reply = {
+            "type": "stripe_customers",
+            "ok": True,
+            "customers": [
+                {"id": c.get("id", ""), "display_name": c.get("display_name") or c.get("id", "")}
+                for c in customers
+            ],
+        }
+        if self.dashboard is not None:
+            self.dashboard.settings_ack(reply)
+
+    def _dashboard_settings_test_mcp(self):
+        """Spawn mcp_server.py and do an initialize + tools/list round trip.
+
+        Runs on a worker thread (same pattern as the OpenAI key check) so the
+        menu bar stays responsive; the reply goes back to the settings view.
+        """
+        from background_work import run_in_background
+        from mcp_support import probe_server
+
+        def done(result):
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "mcp_test", **result})
+
+        def failed(exc):
+            _debug(f"test_mcp failed: {exc}")
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "mcp_test", "ok": False, "error": str(exc)})
+
+        run_in_background(probe_server, done, failed, name="mcp-test")
+
+    # --- Gusto sync -------------------------------------------------------
+
+    def _refresh_gusto_status(self, rerender=True):
+        """Recompute the Export/Invoice badge and Push to Gusto row."""
+        if self.dashboard is None:
+            return
+        prefs = load_preferences()
+        status = (
+            gusto_sync.status_view(prefs, gusto_sync.load_state(), running=self._gusto_running)
+            if gusto_sync.is_configured(prefs) else None
+        )
+        self.dashboard.set_gusto_status(status)
+        if rerender:
+            self.dashboard.refresh_contents()
+
+    def _start_gusto_sync(self, manual, deadline=False):
+        """Push Toggl hours to Gusto on a worker thread.
+
+        Manual pushes (Export/Invoice -> Push to Gusto) cover every finished
+        day up to yesterday (through today on the month's deadline day) and
+        show a result card; the Monday run covers the scheduled window and
+        only notifies. A month-end `deadline` run ("early" the business day
+        before the cutoff, "cutoff" on it) covers through today and notifies
+        its result; cutoff-day failures notify every time, since the cutoff
+        is hours away. Gusto runs in its own
+        visible Chrome window, which is left open afterwards.
+        """
+        if self._gusto_running:
+            return
+        prefs = load_preferences()
+        if not gusto_sync.is_configured(prefs):
+            return
+        from background_work import on_main_thread, run_in_background
+        import gusto_client
+
+        state = gusto_sync.load_state()
+        now = datetime.now()
+        first_day_pref = prefs.get('gusto_sync_start_date') or ''
+        first_day = datetime.strptime(first_day_pref, "%Y-%m-%d").date() if first_day_pref else None
+        if manual:
+            window = gusto_sync.manual_window(now, state, first_day)
+        elif deadline:
+            window = gusto_sync.deadline_window(now, state, first_day)
+        else:
+            window = None
+        month_end = gusto_sync.month_end_push_kind(now.date()) if deadline else None
+        self._gusto_running = True
+        if manual and self.dashboard is not None:
+            start, end = window
+            self.dashboard.set_gusto_card({
+                "status": "running",
+                "title": "Pushing to Gusto…",
+                "detail": f"{prefs.get('gusto_project')} · {start.strftime('%b %-d')}–{end.strftime('%b %-d')}",
+            })
+        self._refresh_gusto_status()
+
+        def notify_login():
+            on_main_thread(lambda: rumps.notification(
+                "Gusto", "Approve your passkey",
+                "Log in to Gusto in the Chrome window to push your hours.",
+            ))
+
+        def session_factory(slug):
+            return gusto_client.open_session(slug, on_login_needed=notify_login)
+
+        prior_error = state.get("last_error")
+
+        def work():
+            # Locked across processes; the ledger is re-read inside the lock.
+            return gusto_sync.run_locked(
+                prefs, now=now, window=window, session_factory=session_factory,
+            )
+
+        def done(result):
+            _new_state, summary = result
+            self._gusto_running = False
+            text = gusto_sync.describe_result(summary)
+            kind = "manual" if manual else f"month-end ({month_end})" if deadline else "weekly"
+            _debug(f"Gusto sync ({kind}): {text}")
+            # A weekly run only notifies about an error the first time it
+            # appears; retries of the same failure stay quiet. Month-end
+            # retries always notify: the cutoff is hours away.
+            new_error = summary.get("error") and (
+                manual or month_end == "cutoff" or summary["error"] != prior_error
+            )
+            if summary.get("busy") and not manual:
+                pass
+            elif new_error:
+                rumps.notification(
+                    "Gusto", "Needs your passkey" if summary.get("login_required") else "Push failed",
+                    (f"Month-end hours are due by {gusto_sync._hour_label(gusto_sync.DEADLINE_HOUR)} today. "
+                     if month_end == "cutoff" else "") + f"{text} Use Export/Invoice → Push to Gusto to retry.",
+                )
+            elif deadline:
+                rumps.notification(
+                    "Gusto",
+                    "Month-end hours submitted" if month_end == "cutoff"
+                    else "Month so far submitted (cutoff is tomorrow)",
+                    text,
+                )
+            elif not manual and (summary.get("pushed") or summary.get("issues")):
+                rumps.notification("Gusto", prefs.get('gusto_project') or "", text)
+            if manual and self.dashboard is not None:
+                self.dashboard.set_gusto_card({
+                    "status": "error" if summary.get("error") else "success",
+                    "title": "Gusto push failed" if summary.get("error") else "Pushed to Gusto",
+                    "detail": text,
+                    "issues": [issue["message"] for issue in summary.get("issues") or []],
+                })
+            self._refresh_gusto_status()
+
+        def failed(exc):
+            self._gusto_running = False
+            _debug(f"Gusto sync crashed: {exc}")
+            if manual and self.dashboard is not None:
+                self.dashboard.set_gusto_card({
+                    "status": "error", "title": "Gusto push failed", "detail": str(exc),
+                })
+            self._refresh_gusto_status()
+
+        run_in_background(work, done, failed, name="gusto-sync")
+
+    def _dashboard_gusto_push(self):
+        self._start_gusto_sync(manual=True)
+
+    def _dashboard_gusto_dismiss(self):
+        if self.dashboard is not None:
+            self.dashboard.set_gusto_card(None)
+            self.dashboard.refresh_contents()
+
+    def _dashboard_settings_gusto_login(self):
+        """Open the Gusto window and wait for a passkey login (worker thread)."""
+        from background_work import run_in_background
+        import gusto_client
+
+        def done(result):
+            prefs = load_preferences()
+            prefs['gusto_company_slug'] = result["company_slug"]
+            save_preferences(prefs)
+            state = gusto_sync.load_state()
+            state["login_required"] = False
+            state["last_error"] = None
+            gusto_sync.save_state(state)
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "gusto_login", "ok": True,
+                                             "company": result["company_slug"]})
+            self._refresh_gusto_status(rerender=False)
+
+        def failed(exc):
+            if self.dashboard is not None:
+                self.dashboard.settings_ack({"type": "gusto_login", "ok": False, "error": str(exc)})
+
+        run_in_background(gusto_client.login, done, failed, name="gusto-login")
+
+    def _dashboard_assistant_ask(self, encoded_utterance):
+        """Submit a natural-language command. Parsing happens on a worker."""
+        if self.dashboard is not None:
+            self.dashboard.assistant_ask(encoded_utterance)
+
+    def _dashboard_assistant_apply(self, proposal_id, indices):
+        """Apply a confirmed proposal, then pull fresh totals if anything landed."""
+        if self.dashboard is None:
+            return
+        self.dashboard.assistant_apply(
+            proposal_id, indices, on_written=lambda _count: self.update_display()
+        )
+
+    def _dashboard_assistant_clear(self):
+        if self.dashboard is not None:
+            self.dashboard.assistant_clear()
+
+    def _dashboard_quit(self):
+        """Called from dashboard Quit button."""
+        if self.dashboard is not None:
+            self.dashboard.hide()
+        rumps.quit_application()
+
+    def _dashboard_update_app(self):
+        """Called from dashboard Update button."""
+        if self.dashboard is not None:
+            self.dashboard.hide()
+        self.update_app(None)
+
+    def _build_exportable_projects(self):
+        """Return list of projects eligible for CSV export or Stripe invoicing."""
+        from toggl_data import get_projects, get_effective_project_rate, compute_lbd_cap_fill_date
+        prefs = load_preferences()
+        retainer_rates = prefs.get('retainer_hourly_rates', {})
+        projects_config = prefs.get('projects', {})
+        stripe_project_customers = prefs.get('stripe_project_customers', {})
+        out = []
+        try:
+            projects = get_projects()
+        except Exception as exc:
+            _debug(f"_build_exportable_projects: get_projects failed: {exc}")
+            return out
+        for pid, info in projects.items():
+            rate, _src = get_effective_project_rate(info, retainer_rates, projects_config)
+            if rate is None or rate <= 0:
+                continue
+            name = info.get('name', 'Unknown')
+            defn = projects_config.get(name, {})
+            lbd = defn.get('last_billed_date') if defn.get('billing_type') == 'hourly_with_cap' else None
+            cap_fill_date = ''
+            if lbd:
+                try:
+                    last_billed = datetime.strptime(lbd, '%Y-%m-%d').date()
+                    cap_fill_date = compute_lbd_cap_fill_date(
+                        name, last_billed, defn.get('cap_hours', 0), projects
+                    ) or ''
+                except (TypeError, ValueError) as exc:
+                    _debug(f"cap_fill_date compute failed for {name}: {exc}")
+            out.append({
+                'id': str(pid),
+                'name': name,
+                'last_billed_date': lbd or '',
+                'cap_fill_date': cap_fill_date,
+                'stripe_customer_id': stripe_project_customers.get(name, ''),
+            })
+        out.sort(key=lambda p: p['name'].lower())
+        return out
+
+    def _build_dashboard_projects(self):
+        """Return dashboard project capability data for CSV, Stripe, and Upwork actions."""
+        from toggl_data import get_projects, get_effective_project_rate, compute_lbd_cap_fill_date
+
+        prefs = load_preferences()
+        retainer_rates = prefs.get('retainer_hourly_rates', {})
+        projects_config = prefs.get('projects', {})
+        stripe_project_customers = prefs.get('stripe_project_customers', {})
+        upwork_contracts = prefs.get('upwork_contracts', {})
+        out = []
+        try:
+            projects = get_projects()
+        except Exception as exc:
+            _debug(f"_build_dashboard_projects: get_projects failed: {exc}")
+            return out
+
+        for pid, info in projects.items():
+            rate, _src = get_effective_project_rate(info, retainer_rates, projects_config)
+            name = info.get('name', 'Unknown')
+            defn = projects_config.get(name, {})
+            lbd = defn.get('last_billed_date') if defn.get('billing_type') == 'hourly_with_cap' else None
+            cap_fill_date = ''
+            if lbd:
+                try:
+                    last_billed = datetime.strptime(lbd, '%Y-%m-%d').date()
+                    cap_fill_date = compute_lbd_cap_fill_date(
+                        name, last_billed, defn.get('cap_hours', 0), projects
+                    ) or ''
+                except (TypeError, ValueError) as exc:
+                    _debug(f"cap_fill_date compute failed for {name}: {exc}")
+
+            can_bill = bool(rate and rate > 0)
+            out.append({
+                'id': str(pid),
+                'name': name,
+                'can_export': can_bill,
+                'can_invoice': can_bill,
+                'last_billed_date': lbd or '',
+                'cap_fill_date': cap_fill_date,
+                'stripe_customer_id': stripe_project_customers.get(name, ''),
+                'upwork_contract_id': upwork_contracts.get(name, ''),
+            })
+
+        out.sort(key=lambda p: p['name'].lower())
+        return out
+
+    def _dashboard_export_csv(self, project_id, start_iso, end_iso):
+        """Export hours CSV for one project given explicit ISO dates from the dashboard."""
+        from datetime import date as _date
+        try:
+            start_d = _date.fromisoformat(start_iso)
+            end_d = _date.fromisoformat(end_iso)
+        except ValueError as exc:
+            _debug(f"Export failed: bad dates {start_iso}/{end_iso}: {exc}")
+            rumps.alert("Export failed", f"Invalid date range: {start_iso} to {end_iso}")
+            return
+        self._run_export(project_id, start_d, end_d)
+
+    def _dashboard_prepare_stripe_invoice(self, project_id, start_iso, end_iso):
+        """Resolve customer mapping or prompt the dashboard to associate one before invoicing."""
+        from datetime import date as _date
+        from toggl_data import get_projects, get_effective_project_rate
+        from stripe_invoice import list_customers
+
+        try:
+            start_d = _date.fromisoformat(start_iso)
+            end_d = _date.fromisoformat(end_iso)
+        except ValueError as exc:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"Invalid date range: {start_iso} to {end_iso}",
+            })
+            self.dashboard.refresh_contents()
+            _debug(f"Stripe invoice prepare failed: {exc}")
+            return
+
+        prefs = load_preferences()
+        projects = get_projects()
+        info = projects.get(str(project_id))
+        if not info:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"Unknown project id {project_id}",
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        project_name = info.get('name', 'Unknown')
+        rate, _ = get_effective_project_rate(
+            info,
+            prefs.get('retainer_hourly_rates', {}),
+            prefs.get('projects', {}),
+        )
+        if not rate:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"No billable rate configured for {project_name}",
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        customer_id = prefs.get('stripe_project_customers', {}).get(project_name, '')
+        if customer_id:
+            self._dashboard_create_stripe_invoice(project_id, start_iso, end_iso, customer_id)
+            return
+
+        try:
+            customers = list_customers()
+        except Exception as exc:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Stripe customer lookup failed',
+                'detail': str(exc),
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        if not customers:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Stripe customer lookup failed',
+                'detail': 'No Stripe customers were found for the configured Stripe API key.',
+            })
+            self.dashboard.refresh_contents()
+            return
+
+        self.dashboard.set_stripe_invoice_state({
+            'status': 'choose_customer',
+            'project_id': str(project_id),
+            'project_name': project_name,
+            'start_iso': start_d.isoformat(),
+            'end_iso': end_d.isoformat(),
+            'date_range_label': f"{start_d.strftime('%b %-d, %Y')} to {end_d.strftime('%b %-d, %Y')}",
+            'customers': customers,
+        })
+        self.dashboard.refresh_contents()
+
+    def _dashboard_create_stripe_invoice(self, project_id, start_iso, end_iso, customer_id=None):
+        """Create a Stripe draft invoice for a project and explicit date range."""
+        from datetime import date as _date
+        from toggl_data import get_projects, get_effective_project_rate
+        from stripe_invoice import create_draft_invoice_for_project_range
+
+        try:
+            start_d = _date.fromisoformat(start_iso)
+            end_d = _date.fromisoformat(end_iso)
+        except ValueError as exc:
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': f"Invalid date range: {start_iso} to {end_iso}",
+            })
+            self.dashboard.refresh_contents()
+            _debug(f"Stripe invoice failed: {exc}")
+            return
+
+        try:
+            projects = get_projects()
+            info = projects.get(str(project_id))
+            if not info:
+                raise RuntimeError(f"Unknown project id {project_id}")
+
+            prefs = load_preferences()
+            project_name = info.get('name', 'Unknown')
+            rate, _ = get_effective_project_rate(
+                info,
+                prefs.get('retainer_hourly_rates', {}),
+                prefs.get('projects', {}),
+            )
+            if not rate:
+                raise RuntimeError(f"No billable rate configured for {project_name}")
+
+            chosen_customer_id = customer_id or prefs.get('stripe_project_customers', {}).get(project_name, '')
+            if not chosen_customer_id:
+                raise RuntimeError(f"No Stripe customer configured for {project_name}")
+
+            created = create_draft_invoice_for_project_range(
+                project_id=project_id,
+                project_name=project_name,
+                customer_id=chosen_customer_id,
+                hourly_rate=rate,
+                start_d=start_d,
+                end_d=end_d,
+            )
+            self._save_stripe_customer_mapping(project_name, chosen_customer_id)
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'success',
+                'title': 'Draft invoice created',
+                'detail': (
+                    f"{project_name} · {created['date_range_label']} · "
+                    f"{created['total_hours']:.2f}h · ${created['amount_usd']:.2f}"
+                ),
+                'summary': created['summary'],
+                'dashboard_url': created['dashboard_url'],
+            })
+            self.dashboard.refresh_contents()
+        except Exception as exc:
+            _debug(f"Stripe invoice failed: {exc}")
+            self.dashboard.set_stripe_invoice_state({
+                'status': 'error',
+                'title': 'Draft invoice failed',
+                'detail': str(exc),
+            })
+            self.dashboard.refresh_contents()
+
+    def _dashboard_open_stripe_invoice(self):
+        """Open the dashboard URL from the current Stripe invoice success state."""
+        state = self.dashboard.get_stripe_invoice_state()
+        url = (state or {}).get('dashboard_url')
+        if url:
+            subprocess.run(["open", url], check=False)
+
+    def _dashboard_dismiss_stripe_invoice(self):
+        """Clear any active Stripe invoice status overlay in the dashboard."""
+        self.dashboard.clear_stripe_invoice_state()
+        self.dashboard.refresh_contents()
+
+    def _dashboard_open_upwork_diary(self, project_id, entry_date_iso=None):
+        """Open Upwork work diary for the mapped contract and selected date."""
+        from datetime import date as _date
+        from toggl_data import get_projects
+
+        try:
+            entry_date = _date.fromisoformat(entry_date_iso) if entry_date_iso else _date.today()
+        except ValueError:
+            entry_date = _date.today()
+
+        try:
+            info = get_projects().get(str(project_id))
+            if not info:
+                raise RuntimeError(f"Unknown project id {project_id}")
+
+            prefs = load_preferences()
+            project_name = info.get('name', 'Unknown')
+            contract_id = prefs.get('upwork_contracts', {}).get(project_name, '')
+            if not contract_id:
+                raise RuntimeError(f"No Upwork contract id configured for {project_name}")
+
+            url = build_work_diary_url(contract_id, entry_date)
+            subprocess.run(["open", url], check=False)
+        except Exception as exc:
+            _debug(f"Upwork diary open failed: {exc}")
+            rumps.alert("Open Upwork Diary failed", str(exc))
+
+    def _dashboard_save_upwork_contract(self, project_id, contract_id, entry_date_iso=None):
+        """Persist an Upwork contract id from the dashboard flow, then open the diary."""
+        from toggl_data import get_projects
+
+        normalized_contract_id = str(contract_id or "").strip()
+        if not normalized_contract_id.isdigit():
+            rumps.alert("Save Upwork Contract failed", "Contract id must contain digits only.")
+            return
+
+        try:
+            info = get_projects().get(str(project_id))
+            if not info:
+                raise RuntimeError(f"Unknown project id {project_id}")
+
+            prefs = load_preferences()
+            project_name = info.get('name', 'Unknown')
+            upwork_contracts = dict(prefs.get('upwork_contracts', {}))
+            upwork_contracts[project_name] = normalized_contract_id
+            prefs['upwork_contracts'] = upwork_contracts
+            save_preferences(prefs)
+
+            if self.dashboard is not None:
+                self.dashboard.set_exportable_projects(self._build_dashboard_projects())
+                self.dashboard.refresh_contents()
+
+            self._dashboard_open_upwork_diary(project_id, entry_date_iso)
+        except Exception as exc:
+            _debug(f"Upwork contract save failed: {exc}")
+            rumps.alert("Save Upwork Contract failed", str(exc))
+
+    def _dashboard_copy_text(self, encoded_text):
+        """Copy arbitrary dashboard text to the macOS pasteboard."""
+        text = unquote(str(encoded_text or ""))
+        if not text:
+            return
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(text, NSPasteboardTypeString)
+
+    def _dashboard_copy_diagnostics(self):
+        """Serialize the (anonymized) projection diagnostics to the clipboard."""
+        try:
+            from diagnostics import diagnostics_json
+            payload = diagnostics_json(anonymize=True)
+        except Exception as exc:
+            _debug(f"Copy diagnostics failed: {exc}")
+            rumps.alert("Copy diagnostics failed", str(exc))
+            return
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(payload, NSPasteboardTypeString)
+        try:
+            rumps.notification(
+                "Projection diagnostics copied",
+                "Anonymized — safe to share",
+                "Paste it wherever you're debugging the pace estimate.",
+            )
+        except Exception:
+            pass
+
+    def _save_stripe_customer_mapping(self, project_name, customer_id):
+        """Persist a discovered Stripe customer mapping so future invoices skip re-selection."""
+        prefs = load_preferences()
+        stripe_project_customers = dict(prefs.get('stripe_project_customers', {}))
+        if stripe_project_customers.get(project_name) == customer_id:
+            return
+        stripe_project_customers[project_name] = customer_id
+        prefs['stripe_project_customers'] = stripe_project_customers
+        save_preferences(prefs)
+
+    def _fallback_export_csv(self, project_id):
+        """Used by the rumps fallback menu when WebKit isn't available.
+
+        Auto-resolves the range for hourly_with_cap+last_billed_date projects;
+        otherwise prompts via the native NSAlert date dialog.
+        """
+        from toggl_data import get_projects
+        from datetime import date as _date, timedelta as _td
+
+        info = get_projects().get(str(project_id))
+        if not info:
+            rumps.alert("Export failed", f"Unknown project id {project_id}")
+            return
+        project_name = info.get('name', 'Unknown')
+
+        prefs = load_preferences()
+        projects_config = prefs.get('projects', {})
+        defn = projects_config.get(project_name, {})
+
+        start_d = end_d = None
+        if defn.get('billing_type') == 'hourly_with_cap' and defn.get('last_billed_date'):
+            try:
+                from toggl_data import compute_lbd_cap_fill_date, get_projects as _get_projects
+                last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
+                start_d = last_billed + _td(days=1)
+                cap_fill_iso = compute_lbd_cap_fill_date(
+                    project_name, last_billed, defn.get('cap_hours', 0), _get_projects()
+                )
+                if cap_fill_iso:
+                    end_d = datetime.strptime(cap_fill_iso, '%Y-%m-%d').date()
+                else:
+                    end_d = _date.today()
+            except (TypeError, ValueError):
+                pass
+
+        if start_d is None:
+            from hours_csv_export import previous_month_range
+            from date_range_dialog import prompt_date_range
+            default_start, default_end = previous_month_range()
+            picked = prompt_date_range(
+                default_start, default_end,
+                message_text=f"Export hours: {project_name}",
+            )
+            if picked is None:
+                return
+            start_d, end_d = picked
+
+        self._run_export(project_id, start_d, end_d)
+
+    def _run_export(self, project_id, start_d, end_d):
+        """Shared export pipeline used by both the dashboard and fallback paths."""
+        from toggl_data import get_projects, get_effective_project_rate
+        import hours_csv_export
+
+        if self.dashboard is not None:
+            self.dashboard.hide()
+
+        try:
+            info = get_projects().get(str(project_id))
+            if not info:
+                rumps.alert("Export failed", f"Unknown project id {project_id}")
+                return
+
+            prefs = load_preferences()
+            rate, _ = get_effective_project_rate(
+                info,
+                prefs.get('retainer_hourly_rates', {}),
+                prefs.get('projects', {}),
+            )
+            if not rate:
+                rumps.alert("Export failed", f"No billable rate for {info.get('name')}")
+                return
+
+            project_name = info.get('name', 'Unknown')
+            path = hours_csv_export.export_project_range(
+                project_id, project_name, rate, start_d, end_d
+            )
+            subprocess.run(["open", "-R", str(path)], check=False)
+            try:
+                rumps.notification("Exported hours CSV", project_name, str(path))
+            except Exception:
+                pass
+        except Exception as exc:
+            _debug(f"Export failed: {exc}")
+            import traceback
+            _debug(traceback.format_exc())
+            rumps.alert("Export failed", str(exc))
+
+    def calculate_api_calls(self, force_refresh=False):
+        from preferences import CACHE_DIR, load_preferences
+
+        calls = 0
+        now = datetime.now().timestamp()
+
+        if not force_refresh:
+            projects_cache = CACHE_DIR / "projects.json"
+            if projects_cache.exists():
+                prefs = load_preferences()
+                cache_ttl = prefs.get('cache_ttl_projects', 86400)
+                cache_age = now - projects_cache.stat().st_mtime
+                if cache_age >= cache_ttl:
+                    calls += 1
+            else:
+                calls += 1
+
+        if force_refresh:
+            calls += estimate_manual_refresh_entry_api_calls()
+        else:
+            today = datetime.now().date()
+            today_cache = CACHE_DIR / f"daily_{today.isoformat()}.json"
+            if today_cache.exists():
+                prefs = load_preferences()
+                cache_ttl = prefs.get('cache_ttl_today', 1800)
+                cache_age = now - today_cache.stat().st_mtime
+                if cache_age >= cache_ttl:
+                    calls += 1
+            else:
+                calls += 1
+
+        return calls
+
+    def update_display(self):
+        """Update the menu bar title and dashboard data."""
+        try:
+            next_refresh_calls = self.calculate_api_calls(force_refresh=True)
+            daily = get_daily_earnings()
+            weekly = get_weekly_earnings()
+            monthly = get_monthly_earnings()
+
+            self.last_update = datetime.now()
+            self.title = f"💰 ${daily['total']:.0f}"
+
+            if self._dashboard_enabled and self.dashboard is not None:
+                self.dashboard.set_last_updated(self.last_update)
+                self.dashboard.set_rate_limited(is_rate_limited())
+                self.dashboard.set_error_message(None)
+                self.dashboard.set_exportable_projects(self._build_dashboard_projects())
+                self._refresh_gusto_status(rerender=False)
+                self.dashboard.update_data(daily, weekly, monthly)
+            else:
+                self._update_fallback_menu(daily, weekly, monthly, next_refresh_calls)
+
+        except Exception as e:
+            self.title = "💰 Error"
+            _debug(f"Error updating display: {e}")
+            if self._dashboard_enabled and self.dashboard is not None:
+                self.dashboard.set_rate_limited(is_rate_limited())
+                self.dashboard.set_error_message(str(e))
+                self.dashboard.refresh_contents()
+            else:
+                self._show_fallback_error_menu(e)
+
+    def _update_fallback_menu(self, daily, weekly, monthly, next_refresh_calls):
+        """Render the legacy dropdown menu when the WebKit dashboard is unavailable."""
+        menu_items = []
+
+        if DASHBOARD_IMPORT_ERROR is not None:
+            menu_items.extend([
+                "⚠️ Rich dashboard unavailable",
+                "  Using classic dropdown menu",
+                rumps.separator,
+            ])
+
+        menu_items.extend([
+            f"📅 TODAY - ${daily['total']:.2f} ({daily['hours']:.2f}h)",
+            rumps.separator,
+        ])
+
+        all_daily_projects = daily.get('all_projects', daily.get('projects', []))
+        if all_daily_projects:
+            for project in all_daily_projects:
+                if project.get('billable', True):
+                    menu_items.append(
+                        f"  {project['name']}: ${project['earnings']:.0f} ({project['hours']:.1f}h)"
+                    )
+                else:
+                    menu_items.append(f"  {project['name']}: {project['hours']:.1f}h")
+        else:
+            menu_items.append("  No time logged today")
+
+        menu_items.extend([
+            rumps.separator,
+            f"📊 This Week: ${weekly['total']:.2f}",
+            rumps.separator,
+            f"📊 THIS MONTH - ${monthly['total']:.2f}",
+            rumps.separator,
+        ])
+
+        prefs = load_preferences()
+        project_targets = prefs.get('project_targets', {})
+        projects_config = prefs.get('projects', {})
+        all_monthly_projects = monthly.get('all_projects', monthly.get('projects', []))
+
+        if all_monthly_projects:
+            projects_to_display = []
+            for project in all_monthly_projects:
+                is_billable = project.get('billable', True)
+                has_target = project['name'] in project_targets
+                has_def = project['name'] in projects_config
+                if is_billable or has_target or has_def:
+                    projects_to_display.append(project)
+
+            if projects_to_display:
+                menu_items.append("   Monthly Hours by Project:")
+                for project in projects_to_display:
+                    if project['hours'] <= 0:
+                        continue
+
+                    name = project['name']
+                    is_billable = project.get('billable', True)
+                    proj_def = projects_config.get(name, {})
+                    billing_type = proj_def.get('billing_type')
+                    hour_tracking = proj_def.get('hour_tracking')
+
+                    carryover_balance = 0.0
+                    prev_month_label = None
+                    if (
+                        billing_type == 'hourly_with_cap' or
+                        (billing_type == 'fixed_monthly' and hour_tracking == 'required')
+                    ):
+                        carryover_balance, prev_month_label = get_previous_month_balance(name)
+
+                    target = project_targets.get(name)
+                    if not target and billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft'):
+                        target = proj_def.get('target_hours')
+                    elif not target and billing_type == 'hourly_with_cap':
+                        target = proj_def.get('cap_hours')
+
+                    if target:
+                        effective_target = max(0.1, target - carryover_balance)
+                        percentage = (project['hours'] / effective_target) * 100
+                        progress_bar = create_progress_bar(percentage)
+                        menu_items.append(
+                            f"     {name}: {project['hours']:.1f}h / {effective_target:.1f}h ({percentage:.0f}%)"
+                        )
+                        menu_items.append(f"       {progress_bar}")
+                        if carryover_balance != 0.0 and prev_month_label:
+                            sign = "+" if carryover_balance > 0 else ""
+                            menu_items.append(
+                                f"       ↳ {sign}{carryover_balance:.1f}h carryover from {prev_month_label}"
+                            )
+                        cap_fill_date = project.get('cap_fill_date')
+                        if billing_type == 'hourly_with_cap' and cap_fill_date:
+                            fill_dt = datetime.strptime(cap_fill_date, '%Y-%m-%d')
+                            menu_items.append(
+                                f"       ↳ capped as of {fill_dt.strftime('%b %-d')}"
+                            )
+                    elif is_billable:
+                        menu_items.append(
+                            f"     {name}: {project['hours']:.1f}h (${project['earnings']:.0f})"
+                        )
+                menu_items.append(rumps.separator)
+
+        projection = monthly.get('projection', {})
+        if projection and projection.get('worked_days', 0) > 0:
+            projected = projection['projected_earnings']
+            worked = projection['worked_days']
+            workable = projection['workable_days']
+            vacation = projection['vacation_days']
+            daily_avg = projection['daily_average']
+            fixed_total = projection.get('fixed_monthly_total', 0)
+            projected_variable = projection.get('projected_variable', 0)
+
+            menu_items.append(f"📈 Month Projection: ${projected:.0f}")
+            if fixed_total > 0:
+                menu_items.append(f"   ${fixed_total:.0f} fixed + ${projected_variable:.0f} projected hourly")
+            menu_items.append(f"   Worked {worked}/{workable} workable days")
+            if vacation > 0:
+                menu_items.append(f"   ({vacation} days off excluded)")
+            if daily_avg > 0:
+                menu_items.append(f"   Hourly daily average: ${daily_avg:.0f}")
+            menu_items.append(rumps.separator)
+
+        if is_rate_limited():
+            menu_items.append("⚠️  Rate Limited (using cached data)")
+            menu_items.append(rumps.separator)
+
+        if self.last_update:
+            menu_items.append(f"🕐 Last updated: {self.last_update.strftime('%I:%M %p')}")
+            menu_items.append(rumps.separator)
+
+        self.menu.clear()
+        for item in menu_items:
+            self.menu.add(item)
+
+        self.menu.add(rumps.MenuItem(f"🔄 Refresh Now ({next_refresh_calls} API calls)", callback=self.refresh))
+        self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
+        self.menu.add(rumps.separator)
+        export_menu = self._build_export_fallback_menu()
+        if export_menu is not None:
+            self.menu.add(export_menu)
+        self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
+        self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
+        self.menu.add(rumps.MenuItem("🆕 Update App", callback=self.update_app))
+        self.menu.add(rumps.separator)
+        self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
+
+    def _build_export_fallback_menu(self):
+        """Build the rumps submenu used when WebKit dashboard is unavailable."""
+        projects = self._build_exportable_projects()
+        if not projects:
+            return None
+        parent = rumps.MenuItem("📤 Export Hours CSV")
+        for p in projects:
+            pid = p['id']
+            name = p['name']
+            item = rumps.MenuItem(
+                name,
+                callback=lambda _, pid=pid: self._fallback_export_csv(pid),
+            )
+            parent.add(item)
+        return parent
+
+    def _show_fallback_error_menu(self, error):
+        """Show a usable dropdown menu when refresh fails in fallback mode."""
+        self.menu.clear()
+        self.menu.add(f"Error: {error}")
+        self.menu.add(rumps.separator)
+
+        if self.last_update:
+            self.menu.add(f"Last successful update: {self.last_update.strftime('%I:%M %p')}")
+            self.menu.add(rumps.separator)
+
+        retry_calls = self.calculate_api_calls(force_refresh=True)
+        self.menu.add(rumps.MenuItem(f"🔄 Retry ({retry_calls} API calls)", callback=self.refresh))
+        self.menu.add(rumps.MenuItem("🔄 Refresh Projects (1 API call)", callback=self.refresh_projects))
+        self.menu.add(rumps.separator)
+        self.menu.add(rumps.MenuItem("📋 View API Audit Log", callback=self.view_audit_log))
+        self.menu.add(rumps.MenuItem("⚙️ Edit Preferences", callback=self.edit_preferences))
+        self.menu.add(rumps.MenuItem("🆕 Update App", callback=self.update_app))
+        self.menu.add(rumps.separator)
+        self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
+
+    @rumps.timer(1)
+    def _setup_hook(self, timer):
+        """One-shot timer to hook the status item after rumps finishes launching."""
+        timer.stop()
+        self._hook_status_item()
+        self._start_data_change_observer()
+
+    @rumps.timer(1800)
+    def auto_refresh(self, _):
+        self.update_display()
+
+    @rumps.timer(60)
+    def check_external_changes(self, _):
+        """Catch a cache change whose notification never arrived.
+
+        The distributed notification normally gets here first and this is a
+        no-op; it exists so a dropped notification costs a minute of
+        staleness rather than half an hour.
+        """
+        changed_at = marker_mtime()
+        if changed_at > self._seen_data_change:
+            _debug("picked up an external data change from the marker file")
+            self.note_external_change()
+
+    @rumps.timer(60)
+    def check_billing_reminders(self, _):
+        """Send due weekly billing reminders without touching external APIs."""
+        prefs = load_preferences()
+        reminders = prefs.get('billing_reminders', [])
+        due_reminders = collect_due_reminders(
+            reminders,
+            state=self._billing_reminder_state,
+        )
+        if not due_reminders:
+            return
+
+        _debug(
+            "Billing reminders due: "
+            + ", ".join(reminder_key(reminder) for reminder in due_reminders)
+        )
+        delivered_on = datetime.now().date()
+        delivered_any = False
+        for reminder in due_reminders:
+            try:
+                title, subtitle, message = reminder_notification(reminder)
+                _debug(
+                    f"Calling notification for reminder {reminder_key(reminder)}: "
+                    f"title={title!r}, subtitle={subtitle!r}, message={message!r}"
+                )
+                rumps.notification(title, subtitle, message)
+                self._billing_reminder_state = mark_reminder_sent(
+                    reminder,
+                    delivered_on=delivered_on,
+                    state=self._billing_reminder_state,
+                )
+                _debug(
+                    f"Marked reminder sent for {reminder_key(reminder)} on "
+                    f"{delivered_on.isoformat()}"
+                )
+                delivered_any = True
+            except Exception as exc:
+                _debug(f"Billing reminder failed: {exc}")
+
+        if delivered_any:
+            save_reminder_state(self._billing_reminder_state)
+            _debug("Billing reminder state saved")
+
+    @rumps.timer(60)
+    def check_gusto_sync(self, _):
+        """Start a due Gusto push: the month-end ones (the last business day and
+        the one before it, from 13:00) take priority over the weekly one
+        (Mondays from 09:00)."""
+        if self._gusto_running:
+            return
+        try:
+            prefs = load_preferences()
+            if not gusto_sync.is_configured(prefs):
+                return
+            now = datetime.now()
+            state = gusto_sync.load_state()
+            if gusto_sync.deadline_push_due(now, state):
+                self._start_gusto_sync(manual=False, deadline=True)
+            elif gusto_sync.sync_due(now, state):
+                self._start_gusto_sync(manual=False)
+        except Exception as exc:
+            _debug(f"Gusto schedule check failed: {exc}")
+
+    def refresh(self, _):
+        force_refresh_entries()
+        self.update_display()
+
+    def refresh_projects(self, _):
+        from toggl_data import get_projects
+        cache_file = Path.home() / "Library" / "Caches" / "TogglMenuBar" / "projects.json"
+        if cache_file.exists():
+            cache_file.unlink()
+        try:
+            get_projects()
+        except Exception:
+            pass
+        self.update_display()
+
+    def edit_preferences(self, _):
+        self.prefs_controller.show_window()
+
+    def update_app(self, _):
+        self.update_controller.show_and_run()
+
+    @rumps.clicked("📋 View API Audit Log")
+    def view_audit_log(self, _):
+        log_path = Path.home() / "Library" / "Logs" / "toggl-api-audit.log"
+        terminal_command = f"tail -f {log_path}"
+        applescript = f'''
+        tell application "Terminal"
+            activate
+            do script "{terminal_command}"
+        end tell
+        '''
+        try:
+            subprocess.run(["osascript", "-e", applescript], check=True)
+        except subprocess.CalledProcessError:
+            pass
+
+
+if __name__ == "__main__":
+    FreelanceTrackerApp().run()

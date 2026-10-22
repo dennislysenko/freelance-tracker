@@ -1,0 +1,43 @@
+# Environment variables - SENSITIVE!
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Logs (contain personal data)
+*.log
+
+# macOS system files (contain personal data)
+Library/
+.vercel
+
+# QA preview artifacts
+qa_*.png
+.playwright-mcp/
+
+# Per-user Codex config (may reference workspace names)
+.codex/
+.openai_sample_key
+
+# Per-user Claude Code permissions (contain local paths)
+.claude/settings.local.json

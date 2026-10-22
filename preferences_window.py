@@ -1,0 +1,1364 @@
+"""Native macOS preferences window for Freelance Tracker.
+
+DEPRECATED (2026-04-20): The canonical preferences UI is now the in-popover
+settings view rendered by `settings_view.py` + `settings_handler.py`, wired
+through `dashboard_panel.py`. Both UIs read/write the same files
+(`preferences.json`, `.env`, `retainer_carryover.json`), so a save from either
+path is identical.
+
+This window is retained only as the fallback path for the rumps menu when the
+WebKit popover is unavailable (missing PyObjC/WebKit bindings). Slated for
+removal once that fallback is itself retired. Do not add new features here.
+"""
+
+import json
+import subprocess
+from pathlib import Path
+from AppKit import (
+    NSWindow, NSApp, NSApplication, NSTextField, NSButton, NSAlert,
+    NSMakeRect, NSBackingStoreBuffered, NSView, NSFont, NSScreen,
+    NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
+    NSWindowStyleMaskMiniaturizable, NSSwitchButton, NSOnState, NSOffState,
+    NSNumberFormatter, NSAlertFirstButtonReturn, NSTabView, NSTabViewItem,
+    NSPopUpButton, NSBox
+)
+NSBoxSeparator = 2
+from preferences import (
+    load_preferences, save_preferences, validate_preferences, DEFAULT_PREFERENCES
+)
+from integrations import load_integration_settings, save_integration_settings
+import rumps
+
+
+class PreferencesWindowController:
+    """
+    Manages the preferences window lifecycle and UI interactions.
+    Singleton pattern to prevent multiple windows.
+    """
+
+    _instance = None
+    PROJECT_TARGET_ROWS = 5
+    RETAINER_RATE_ROWS = 5
+    PROJECT_DEFINITION_ROWS = 5
+    STRIPE_PROJECT_ROWS = 5
+    BILLING_REMINDER_ROWS = 4
+
+    # Maps UI type label → (billing_type, hour_tracking)
+    BILLING_TYPE_OPTIONS = [
+        ("Hourly",                 "hourly",          None),
+        ("Hourly with cap",        "hourly_with_cap",  None),
+        ("Fixed + required hours", "fixed_monthly",    "required"),
+        ("Fixed + soft target",    "fixed_monthly",    "soft"),
+        ("Fixed flat (no tracking)", "fixed_monthly",  "none"),
+    ]
+    BILLING_REMINDER_TASK_OPTIONS = [
+        ("Invoice", "invoice"),
+    ]
+    # (label, kind, value) where kind is "weekday" or "day_of_month".
+    # Positive day_of_month = nth day of month (clamps to last day when month
+    # is short). Negative = nth-to-last day (-1 = last day).
+    BILLING_REMINDER_DAY_OPTIONS = (
+        [
+            ("Monday", "weekday", "monday"),
+            ("Tuesday", "weekday", "tuesday"),
+            ("Wednesday", "weekday", "wednesday"),
+            ("Thursday", "weekday", "thursday"),
+            ("Friday", "weekday", "friday"),
+            ("Saturday", "weekday", "saturday"),
+            ("Sunday", "weekday", "sunday"),
+        ]
+        + [(f"Day {d} of month", "day_of_month", d) for d in range(1, 29)]
+        + [
+            ("Last day of month", "day_of_month", -1),
+            ("2nd-to-last day", "day_of_month", -2),
+            ("3rd-to-last day", "day_of_month", -3),
+        ]
+    )
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self.window = None
+        self.widgets = {}
+        self.current_prefs = load_preferences()
+        self.current_integrations = load_integration_settings()
+        self._stripe_customers = []
+
+    def show_window(self):
+        """Show preferences window (create if needed)."""
+        if self.window is None:
+            self._create_window()
+        else:
+            self._load_current_values()
+
+        self.window.makeKeyAndOrderFront_(None)
+        NSApp.activateIgnoringOtherApps_(True)
+
+    def _create_window(self):
+        """Create the NSWindow with tabbed interface."""
+        # Center window on screen
+        screen_frame = NSScreen.mainScreen().frame()
+        window_width, window_height = 600, 680
+        window_x = (screen_frame.size.width - window_width) / 2
+        window_y = (screen_frame.size.height - window_height) / 2
+
+        frame = NSMakeRect(window_x, window_y, window_width, window_height)
+
+        # Window style
+        style = (NSWindowStyleMaskTitled |
+                 NSWindowStyleMaskClosable |
+                 NSWindowStyleMaskMiniaturizable)
+
+        # Use a regular NSWindow so Preferences behaves like a standard app window
+        # and stays open when the user tabs away to another app.
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            frame,
+            style,
+            NSBackingStoreBuffered,
+            False
+        )
+
+        self.window.setTitle_("Freelance Tracker Preferences")
+
+        # Get content view
+        content_view = self.window.contentView()
+
+        # Create tab view
+        tab_view = NSTabView.alloc().initWithFrame_(NSMakeRect(20, 60, 560, 580))
+
+        # Create tabs
+        self._create_caching_tab(tab_view)
+        self._create_work_planning_tab(tab_view)
+        self._create_projects_tab(tab_view)
+        self._create_billing_tab(tab_view)
+        self._create_integrations_tab(tab_view)
+        self._create_advanced_tab(tab_view)
+
+        content_view.addSubview_(tab_view)
+
+        # Create bottom buttons
+        self._create_bottom_buttons(content_view)
+        self._load_current_values()
+
+    def _create_bottom_buttons(self, parent_view):
+        """Create Reset, Cancel, and Save buttons at bottom."""
+        # Save button (right side)
+        save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(480, 20, 100, 32))
+        save_btn.setTitle_("Save")
+        save_btn.setBezelStyle_(1)  # Rounded
+        save_btn.setTarget_(self)
+        save_btn.setAction_("handleSave:")
+        parent_view.addSubview_(save_btn)
+        self.widgets['save_btn'] = save_btn
+
+        # Cancel button (middle-right)
+        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(370, 20, 100, 32))
+        cancel_btn.setTitle_("Cancel")
+        cancel_btn.setBezelStyle_(1)
+        cancel_btn.setTarget_(self)
+        cancel_btn.setAction_("handleCancel:")
+        parent_view.addSubview_(cancel_btn)
+
+        # Reset button (left side)
+        reset_btn = NSButton.alloc().initWithFrame_(NSMakeRect(20, 20, 150, 32))
+        reset_btn.setTitle_("Reset to Defaults")
+        reset_btn.setBezelStyle_(1)
+        reset_btn.setTarget_(self)
+        reset_btn.setAction_("handleReset:")
+        parent_view.addSubview_(reset_btn)
+
+    def _create_caching_tab(self, tab_view):
+        """Tab 3: Caching."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("caching")
+        tab.setLabel_("Caching")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
+
+        y = 320
+
+        self.widgets['cache_ttl_projects'] = self._create_number_field(
+            view, "Projects Cache TTL (sec):", 20, y,
+            self.current_prefs['cache_ttl_projects'], min_value=1
+        )
+        y -= 40
+
+        self.widgets['cache_ttl_today'] = self._create_number_field(
+            view, "Today Cache TTL (sec):", 20, y,
+            self.current_prefs['cache_ttl_today'], min_value=1
+        )
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def _create_work_planning_tab(self, tab_view):
+        """Tab 2: Work Planning."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("work")
+        tab.setLabel_("Work Planning")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
+
+        y = 320
+
+        # Vacation days
+        self.widgets['vacation_days'] = self._create_number_field(
+            view, "Vacation Days/Month:", 20, y,
+            self.current_prefs['vacation_days_per_month'], min_value=0
+        )
+        y -= 40
+
+        # Days-off keywords (comma-separated; drives the Google Calendar
+        # days-off match, with vacation days as the no-calendar fallback)
+        self.widgets['days_off_keywords'] = self._create_text_field(
+            view, "Days Off Keywords:", 20, y,
+            ", ".join(self.current_prefs.get('days_off_keywords', []))
+        )
+        y -= 50
+
+        # Project targets header
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 20))
+        label.setStringValue_("Project Targets (monthly hour goals):")
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        label.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(label)
+        y -= 30
+
+        # Project target rows
+        project_targets = self.current_prefs.get('project_targets', {})
+        projects_list = list(project_targets.items())
+
+        for i in range(self.PROJECT_TARGET_ROWS):
+            name = projects_list[i][0] if i < len(projects_list) else ""
+            hours = projects_list[i][1] if i < len(projects_list) else 0
+
+            # Project name field
+            name_field = NSTextField.alloc().initWithFrame_(NSMakeRect(40, y, 280, 25))
+            name_field.setStringValue_(name)
+            name_field.setPlaceholderString_(f"Project {i+1} name")
+            view.addSubview_(name_field)
+            self.widgets[f'project_name_{i}'] = name_field
+
+            # Hours field
+            hours_field = NSTextField.alloc().initWithFrame_(NSMakeRect(330, y, 80, 25))
+            hours_field.setIntValue_(hours if name else 0)
+            hours_field.setPlaceholderString_("hours")
+            formatter = NSNumberFormatter.alloc().init()
+            formatter.setMinimum_(0)
+            hours_field.setFormatter_(formatter)
+            view.addSubview_(hours_field)
+            self.widgets[f'project_hours_{i}'] = hours_field
+
+            y -= 35
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def _get_toggl_project_names(self):
+        """Load project names from the Toggl projects cache (alphabetical)."""
+        from preferences import CACHE_DIR
+        import json as _json
+        cache_file = CACHE_DIR / "projects.json"
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r') as f:
+                    projects = _json.load(f)
+                return sorted(p['name'] for p in projects.values() if p.get('name'))
+            except Exception:
+                pass
+        return []
+
+    def _create_projects_tab(self, tab_view):
+        """Tab: Projects — billing type definitions per project."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("projects")
+        tab.setLabel_("Projects")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
+
+        # --- Header ---
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 524, 540, 20))
+        header.setStringValue_("Project Billing Definitions")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(header)
+
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 504, 540, 16))
+        help_text.setStringValue_(
+            "Fixed + required hours: carry over monthly  ·  Fixed + soft target: display only  ·  Fixed flat: freeform amount"
+        )
+        help_text.setBezeled_(False)
+        help_text.setDrawsBackground_(False)
+        help_text.setEditable_(False)
+        help_text.setFont_(NSFont.systemFontOfSize_(10))
+        view.addSubview_(help_text)
+
+        # Column headers
+        for cx, cw, ct in [(10, 230, "Project"), (248, 302, "Billing Type")]:
+            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(cx, 484, cw, 16))
+            lbl.setStringValue_(ct)
+            lbl.setBezeled_(False)
+            lbl.setDrawsBackground_(False)
+            lbl.setEditable_(False)
+            lbl.setFont_(NSFont.boldSystemFontOfSize_(10))
+            view.addSubview_(lbl)
+
+        # --- Row layout constants ---
+        Y_ROW_BASE = 452    # popup y for row 0
+        ROW_STRIDE = 86     # vertical distance between rows
+        EXTRA_OFFSET = 28   # extra fields are this far below popup y
+        EXTRA2_OFFSET = 54  # third line (advanced carryover)
+
+        from carryover import get_balance, get_previous_month_str as _prev_month_str
+
+        projects_config = self.current_prefs.get('projects', {})
+        proj_list = list(projects_config.items())
+        toggl_names = self._get_toggl_project_names()
+        type_labels = [opt[0] for opt in self.BILLING_TYPE_OPTIONS]
+        _ym, _ml = _prev_month_str()
+
+        def make_plain_field(x, yy, w, value):
+            """Plain text field (no formatter) so cmd+backspace works."""
+            f = NSTextField.alloc().initWithFrame_(NSMakeRect(x, yy, w, 22))
+            if value:
+                v = float(value)
+                f.setStringValue_(str(int(v)) if v == int(v) else str(v))
+            else:
+                f.setStringValue_("")
+            f.setPlaceholderString_("0")
+            view.addSubview_(f)
+            return f
+
+        def make_field_label(x, yy, w, text):
+            lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(x, yy + 3, w, 16))
+            lbl.setStringValue_(text)
+            lbl.setBezeled_(False)
+            lbl.setDrawsBackground_(False)
+            lbl.setEditable_(False)
+            lbl.setFont_(NSFont.systemFontOfSize_(11))
+            view.addSubview_(lbl)
+            return lbl
+
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            popup_y = Y_ROW_BASE - i * ROW_STRIDE
+            extra_y = popup_y - EXTRA_OFFSET
+            extra2_y = popup_y - EXTRA2_OFFSET
+            defn = proj_list[i][1] if i < len(proj_list) else {}
+            proj_name = proj_list[i][0] if i < len(proj_list) else ""
+
+            # Separator line between rows
+            if i > 0:
+                sep_y = popup_y + 24 + 3  # 3px above this row's popup top
+                sep = NSBox.alloc().initWithFrame_(NSMakeRect(5, sep_y, 545, 1))
+                sep.setBoxType_(NSBoxSeparator)
+                view.addSubview_(sep)
+
+            # Top line: Project name popup
+            name_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(10, popup_y, 230, 24), False
+            )
+            name_popup.addItemWithTitle_("—")
+            names_for_row = list(toggl_names)
+            if proj_name and proj_name not in names_for_row:
+                names_for_row.insert(0, proj_name)
+            for n in names_for_row:
+                name_popup.addItemWithTitle_(n)
+            name_popup.selectItemWithTitle_(proj_name if proj_name else "—")
+            view.addSubview_(name_popup)
+            self.widgets[f'pd_name_{i}'] = name_popup
+
+            # Top line: Billing type popup
+            type_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(248, popup_y, 302, 24), False
+            )
+            for lbl in type_labels:
+                type_popup.addItemWithTitle_(lbl)
+            type_popup.selectItemWithTitle_(self._defn_to_type_label(defn))
+            type_popup.setTarget_(self)
+            type_popup.setAction_("handleProjectTypeChange:")
+            view.addSubview_(type_popup)
+            self.widgets[f'pd_type_{i}'] = type_popup
+
+            # Bottom line: extra fields (shown/hidden based on billing type)
+            # Monthly $ (fixed_monthly types)
+            lbl_mo = make_field_label(10, extra_y, 72, "Monthly $")
+            f_monthly = make_plain_field(85, extra_y, 100, defn.get('monthly_amount', 0))
+            self.widgets[f'pd_lbl_monthly_{i}'] = lbl_mo
+            self.widgets[f'pd_monthly_{i}'] = f_monthly
+
+            # Target h (fixed/required and fixed/soft)
+            lbl_tgt = make_field_label(200, extra_y, 60, "Target h")
+            f_target = make_plain_field(263, extra_y, 80, defn.get('target_hours', 0))
+            self.widgets[f'pd_lbl_target_{i}'] = lbl_tgt
+            self.widgets[f'pd_target_{i}'] = f_target
+
+            # Rate $/h (hourly_with_cap)
+            lbl_rate = make_field_label(10, extra_y, 66, "Rate $/h")
+            f_rate = make_plain_field(79, extra_y, 100, defn.get('hourly_rate', 0))
+            self.widgets[f'pd_lbl_rate_{i}'] = lbl_rate
+            self.widgets[f'pd_rate_{i}'] = f_rate
+
+            # Cap h (hourly_with_cap)
+            lbl_cap = make_field_label(200, extra_y, 48, "Cap h")
+            f_cap = make_plain_field(251, extra_y, 80, defn.get('cap_hours', 0))
+            self.widgets[f'pd_lbl_cap_{i}'] = lbl_cap
+            self.widgets[f'pd_cap_{i}'] = f_cap
+
+            # Last billed date (hourly_with_cap only — replaces manual carryover when set)
+            last_billed_val = defn.get('last_billed_date', '') if defn else ''
+            lbl_last_billed = make_field_label(355, extra_y, 72, "Last billed")
+            f_last_billed = NSTextField.alloc().initWithFrame_(NSMakeRect(430, extra_y, 110, 22))
+            f_last_billed.setStringValue_(last_billed_val)
+            f_last_billed.setPlaceholderString_("YYYY-MM-DD")
+            view.addSubview_(f_last_billed)
+            self.widgets[f'pd_lbl_last_billed_{i}'] = lbl_last_billed
+            self.widgets[f'pd_last_billed_{i}'] = f_last_billed
+
+            # Manual carryover h (advanced — used when last billed date is not set)
+            carry_val = get_balance(proj_name, _ym) if proj_name else 0.0
+            lbl_carry = make_field_label(10, extra2_y, 260, "Manual start of month carryover h (advanced)")
+            f_carry = make_plain_field(275, extra2_y, 80, carry_val)
+            self.widgets[f'pd_lbl_carryover_{i}'] = lbl_carry
+            self.widgets[f'pd_carryover_{i}'] = f_carry
+
+            # Apply initial visibility
+            self._update_project_row_visibility(i)
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def _create_integrations_tab(self, tab_view):
+        """Tab: Integrations credentials plus Stripe/Upwork project mappings."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("integrations")
+        tab.setLabel_("Integrations")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
+
+        y = 510
+
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        header.setStringValue_("Integration Credentials")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(header)
+        y -= 32
+
+        self.widgets['toggl_api_token'] = self._create_secure_field(
+            view, "Toggl API Token:", 20, y, self.current_integrations.get('TOGGL_API_TOKEN', '')
+        )
+        y -= 40
+
+        self.widgets['toggl_workspace_id'] = self._create_text_field(
+            view, "Toggl Workspace ID:", 20, y, self.current_integrations.get('TOGGL_WORKSPACE_ID', '')
+        )
+        y -= 40
+
+        self.widgets['stripe_api_key'] = self._create_secure_field(
+            view, "Stripe API Key:", 20, y, self.current_integrations.get('STRIPE_API_KEY', '')
+        )
+        y -= 40
+
+        self.widgets['calendar_ics_url'] = self._create_secure_field(
+            view, "Google Calendar ICS URL:", 20, y,
+            self.current_integrations.get('GOOGLE_CALENDAR_ICS_URL', '')
+        )
+        y -= 52
+
+        map_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 360, 20))
+        map_header.setStringValue_("Project Billing Mapping")
+        map_header.setBezeled_(False)
+        map_header.setDrawsBackground_(False)
+        map_header.setEditable_(False)
+        map_header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(map_header)
+
+        refresh_btn = NSButton.alloc().initWithFrame_(NSMakeRect(400, y - 4, 140, 28))
+        refresh_btn.setTitle_("Refresh Customers")
+        refresh_btn.setBezelStyle_(1)
+        refresh_btn.setTarget_(self)
+        refresh_btn.setAction_("handleRefreshStripeCustomers:")
+        view.addSubview_(refresh_btn)
+        y -= 28
+
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 32))
+        help_text.setStringValue_(
+            "Map Toggl projects to Stripe customers and optional Upwork contract ids. Upwork ids power the dashboard shortcut that opens the matching work diary for today."
+        )
+        help_text.setBezeled_(False)
+        help_text.setDrawsBackground_(False)
+        help_text.setEditable_(False)
+        help_text.setFont_(NSFont.systemFontOfSize_(11))
+        view.addSubview_(help_text)
+        y -= 44
+
+        for x, width, label_text in (
+            (10, 150, "Project"),
+            (168, 220, "Stripe Customer"),
+            (396, 150, "Upwork Contract ID"),
+        ):
+            label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, width, 16))
+            label.setStringValue_(label_text)
+            label.setBezeled_(False)
+            label.setDrawsBackground_(False)
+            label.setEditable_(False)
+            label.setFont_(NSFont.boldSystemFontOfSize_(11))
+            view.addSubview_(label)
+        y -= 26
+
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            row_y = y - i * 50
+            if i > 0:
+                sep = NSBox.alloc().initWithFrame_(NSMakeRect(5, row_y + 31, 545, 1))
+                sep.setBoxType_(NSBoxSeparator)
+                view.addSubview_(sep)
+
+            project_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(10, row_y, 150, 24), False
+            )
+            project_popup.addItemWithTitle_("—")
+            view.addSubview_(project_popup)
+            self.widgets[f'stripe_project_name_{i}'] = project_popup
+
+            customer_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(168, row_y, 220, 24), False
+            )
+            customer_popup.addItemWithTitle_("—")
+            view.addSubview_(customer_popup)
+            self.widgets[f'stripe_customer_{i}'] = customer_popup
+
+            upwork_field = NSTextField.alloc().initWithFrame_(NSMakeRect(396, row_y, 144, 24))
+            upwork_field.setPlaceholderString_("12345678")
+            view.addSubview_(upwork_field)
+            self.widgets[f'upwork_contract_{i}'] = upwork_field
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def _create_billing_tab(self, tab_view):
+        """Tab: Billing reminder preferences."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("billing")
+        tab.setLabel_("Billing")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 550))
+
+        y = 512
+
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        header.setStringValue_("Billing Reminders")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(header)
+        y -= 28
+
+        help_text = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 62))
+        help_text.setStringValue_(
+            "Weekly local notifications sent by the app while it is running. "
+            "Use 24-hour time like 14:00 for a 2 PM Friday invoice reminder.\n"
+            "Notifications post as \"Python\" — if you use a macOS Focus, add "
+            "Python to that Focus's allowed apps, and note that full Do Not "
+            "Disturb will suppress them entirely."
+        )
+        help_text.setBezeled_(False)
+        help_text.setDrawsBackground_(False)
+        help_text.setEditable_(False)
+        help_text.setFont_(NSFont.systemFontOfSize_(11))
+        view.addSubview_(help_text)
+        y -= 72
+
+        for x, width, label_text in (
+            (10, 52, "On"),
+            (68, 180, "Project"),
+            (254, 80, "Task"),
+            (340, 140, "Day / Date"),
+            (486, 54, "Time"),
+        ):
+            label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, width, 16))
+            label.setStringValue_(label_text)
+            label.setBezeled_(False)
+            label.setDrawsBackground_(False)
+            label.setEditable_(False)
+            label.setFont_(NSFont.boldSystemFontOfSize_(11))
+            view.addSubview_(label)
+        y -= 26
+
+        for i in range(self.BILLING_REMINDER_ROWS):
+            row_y = y - i * 44
+            if i > 0:
+                sep = NSBox.alloc().initWithFrame_(NSMakeRect(5, row_y + 31, 545, 1))
+                sep.setBoxType_(NSBoxSeparator)
+                view.addSubview_(sep)
+
+            enabled = NSButton.alloc().initWithFrame_(NSMakeRect(10, row_y - 1, 44, 24))
+            enabled.setButtonType_(NSSwitchButton)
+            enabled.setTitle_("")
+            enabled.setState_(NSOffState)
+            view.addSubview_(enabled)
+            self.widgets[f'billing_reminder_enabled_{i}'] = enabled
+
+            project_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(68, row_y, 180, 24), False
+            )
+            project_popup.addItemWithTitle_("—")
+            view.addSubview_(project_popup)
+            self.widgets[f'billing_reminder_project_{i}'] = project_popup
+
+            task_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(254, row_y, 80, 24), False
+            )
+            for label_text, _task in self.BILLING_REMINDER_TASK_OPTIONS:
+                task_popup.addItemWithTitle_(label_text)
+            task_popup.selectItemAtIndex_(0)
+            view.addSubview_(task_popup)
+            self.widgets[f'billing_reminder_task_{i}'] = task_popup
+
+            weekday_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+                NSMakeRect(340, row_y, 140, 24), False
+            )
+            for label_text, _kind, _value in self.BILLING_REMINDER_DAY_OPTIONS:
+                weekday_popup.addItemWithTitle_(label_text)
+            weekday_popup.selectItemWithTitle_("Friday")
+            view.addSubview_(weekday_popup)
+            self.widgets[f'billing_reminder_weekday_{i}'] = weekday_popup
+
+            time_field = NSTextField.alloc().initWithFrame_(NSMakeRect(486, row_y, 54, 24))
+            time_field.setPlaceholderString_("14:00")
+            view.addSubview_(time_field)
+            self.widgets[f'billing_reminder_time_{i}'] = time_field
+
+        test_btn_y = y - self.BILLING_REMINDER_ROWS * 44 - 16
+        test_btn = NSButton.alloc().initWithFrame_(NSMakeRect(10, test_btn_y, 200, 28))
+        test_btn.setTitle_("Send Test Notification")
+        test_btn.setBezelStyle_(1)
+        test_btn.setTarget_(self)
+        test_btn.setAction_("handleTestBillingNotification:")
+        view.addSubview_(test_btn)
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def handleTestBillingNotification_(self, sender):
+        """Post an example billing reminder notification so the user can preview it."""
+        from billing_reminders import reminder_notification
+
+        title, subtitle, message = reminder_notification({
+            "project_name": "Example Project",
+            "task": "invoice",
+        })
+        try:
+            rumps.notification(title, subtitle, message)
+        except Exception as exc:
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("Could not send test notification")
+            alert.setInformativeText_(str(exc))
+            alert.addButtonWithTitle_("OK")
+            alert.runModal()
+
+    def _create_advanced_tab(self, tab_view):
+        """Tab: Advanced utilities."""
+        tab = NSTabViewItem.alloc().initWithIdentifier_("advanced")
+        tab.setLabel_("Advanced")
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 370))
+
+        y = 320
+        info = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 500, 34))
+        info.setStringValue_("Advanced tools for troubleshooting and diagnostics.")
+        info.setBezeled_(False)
+        info.setDrawsBackground_(False)
+        info.setEditable_(False)
+        info.setFont_(NSFont.systemFontOfSize_(12))
+        view.addSubview_(info)
+        y -= 60
+
+        audit_btn = NSButton.alloc().initWithFrame_(NSMakeRect(20, y, 170, 28))
+        audit_btn.setTitle_("View API Audit Log")
+        audit_btn.setBezelStyle_(1)
+        audit_btn.setTarget_(self)
+        audit_btn.setAction_("handleOpenAuditLog:")
+        view.addSubview_(audit_btn)
+        y -= 48
+
+        mcp_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        mcp_header.setStringValue_("Agents (MCP)")
+        mcp_header.setBezeled_(False)
+        mcp_header.setDrawsBackground_(False)
+        mcp_header.setEditable_(False)
+        mcp_header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(mcp_header)
+        y -= 28
+        self.widgets['mcp_enabled'] = self._create_checkbox(
+            view, "Enable MCP server (agents can read hours and projections)", 20, y,
+            bool(self.current_prefs.get('mcp_enabled', False)),
+        )
+        y -= 28
+        self.widgets['mcp_anonymize'] = self._create_checkbox(
+            view, "Anonymize client names and dollar amounts", 20, y,
+            bool(self.current_prefs.get('mcp_anonymize', False)),
+        )
+        y -= 28
+        self.widgets['mcp_write_enabled'] = self._create_checkbox(
+            view, "Allow agents to log and edit time (one entry at a time)", 20, y,
+            bool(self.current_prefs.get('mcp_write_enabled', False)),
+        )
+        y -= 40
+
+        gusto_header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, 520, 20))
+        gusto_header.setStringValue_("Gusto (log in from the dashboard: Settings → Integrations → Gusto)")
+        gusto_header.setBezeled_(False)
+        gusto_header.setDrawsBackground_(False)
+        gusto_header.setEditable_(False)
+        gusto_header.setFont_(NSFont.boldSystemFontOfSize_(12))
+        view.addSubview_(gusto_header)
+        y -= 28
+        self.widgets['gusto_sync_enabled'] = self._create_checkbox(
+            view, "Push hours to Gusto weekly. Project:", 20, y,
+            bool(self.current_prefs.get('gusto_sync_enabled', False)),
+        )
+        gusto_project_field = NSTextField.alloc().initWithFrame_(NSMakeRect(300, y, 240, 24))
+        gusto_project_field.setStringValue_(self.current_prefs.get('gusto_project', '') or '')
+        gusto_project_field.setPlaceholderString_("Toggl project name")
+        view.addSubview_(gusto_project_field)
+        self.widgets['gusto_project'] = gusto_project_field
+
+        tab.setView_(view)
+        tab_view.addTabViewItem_(tab)
+
+    def _update_project_row_visibility(self, i):
+        """Show/hide extra fields for row i based on selected billing type."""
+        type_popup = self.widgets.get(f'pd_type_{i}')
+        if type_popup is None:
+            return
+        label = type_popup.titleOfSelectedItem()
+        billing_type, hour_tracking = self._type_label_to_defn_fields(label)
+
+        show_monthly = billing_type == 'fixed_monthly'
+        show_target = billing_type == 'fixed_monthly' and hour_tracking in ('required', 'soft')
+        show_rate = billing_type == 'hourly_with_cap'
+        show_cap = billing_type == 'hourly_with_cap'
+        show_last_billed = billing_type == 'hourly_with_cap'
+        show_carryover = billing_type == 'hourly_with_cap' or \
+                         (billing_type == 'fixed_monthly' and hour_tracking == 'required')
+        # Hide manual carryover when last_billed_date is filled (date mode takes over)
+        if billing_type == 'hourly_with_cap':
+            last_billed_widget = self.widgets.get(f'pd_last_billed_{i}')
+            if last_billed_widget and last_billed_widget.stringValue().strip():
+                show_carryover = False
+
+        self.widgets[f'pd_lbl_monthly_{i}'].setHidden_(not show_monthly)
+        self.widgets[f'pd_monthly_{i}'].setHidden_(not show_monthly)
+        self.widgets[f'pd_lbl_target_{i}'].setHidden_(not show_target)
+        self.widgets[f'pd_target_{i}'].setHidden_(not show_target)
+        self.widgets[f'pd_lbl_rate_{i}'].setHidden_(not show_rate)
+        self.widgets[f'pd_rate_{i}'].setHidden_(not show_rate)
+        self.widgets[f'pd_lbl_cap_{i}'].setHidden_(not show_cap)
+        self.widgets[f'pd_cap_{i}'].setHidden_(not show_cap)
+        self.widgets[f'pd_lbl_last_billed_{i}'].setHidden_(not show_last_billed)
+        self.widgets[f'pd_last_billed_{i}'].setHidden_(not show_last_billed)
+        self.widgets[f'pd_lbl_carryover_{i}'].setHidden_(not show_carryover)
+        self.widgets[f'pd_carryover_{i}'].setHidden_(not show_carryover)
+
+    def handleProjectTypeChange_(self, sender):
+        """Called when a billing type dropdown changes — updates field visibility."""
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            if self.widgets.get(f'pd_type_{i}') == sender:
+                self._update_project_row_visibility(i)
+                break
+
+    def _defn_to_type_label(self, defn):
+        """Convert a project definition dict to its UI type label string."""
+        billing_type = defn.get('billing_type', 'hourly')
+        hour_tracking = defn.get('hour_tracking')
+        for label, bt, ht in self.BILLING_TYPE_OPTIONS:
+            if bt == billing_type and ht == hour_tracking:
+                return label
+        return "Hourly"
+
+    def _type_label_to_defn_fields(self, label):
+        """Convert a UI type label to (billing_type, hour_tracking) tuple."""
+        for lbl, bt, ht in self.BILLING_TYPE_OPTIONS:
+            if lbl == label:
+                return bt, ht
+        return "hourly", None
+
+    def _create_number_field(self, parent, label_text, x, y, default_value, min_value=None):
+        """Helper: create labeled number field."""
+        # Label
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, 220, 20))
+        label.setStringValue_(label_text)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        parent.addSubview_(label)
+
+        # Input field
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(x + 230, y - 3, 150, 25))
+
+        # Number formatter
+        formatter = NSNumberFormatter.alloc().init()
+        if min_value is not None:
+            formatter.setMinimum_(min_value)
+
+        field.setFormatter_(formatter)
+        field.setIntValue_(default_value)
+        parent.addSubview_(field)
+
+        return field
+
+    def _create_text_field(self, parent, label_text, x, y, default_value):
+        """Helper: create labeled text field."""
+        # Label
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, 220, 20))
+        label.setStringValue_(label_text)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        parent.addSubview_(label)
+
+        # Input field
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(x + 230, y - 3, 250, 25))
+        field.setStringValue_(default_value)
+        parent.addSubview_(field)
+
+        return field
+
+    def _create_secure_field(self, parent, label_text, x, y, default_value):
+        """Helper: create labeled credentials field."""
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, 220, 20))
+        label.setStringValue_(label_text)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        parent.addSubview_(label)
+
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(x + 230, y - 3, 250, 25))
+        field.setStringValue_(default_value)
+        parent.addSubview_(field)
+        return field
+
+    def _load_stripe_customers(self, api_key=None):
+        """Fetch Stripe customers for both settings and invoice flows."""
+        from stripe_invoice import list_customers
+
+        key = api_key if api_key is not None else self.current_integrations.get('STRIPE_API_KEY', '')
+        try:
+            self._stripe_customers = list_customers(api_key=key)
+        except Exception:
+            self._stripe_customers = []
+        return self._stripe_customers
+
+    def _stripe_customer_popup_title(self, customer):
+        """Compact customer picker label with id suffix for disambiguation."""
+        base = customer.get('display_name') or customer.get('id') or "Unknown customer"
+        return f"{base} ({customer.get('id', '')})"
+
+    def _populate_stripe_project_popups(self):
+        """Refresh project dropdown options from cached Toggl projects."""
+        toggl_names = self._get_toggl_project_names()
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets.get(f'stripe_project_name_{i}')
+            if popup is None:
+                continue
+            current = popup.titleOfSelectedItem()
+            popup.removeAllItems()
+            popup.addItemWithTitle_("—")
+            for name in toggl_names:
+                popup.addItemWithTitle_(name)
+            if current and popup.indexOfItemWithTitle_(current) != -1:
+                popup.selectItemWithTitle_(current)
+            else:
+                popup.selectItemWithTitle_("—")
+
+    def _populate_billing_reminder_project_popups(self, selected_names=None):
+        """Refresh billing reminder project options from cached Toggl projects."""
+        selected_names = selected_names or {}
+        toggl_names = self._get_toggl_project_names()
+        for i in range(self.BILLING_REMINDER_ROWS):
+            popup = self.widgets.get(f'billing_reminder_project_{i}')
+            if popup is None:
+                continue
+            selected_name = selected_names.get(i, "")
+            popup.removeAllItems()
+            popup.addItemWithTitle_("—")
+            for name in toggl_names:
+                popup.addItemWithTitle_(name)
+            if selected_name:
+                if popup.indexOfItemWithTitle_(selected_name) == -1:
+                    popup.addItemWithTitle_(selected_name)
+                popup.selectItemWithTitle_(selected_name)
+            else:
+                popup.selectItemWithTitle_("—")
+
+    def _populate_stripe_customer_popups(self, selected_ids=None):
+        """Load Stripe customer choices into every customer popup."""
+        selected_ids = selected_ids or {}
+        choices = [("—", "")]
+        choices.extend(
+            (self._stripe_customer_popup_title(customer), customer['id'])
+            for customer in self._stripe_customers
+        )
+
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets.get(f'stripe_customer_{i}')
+            if popup is None:
+                continue
+            selected_id = selected_ids.get(i, "")
+            popup.removeAllItems()
+            title_for_selected = "—"
+            for title, customer_id in choices:
+                popup.addItemWithTitle_(title)
+                popup.lastItem().setRepresentedObject_(customer_id)
+                if customer_id and customer_id == selected_id:
+                    title_for_selected = title
+            if selected_id and title_for_selected == "—":
+                fallback_title = selected_id
+                popup.addItemWithTitle_(fallback_title)
+                popup.lastItem().setRepresentedObject_(selected_id)
+                title_for_selected = fallback_title
+            popup.selectItemWithTitle_(title_for_selected)
+
+    def _create_checkbox(self, parent, label_text, x, y, checked):
+        """Helper: create checkbox."""
+        checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(x, y, 400, 25))
+        checkbox.setButtonType_(NSSwitchButton)
+        checkbox.setTitle_(label_text)
+        checkbox.setState_(NSOnState if checked else NSOffState)
+        parent.addSubview_(checkbox)
+
+        return checkbox
+
+    def _billing_task_label_to_value(self, label):
+        """Convert billing reminder task label to stored value."""
+        for task_label, value in self.BILLING_REMINDER_TASK_OPTIONS:
+            if task_label == label:
+                return value
+        return "invoice"
+
+    def _billing_task_value_to_label(self, value):
+        """Convert stored billing reminder task value to UI label."""
+        for task_label, task_value in self.BILLING_REMINDER_TASK_OPTIONS:
+            if task_value == value:
+                return task_label
+        return "Invoice"
+
+    def _billing_day_label_to_fields(self, label):
+        """Convert a Day/Date popup label to a (kind, value) tuple."""
+        for lbl, kind, value in self.BILLING_REMINDER_DAY_OPTIONS:
+            if lbl == label:
+                return kind, value
+        return "weekday", "friday"
+
+    def _billing_reminder_day_label(self, reminder):
+        """Convert a stored reminder dict to its Day/Date popup label."""
+        day_of_month = reminder.get('day_of_month')
+        if day_of_month:
+            for label, kind, value in self.BILLING_REMINDER_DAY_OPTIONS:
+                if kind == "day_of_month" and value == day_of_month:
+                    return label
+        weekday = reminder.get('weekday', 'friday')
+        for label, kind, value in self.BILLING_REMINDER_DAY_OPTIONS:
+            if kind == "weekday" and value == weekday:
+                return label
+        return "Friday"
+
+    def _load_current_values(self):
+        """Load current preferences into UI widgets."""
+        self.current_prefs = load_preferences()
+        self.current_integrations = load_integration_settings()
+
+        # Load cache TTL values
+        self.widgets['cache_ttl_projects'].setIntValue_(self.current_prefs['cache_ttl_projects'])
+        self.widgets['cache_ttl_today'].setIntValue_(self.current_prefs['cache_ttl_today'])
+
+        # Load vacation days
+        self.widgets['vacation_days'].setIntValue_(self.current_prefs['vacation_days_per_month'])
+        self.widgets['days_off_keywords'].setStringValue_(
+            ", ".join(self.current_prefs.get('days_off_keywords', []))
+        )
+
+        self.widgets['toggl_api_token'].setStringValue_(self.current_integrations.get('TOGGL_API_TOKEN', ''))
+        self.widgets['toggl_workspace_id'].setStringValue_(self.current_integrations.get('TOGGL_WORKSPACE_ID', ''))
+        self.widgets['stripe_api_key'].setStringValue_(self.current_integrations.get('STRIPE_API_KEY', ''))
+        self.widgets['calendar_ics_url'].setStringValue_(self.current_integrations.get('GOOGLE_CALENDAR_ICS_URL', ''))
+
+        # Load project targets into name/hours field pairs
+        project_targets = self.current_prefs.get('project_targets', {})
+        projects_list = list(project_targets.items())
+
+        for i in range(self.PROJECT_TARGET_ROWS):
+            if i < len(projects_list):
+                name, hours = projects_list[i]
+                self.widgets[f'project_name_{i}'].setStringValue_(name)
+                self.widgets[f'project_hours_{i}'].setIntValue_(hours)
+            else:
+                self.widgets[f'project_name_{i}'].setStringValue_("")
+                self.widgets[f'project_hours_{i}'].setIntValue_(0)
+
+        # Load project definitions
+        from carryover import get_balance, get_previous_month_str as _prev_month_str
+        _ym, _ml = _prev_month_str()
+
+        def _fmt(v):
+            v = float(v or 0)
+            return (str(int(v)) if v == int(v) else str(v)) if v else ""
+
+        def _fmt_carry(v):
+            return (str(int(v)) if v == int(v) else str(v)) if v else ""
+
+        projects_config = self.current_prefs.get('projects', {})
+        proj_list = list(projects_config.items())
+
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            if i < len(proj_list):
+                name, defn = proj_list[i]
+                name_popup = self.widgets[f'pd_name_{i}']
+                # Add name to popup if missing (e.g. cache was cleared)
+                if name_popup.indexOfItemWithTitle_(name) == -1:
+                    name_popup.insertItemWithTitle_atIndex_(name, 1)
+                name_popup.selectItemWithTitle_(name)
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_(self._defn_to_type_label(defn))
+                self.widgets[f'pd_monthly_{i}'].setStringValue_(_fmt(defn.get('monthly_amount')))
+                self.widgets[f'pd_target_{i}'].setStringValue_(_fmt(defn.get('target_hours')))
+                self.widgets[f'pd_cap_{i}'].setStringValue_(_fmt(defn.get('cap_hours')))
+                self.widgets[f'pd_rate_{i}'].setStringValue_(_fmt(defn.get('hourly_rate')))
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_(defn.get('last_billed_date', ''))
+            else:
+                name = ""
+                self.widgets[f'pd_name_{i}'].selectItemWithTitle_("—")
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("Hourly")
+                self.widgets[f'pd_monthly_{i}'].setStringValue_("")
+                self.widgets[f'pd_target_{i}'].setStringValue_("")
+                self.widgets[f'pd_cap_{i}'].setStringValue_("")
+                self.widgets[f'pd_rate_{i}'].setStringValue_("")
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
+
+            # Carryover: refresh month label + value from carryover store
+            carry_val = get_balance(name, _ym) if name else 0.0
+            self.widgets[f'pd_lbl_carryover_{i}'].setStringValue_(f"{_ml} carryover h")
+            self.widgets[f'pd_carryover_{i}'].setStringValue_(_fmt_carry(carry_val))
+            self._update_project_row_visibility(i)
+
+        self._populate_stripe_project_popups()
+        self._load_stripe_customers(self.current_integrations.get('STRIPE_API_KEY', ''))
+        stripe_project_customers = self.current_prefs.get('stripe_project_customers', {})
+        upwork_contracts = self.current_prefs.get('upwork_contracts', {})
+        selected_customer_ids = {}
+        stripe_items = list(stripe_project_customers.items())
+        for project_name, contract_id in upwork_contracts.items():
+            if project_name not in stripe_project_customers:
+                stripe_items.append((project_name, ""))
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets[f'stripe_project_name_{i}']
+            if i < len(stripe_items):
+                name, customer_id = stripe_items[i]
+                if popup.indexOfItemWithTitle_(name) == -1:
+                    popup.addItemWithTitle_(name)
+                popup.selectItemWithTitle_(name)
+                selected_customer_ids[i] = customer_id
+                self.widgets[f'upwork_contract_{i}'].setStringValue_(upwork_contracts.get(name, ""))
+            else:
+                popup.selectItemWithTitle_("—")
+                self.widgets[f'upwork_contract_{i}'].setStringValue_("")
+        self._populate_stripe_customer_popups(selected_customer_ids)
+
+        billing_reminders = list(self.current_prefs.get('billing_reminders', []))
+        selected_reminder_projects = {}
+        for i in range(self.BILLING_REMINDER_ROWS):
+            reminder = billing_reminders[i] if i < len(billing_reminders) else {}
+            selected_reminder_projects[i] = reminder.get('project_name', '')
+        self._populate_billing_reminder_project_popups(selected_reminder_projects)
+
+        for i in range(self.BILLING_REMINDER_ROWS):
+            reminder = billing_reminders[i] if i < len(billing_reminders) else {}
+            self.widgets[f'billing_reminder_enabled_{i}'].setState_(
+                NSOnState if reminder.get('enabled', False) else NSOffState
+            )
+            self.widgets[f'billing_reminder_task_{i}'].selectItemWithTitle_(
+                self._billing_task_value_to_label(reminder.get('task', 'invoice'))
+            )
+            self.widgets[f'billing_reminder_weekday_{i}'].selectItemWithTitle_(
+                self._billing_reminder_day_label(reminder)
+            )
+            self.widgets[f'billing_reminder_time_{i}'].setStringValue_(
+                reminder.get('time', '')
+            )
+
+    def handleSave_(self, sender):
+        """Save button clicked."""
+        # Build project_targets dict from 5 name/hours field pairs
+        project_targets = {}
+        for i in range(self.PROJECT_TARGET_ROWS):
+            name = self.widgets[f'project_name_{i}'].stringValue().strip()
+            hours = self.widgets[f'project_hours_{i}'].intValue()
+            if name:  # Only add if name is not empty
+                project_targets[name] = hours
+
+        # Build projects dict from project definition rows
+        from carryover import set_balance, get_previous_month_str as _prev_month_str
+        _ym, _ = _prev_month_str()
+
+        def _read_float(key):
+            try:
+                return float(self.widgets[key].stringValue() or 0)
+            except (ValueError, TypeError):
+                return 0.0
+
+        projects_config = {}
+        for i in range(self.PROJECT_DEFINITION_ROWS):
+            name = self.widgets[f'pd_name_{i}'].titleOfSelectedItem()
+            if not name or name == "—":
+                continue
+            type_label = self.widgets[f'pd_type_{i}'].titleOfSelectedItem()
+            billing_type, hour_tracking = self._type_label_to_defn_fields(type_label)
+            defn = {'billing_type': billing_type}
+
+            if billing_type == 'hourly_with_cap':
+                defn['hourly_rate'] = _read_float(f'pd_rate_{i}')
+                defn['cap_hours'] = _read_float(f'pd_cap_{i}')
+                last_billed = self.widgets[f'pd_last_billed_{i}'].stringValue().strip()
+                if last_billed:
+                    defn['last_billed_date'] = last_billed
+            elif billing_type == 'fixed_monthly':
+                defn['monthly_amount'] = _read_float(f'pd_monthly_{i}')
+                defn['hour_tracking'] = hour_tracking
+                if hour_tracking in ('required', 'soft'):
+                    defn['target_hours'] = _read_float(f'pd_target_{i}')
+            # billing_type == 'hourly': no extra fields needed
+            projects_config[name] = defn
+
+            # Write carryover override only if the field has content (empty = leave existing value)
+            # For hourly_with_cap: skip carryover if last_billed_date is set (date takes precedence)
+            needs_carryover = billing_type == 'hourly_with_cap' or                               (billing_type == 'fixed_monthly' and hour_tracking == 'required')
+            if needs_carryover:
+                has_last_billed = billing_type == 'hourly_with_cap' and defn.get('last_billed_date')
+                if has_last_billed:
+                    set_balance(name, _ym, 0.0)  # clear carryover — date mode takes over
+                else:
+                    carry_str = self.widgets[f'pd_carryover_{i}'].stringValue().strip()
+                    if carry_str:
+                        try:
+                            set_balance(name, _ym, float(carry_str))
+                        except ValueError:
+                            pass
+
+        stripe_project_customers = {}
+        upwork_contracts = {}
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            project_name = self.widgets[f'stripe_project_name_{i}'].titleOfSelectedItem()
+            customer_popup = self.widgets[f'stripe_customer_{i}']
+            selected_item = customer_popup.selectedItem()
+            customer_id = str(selected_item.representedObject() or "").strip() if selected_item else ""
+            upwork_contract_id = self.widgets[f'upwork_contract_{i}'].stringValue().strip()
+            if project_name and project_name != "—" and customer_id:
+                stripe_project_customers[project_name] = customer_id
+            if project_name and project_name != "—" and upwork_contract_id:
+                upwork_contracts[project_name] = upwork_contract_id
+
+        billing_reminders = []
+        for i in range(self.BILLING_REMINDER_ROWS):
+            enabled = self.widgets[f'billing_reminder_enabled_{i}'].state() == NSOnState
+            project_name = self.widgets[f'billing_reminder_project_{i}'].titleOfSelectedItem().strip()
+            reminder_time = self.widgets[f'billing_reminder_time_{i}'].stringValue().strip()
+            task_label = self.widgets[f'billing_reminder_task_{i}'].titleOfSelectedItem()
+            day_label = self.widgets[f'billing_reminder_weekday_{i}'].titleOfSelectedItem()
+
+            if project_name == "—":
+                project_name = ""
+
+            if not project_name and not reminder_time and not enabled:
+                continue
+
+            day_kind, day_value = self._billing_day_label_to_fields(day_label)
+            entry = {
+                'enabled': enabled,
+                'project_name': project_name,
+                'task': self._billing_task_label_to_value(task_label),
+                'time': reminder_time,
+            }
+            if day_kind == "day_of_month":
+                entry['day_of_month'] = day_value
+            else:
+                entry['weekday'] = day_value
+            billing_reminders.append(entry)
+
+        # Preserve settings not currently editable in the UI
+        new_prefs = self.current_prefs.copy()
+        # Set by "Log in to Gusto" while this window may already be open; a
+        # stale copy here would log the user out of the sync on Save.
+        new_prefs['gusto_company_slug'] = load_preferences().get('gusto_company_slug', '')
+        new_prefs.update({
+            'cache_ttl_projects': self.widgets['cache_ttl_projects'].intValue(),
+            'cache_ttl_today': self.widgets['cache_ttl_today'].intValue(),
+            'vacation_days_per_month': self.widgets['vacation_days'].intValue(),
+            'days_off_keywords': [
+                kw.strip() for kw in
+                self.widgets['days_off_keywords'].stringValue().split(',')
+                if kw.strip()
+            ],
+            'project_targets': project_targets,
+            'projects': projects_config,
+            'stripe_project_customers': stripe_project_customers,
+            'upwork_contracts': upwork_contracts,
+            'billing_reminders': billing_reminders,
+            'mcp_enabled': self.widgets['mcp_enabled'].state() == NSOnState,
+            'mcp_anonymize': self.widgets['mcp_anonymize'].state() == NSOnState,
+            'mcp_write_enabled': self.widgets['mcp_write_enabled'].state() == NSOnState,
+            'gusto_sync_enabled': self.widgets['gusto_sync_enabled'].state() == NSOnState,
+            'gusto_project': str(self.widgets['gusto_project'].stringValue() or '').strip(),
+        })
+
+        integration_settings = {
+            'TOGGL_API_TOKEN': self.widgets['toggl_api_token'].stringValue().strip(),
+            'TOGGL_WORKSPACE_ID': self.widgets['toggl_workspace_id'].stringValue().strip(),
+            'STRIPE_API_KEY': self.widgets['stripe_api_key'].stringValue().strip(),
+            'GOOGLE_CALENDAR_ICS_URL': self.widgets['calendar_ics_url'].stringValue().strip(),
+        }
+
+        integration_errors = []
+        if not integration_settings['TOGGL_API_TOKEN']:
+            integration_errors.append("Toggl API Token is required")
+        stripe_key = integration_settings['STRIPE_API_KEY']
+        if stripe_key and not stripe_key.startswith('sk_'):
+            integration_errors.append("Stripe API Key must start with 'sk_'")
+        calendar_url = integration_settings['GOOGLE_CALENDAR_ICS_URL']
+        if calendar_url and not calendar_url.startswith(('http://', 'https://')):
+            integration_errors.append("Google Calendar ICS URL must start with http(s)://")
+
+        # Validate using existing function
+        errors = validate_preferences(new_prefs)
+        errors.extend(integration_errors)
+
+        if errors:
+            # Show error dialog
+            error_text = "\n".join(errors[:5])  # Show first 5 errors
+            if len(errors) > 5:
+                error_text += f"\n... and {len(errors) - 5} more errors"
+
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("Invalid Preferences")
+            alert.setInformativeText_(error_text)
+            alert.addButtonWithTitle_("OK")
+            alert.runModal()
+            return
+
+        # Save
+        save_preferences(new_prefs)
+        save_integration_settings(integration_settings)
+        self.current_integrations = integration_settings
+
+        # Flash "Saved ✓" on the Save button briefly
+        save_btn = self.widgets.get('save_btn')
+        if save_btn:
+            save_btn.setTitle_("Saved ✓")
+            save_btn.setEnabled_(False)
+            def _reset_btn():
+                import time; time.sleep(1.5)
+                save_btn.setTitle_("Save")
+                save_btn.setEnabled_(True)
+            import threading
+            threading.Thread(target=_reset_btn, daemon=True).start()
+
+        # Trigger app reload
+        try:
+            NSApp.delegate().app.update_display()
+        except:
+            pass  # Gracefully handle if app not available
+
+    def handleRefreshStripeCustomers_(self, sender):
+        """Reload customer options from Stripe using the currently entered API key."""
+        api_key = self.widgets['stripe_api_key'].stringValue().strip()
+        selected_ids = {}
+        for i in range(self.STRIPE_PROJECT_ROWS):
+            popup = self.widgets.get(f'stripe_customer_{i}')
+            if popup is None:
+                continue
+            item = popup.selectedItem()
+            selected_ids[i] = str(item.representedObject() or "") if item else ""
+        self._load_stripe_customers(api_key)
+        self._populate_stripe_customer_popups(selected_ids)
+
+    def handleCancel_(self, sender):
+        """Cancel button clicked."""
+        self.window.close()
+
+    def handleOpenAuditLog_(self, sender):
+        """Open the API audit log from the Advanced tab."""
+        log_path = Path.home() / "Library" / "Logs" / "toggl-api-audit.log"
+        terminal_command = f"tail -f {log_path}"
+        applescript = f'''
+        tell application "Terminal"
+            activate
+            do script "{terminal_command}"
+        end tell
+        '''
+        try:
+            subprocess.run(["osascript", "-e", applescript], check=True)
+        except subprocess.CalledProcessError:
+            pass
+
+    def handleReset_(self, sender):
+        """Reset to defaults button."""
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Reset to Defaults?")
+        alert.setInformativeText_("This will restore all settings to default values.")
+        alert.addButtonWithTitle_("Reset")
+        alert.addButtonWithTitle_("Cancel")
+
+        response = alert.runModal()
+        if response == NSAlertFirstButtonReturn:
+            # Keep in-memory state aligned with defaults for fields not shown in UI.
+            self.current_prefs = DEFAULT_PREFERENCES.copy()
+            self.current_integrations = load_integration_settings()
+
+            # Load defaults into widgets
+            self.widgets['cache_ttl_projects'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_projects'])
+            self.widgets['cache_ttl_today'].setIntValue_(DEFAULT_PREFERENCES['cache_ttl_today'])
+            self.widgets['vacation_days'].setIntValue_(DEFAULT_PREFERENCES['vacation_days_per_month'])
+            self.widgets['days_off_keywords'].setStringValue_(
+                ", ".join(DEFAULT_PREFERENCES['days_off_keywords'])
+            )
+            self.widgets['toggl_api_token'].setStringValue_("")
+            self.widgets['toggl_workspace_id'].setStringValue_("")
+            self.widgets['stripe_api_key'].setStringValue_("")
+            self.widgets['calendar_ics_url'].setStringValue_("")
+            self.widgets['mcp_enabled'].setState_(NSOffState)
+            self.widgets['mcp_anonymize'].setState_(NSOffState)
+            self.widgets['mcp_write_enabled'].setState_(NSOffState)
+            self.widgets['gusto_sync_enabled'].setState_(NSOffState)
+            self.widgets['gusto_project'].setStringValue_("")
+
+            # Clear all project target fields
+            for i in range(self.PROJECT_TARGET_ROWS):
+                self.widgets[f'project_name_{i}'].setStringValue_("")
+                self.widgets[f'project_hours_{i}'].setIntValue_(0)
+
+            # Clear all project definition fields
+            for i in range(self.PROJECT_DEFINITION_ROWS):
+                self.widgets[f'pd_name_{i}'].selectItemWithTitle_("—")
+                self.widgets[f'pd_type_{i}'].selectItemWithTitle_("Hourly")
+                self.widgets[f'pd_monthly_{i}'].setStringValue_("")
+                self.widgets[f'pd_target_{i}'].setStringValue_("")
+                self.widgets[f'pd_cap_{i}'].setStringValue_("")
+                self.widgets[f'pd_rate_{i}'].setStringValue_("")
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
+                self.widgets[f'pd_last_billed_{i}'].setStringValue_("")
+                self.widgets[f'pd_carryover_{i}'].setStringValue_("")
+
+            self._stripe_customers = []
+            self._populate_stripe_project_popups()
+            self._populate_stripe_customer_popups()
+            for i in range(self.STRIPE_PROJECT_ROWS):
+                self.widgets[f'stripe_project_name_{i}'].selectItemWithTitle_("—")
+                self.widgets[f'upwork_contract_{i}'].setStringValue_("")
+
+            for i in range(self.BILLING_REMINDER_ROWS):
+                self.widgets[f'billing_reminder_enabled_{i}'].setState_(NSOffState)
+                self.widgets[f'billing_reminder_project_{i}'].selectItemWithTitle_("—")
+                self.widgets[f'billing_reminder_task_{i}'].selectItemWithTitle_("Invoice")
+                self.widgets[f'billing_reminder_weekday_{i}'].selectItemWithTitle_("Friday")
+                self.widgets[f'billing_reminder_time_{i}'].setStringValue_("")

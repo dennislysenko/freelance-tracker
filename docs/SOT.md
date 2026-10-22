@@ -1,0 +1,428 @@
+# Source of Truth - Freelance Tracker Features & Benefits
+
+**Last Updated:** 2026-10-08
+
+Master reference for all features and benefits. Agents must update this file when adding or modifying functionality.
+
+---
+
+## What It Does
+
+Freelance Tracker is a macOS menu bar app that shows real-time Toggl earnings at a glance. Click the menu bar icon to open the dashboard popover with detailed breakdowns of today, this week, this month, and projected monthly earnings.
+
+## Primary Interface
+
+The **WebKit dashboard popover** (`dashboard_panel.py`) is the canonical user interface — every user-facing feature documented in this file lives there. The rumps dropdown menu in `menubar_app.py` is a degraded fallback that only renders when the WebKit bridge is unavailable, and is intentionally feature-incomplete. New features must be added to the dashboard popover, not the fallback menu.
+
+---
+
+## Core Features
+
+### Real-Time Earnings Display
+- Menu bar icon showing daily total (e.g., "💰 $400")
+- Click to see detailed breakdown
+- Rich popover dashboard uses WebKit when available; if the WebKit bridge is missing, the app falls back to the classic dropdown menu instead of failing to launch
+- Dashboard popover auto-sizes to the current content for short project lists, while preserving scrolling for taller dashboards
+- `This Week` is collapsed by default; section collapse state is then persisted per user across launches
+- Preferences are edited in the dashboard popover itself via the `⋯` → `Settings` menu. Clicking opens an in-popover Preferences view with the same six tabs (`Caching`, `Work Planning`, `Projects`, `Billing`, `Integrations`, `Advanced`) and the back chevron returns to the dashboard. The native AppKit Preferences window is retained only as the fallback path for when the WebKit bridge is unavailable.
+- Preferences view relaxes the native quirks where doing so has no persistence impact: add/remove rows instead of fixed-count grids, masked credential inputs with a show/hide eye toggle, and inline validation errors at the top of the panel in addition to modal alerts for bulk issues
+- Reminder configuration lives in the `Billing` tab and diagnostics stay in `Advanced`
+- Dashboard footer provides a `Refresh` split button with a drop-up (`Refresh Data`, one-off `Refresh Projects`, `Clear All Caches`, or `Open Cache Folder`), `Settings`, `Update`, and `Quit`
+- Dashboard footer provides a single `Export/Invoice` forced drop-up that branches into `Export CSV`, `Create Stripe Invoice`, `Open Upwork Diary`, or (once configured) `Push to Gusto`. An orange dot on the `Export/Invoice` button means Gusto is stale (see "Gusto Shift Sync")
+- Dashboard footer is rendered as a bottom drawer flush with the sheet edge, while the dashboard content scrolls above it with enough bottom padding to stay readable
+- Dashboard shows a rate-limit warning when cached data is being used and an inline retry state when refresh fails
+- Local billing reminders can be configured in Preferences to fire weekly macOS notifications without touching Toggl or Stripe APIs
+- Auto-refresh every 30 minutes
+- Manual refresh available
+
+### Daily View
+- Today's total earnings and hours
+- Per-project breakdown
+- In the Today section, expanded time-block descriptions can be copied to the clipboard by clicking the description text; the dashboard briefly shows `Copied` inline as feedback
+- Billable projects show earnings and hours
+- Projects with a defined `billing_type` contribute earnings even if not billable in Toggl
+
+### Weekly & Monthly Summaries
+- Current week total with per-project breakdown in the dashboard
+- Current month total
+- Monthly hours breakdown by project
+- Today / This Week / This Month sections can each be collapsed or expanded from the dashboard, and their state persists across app relaunches
+
+### Month Projection
+- Intelligent forecast based on current performance
+- Accounts for business days vs worked days
+- Configurable vacation days
+- **Google Calendar days off (optional)**: when a Google Calendar secret iCal URL is set (Settings → Integrations → "Google Calendar ICS URL", stored as `GOOGLE_CALENDAR_ICS_URL` in `.env`), the projection counts the month's *actual* days off instead of the flat `vacation_days_per_month` estimate. A business day counts as off when a calendar event's title matches one of the configurable `days_off_keywords` (Settings → Work Planning; case-insensitive substring, defaults include "vacation", "day off", "ooo", "out of office", "ceo day", "holiday", "pto"). Recurring events (e.g. a weekly "CEO Day") are expanded via RRULE and count once per occurrence; multi-day all-day events count each covered business day (weekend days never reduce workable days). The dashboard shows "N days off excluded (from calendar)" when the calendar drives the count. The flat `vacation_days_per_month` remains the fallback when no URL is configured or the feed is unreachable with no cache. Implemented in `calendar_days_off.py`. API cost: 0 Toggl calls; the ICS feed is fetched at most once per 6 hours and cached in `~/Library/Caches/TogglMenuBar/` (a stale cache is reused when a fetch fails).
+- Formula for hourly projects: `(earnings ÷ worked days) × workable days`
+- `fixed_monthly` projects are always treated as guaranteed income — only `hourly` and `hourly_with_cap` earnings are extrapolated by pace: `fixed_monthly_total + rev_share + project((variable earnings) by pace)`
+- **Monthly rev share**: a manually-entered, variable rev-share amount for the current month (set in Settings → Work Planning, e.g. last month $3k, this month $7k). It is added to the projection as guaranteed income (not extrapolated by pace) and shown as a "$X rev share (this month)" breakdown line. Stored per month (`monthly_rev_share: {"YYYY-MM": amount}`), so it never carries a stale value forward — each new month starts blank until you enter the new amount; entering `0` clears it. No Toggl API calls.
+
+#### Projection Diagnostics Export
+
+Settings → Advanced → **Copy Projection Diagnostics** copies an **anonymized** JSON snapshot of the projection math to the clipboard, so a user can share *why* their on-pace estimate looks wrong without exposing rates or client names. Implemented in `diagnostics.py`; uses only already-cached data (0 Toggl API calls).
+
+The blob contains the projection-relevant config (`projects`, `vacation_days_per_month`, `days_off_keywords`, `monthly_rev_share`, `retainer_hourly_rates`, `project_targets`), the full `calculate_monthly_projection()` result including its `trace` of raw intermediate terms (`current_total`, `variable_earnings`, `worked_day_dates`, cap state, etc.), and the `calculate_period_earnings("monthly")` per-project breakdown (rate, `rate_source`, hours, earnings — where misclassification shows up).
+
+Anonymization (always on for the share button):
+- Project names → stable labels (`Project A`, `Project B`, …). `monthly_rev_share` month keys are left intact.
+- Every monetary value (rates **and** dollar amounts) is multiplied by a single undisclosed constant, which is then dropped. Because the projection math is linear in dollars, all ratios and the `projected_variable` vs `capped_ceiling` cap comparison are preserved while absolute rates/earnings are removed. The inter-project rate *ratio* necessarily survives — it is the math being debugged.
+- Secrets are structurally excluded: API tokens live in `.env`, never in `preferences.json`. The `stripe_project_customers` / `upwork_contracts` mappings are dropped entirely (irrelevant to projection, and sensitive).
+
+### Project Definitions
+
+Every project can have an optional definition in the `projects` preference key. Projects without a definition default to `billing_type: hourly` using the rate from Toggl.
+
+#### Billing Types
+
+**`hourly`** (default)
+- Standard Toggl hourly rate
+- No cap, no carryover
+- Projection: extrapolated by pace
+
+**`hourly_with_cap`**
+- Billed at hourly rate up to a monthly cap (hours × rate)
+- Under cap: bill actual hours worked (no penalty)
+- Over cap: overflow hours carry forward as a credit to next month, reducing available cap
+- Projection: `min(pace_projected_hours, cap_hours) × rate` — projection line notes "(capped at $X)" when clamped
+- Monthly progress bar (without `last_billed_date`): numerator = current month hours, denominator = `cap_hours - carryover` (carryover adjusts the denominator)
+- Optional `last_billed_date` (YYYY-MM-DD): when set, unbilled hours are counted from that date + 1 day through today, crossing month boundaries. Replaces carryover-based tracking for projects with non-calendar billing cycles. Fetches the full date range from the Toggl API (1 call, cached daily).
+  - Monthly progress bar: numerator = all unbilled hours since last_billed_date, denominator = raw `cap_hours` (no carryover adjustment)
+  - Pacing marker + status: compares capped progress against the billing-cycle window from `last_billed_date + 1 day` through the end of the following month, instead of the current calendar month. Pacing label uses early-cycle Bayesian shrinkage (see Pacing decision tree below).
+  - Projection: `min(unbilled_hours + daily_avg_since_date × remaining_biz_days_in_billing_cycle, cap_hours) × rate`
+  - Carryover store is cleared when last_billed_date is saved; manual carryover field hidden in UI
+- **Timesheet last day**: shown below the progress bar when over 100%. Walks through actual time entries chronologically and finds the last date where cumulative hours were at or just under the cap. Displayed as "↳ timesheet last day: Mar 15". Tells you what date to put on a timesheet as your last worked day to bill as close to 100% as possible without exceeding the cap. Works for both `last_billed_date` and calendar-month modes.
+
+**`fixed_monthly`**
+- Guaranteed monthly amount regardless of hours worked
+- Three hour-tracking modes:
+  - `hour_tracking: required` — expected hours per month; over/under rolls forward as carryover balance
+  - `hour_tracking: soft` — display-only target; effective hourly rate = `monthly_amount / target_hours`; no carryover. Monthly earnings capped at `monthly_amount`. Daily/weekly show $0 for hours beyond `target_hours` (checked against monthly total).
+  - `hour_tracking: none` — freeform; no hour tracking
+- Effective hourly rate for daily/weekly display: `monthly_amount / target_hours` (required/soft), or `monthly_amount / working_days` per day (none)
+- These projects are assumed to not have a billable rate configured in Toggl
+
+#### Pacing decision tree (monthly project bars)
+
+Applies to all tracked monthly projects (calendar-month and LBD-capped).
+
+Inputs:
+- `percentage` = hours / target × 100
+- `calendar_pct` = elapsed time in cycle (calendar month, or LBD billing cycle if `last_billed_date` is set)
+- `elapsed_days` = days into the cycle (1 on the first day)
+
+Ratio with early-cycle Bayesian shrinkage:
+```
+raw_ratio       = percentage / max(calendar_pct, 0.1)
+shrink_weight   = min(elapsed_days / 5, 1.0)        # 0.2 on day 1, 1.0 by day 5
+effective_ratio = raw_ratio · shrink_weight + 1.0 · (1 − shrink_weight)
+```
+The shrinkage damps noisy ratios when the denominator is tiny at the start of a cycle. By day 5 it has no effect.
+
+Banding (first match wins):
+1. `percentage > 105` → **Over target** (red)
+2. `percentage ≥ 100` → **Complete** (orange)
+3. `percentage ≥ 95` → **Almost there** (orange)
+4. `effective_ratio ≥ 1.5` → **Well ahead — ease off or bank hours** (green)
+5. `effective_ratio ≥ 1.15` → **Ahead of pace** (green)
+6. `effective_ratio ≥ 0.85` → **On pace** (green)
+7. `effective_ratio ≥ 0.5` → **Behind — ramp up to stay on track** (blue)
+8. else → **Way behind — needs attention** (blue)
+
+**Late-cycle feasibility guard** (`hourly_with_cap` only): the proportional ratio above keeps crediting time that has not elapsed yet, so a cap that is mathematically out of reach can still read green in the final couple of days. As a counterpart to the early-cycle shrinkage, once the cycle is near its end (`calendar_pct ≥ 80`) and only the last business days remain (remaining business days in the cycle ≤ 2), if filling the cap would now require more than a full workday (>8h) per remaining business day, a green band is downgraded to **Behind — cap out of reach** (blue). It runs after banding, only ever turns green → blue, and is inert with 3+ business days left, so earlier-cycle pacing is unchanged. Remaining business days come from `get_lbd_remaining_business_days` (LBD projects) or the remaining weekdays in the month (calendar-month caps).
+
+#### Project Definition Schema
+
+```json
+"projects": {
+  "Client A": {
+    "billing_type": "hourly_with_cap",
+    "hourly_rate": 150,
+    "cap_hours": 20,
+    "last_billed_date": "2025-02-15"  // optional — unbilled hours counted from Feb 16 onward
+  },
+  "Client B": {
+    "billing_type": "fixed_monthly",
+    "monthly_amount": 2000,
+    "hour_tracking": "required",
+    "target_hours": 10
+  },
+  "Client C": {
+    "billing_type": "fixed_monthly",
+    "monthly_amount": 2500,
+    "hour_tracking": "soft",
+    "target_hours": 25
+  },
+  "Client D": {
+    "billing_type": "fixed_monthly",
+    "monthly_amount": 3500,
+    "hour_tracking": "none"
+  }
+}
+```
+
+#### Carryover
+
+Carryover applies to `hourly_with_cap` and `fixed_monthly / hour_tracking: required`. Balance is stored in `~/Library/Application Support/TogglMenuBar/retainer_carryover.json` and displayed in the monthly hours progress bar. Auto-calculated from the shared cached Toggl entry data for the previous month; can also be manually set or overridden via the Projects tab in preferences (the "Feb carryover h" field shown for applicable billing types). Manual overrides are preserved and are not overwritten by auto recomputation:
+
+```
+Client B: 8.5h / 12h (71%)     ← denominator adjusted by carryover
+[████████░░░░░░░░]
+↳ -2h carryover from Feb
+```
+
+| Billing type | Under | Over |
+|---|---|---|
+| `fixed_monthly / required` | hours owed roll forward (target increases next month) | hours credited forward (target decreases next month) |
+| `hourly_with_cap` | bill actual hours (no penalty) | overflow hours credited to next month (cap decreases next month) |
+
+#### Project Hour Targets
+- Set monthly hour targets for any project (also configurable via `project_targets` for non-project-definition projects)
+- Visual progress bars with Unicode blocks on separate line
+- Progress tracking with percentages inline with hours
+- Example: "Client A: 45.2h / 80h (57%)" followed by "[██████░░░░░░]" on next line
+- In the dashboard month section, target-bearing projects stay visible at `0.0h / target` even before any hours are logged that month
+- For `fixed_monthly / required` and `hourly_with_cap`, the target denominator is adjusted by carryover balance
+
+#### Legacy: Retainer Hourly Overrides
+- `retainer_hourly_rates` preference key is still supported as a fallback for projects without a definition
+- Migrate to `projects` with `billing_type: fixed_monthly` for full functionality
+- Preferences view (both in-popover and the fallback AppKit window): `Retainer Rates` tab replaced by `Projects` tab
+
+### Smart Caching
+- Minimizes API calls to respect Toggl rate limits
+- Raw Toggl time entries are cached once in shared day-based shards under `~/Library/Caches/TogglMenuBar/entries/by_day/`
+- Dashboard, CSV export, Stripe draft invoices, capped `last_billed_date` calculations, and auto carryover all read from the same shared entry cache
+- Historical day shards remain cached until explicitly refreshed; today's shard still uses the configurable `cache_ttl_today`
+- Manual `Refresh Now` invalidates the visible dashboard ranges, active capped-project billing-cycle ranges, and the previous-month range needed for auto carryover when applicable, so dashboard and billing outputs stay in sync after Toggl edits
+- `Clear All Caches` removes all cached Toggl entry shards, project metadata, and legacy cache files, then immediately repopulates the currently needed data. This is a heavier recovery action than `Refresh Data` and can cost additional API calls on the next reload
+- `Open Cache Folder` reveals `~/Library/Caches/TogglMenuBar/` in Finder for manual inspection or cleanup
+- Typical API call cost:
+  - background / on-demand reads: 0-1 calls when required day shards are already cached, otherwise one call per missing merged range
+  - manual `Refresh Now`: typically 2-5 calls depending on overlapping dashboard, billing-cycle, and carryover ranges
+  - `Clear All Caches`: variable; the next dashboard render and any later export/invoice flows will fetch whatever data is no longer cached
+- Running Toggl entries and any non-positive durations are excluded from earnings/hour totals so live timers cannot corrupt dashboard totals
+
+### System Service
+- Runs as macOS LaunchAgent
+- Auto-starts on login (optional)
+- No dock icon
+- Standard macOS storage locations
+- Auto-restarts on crashes
+
+### Preferences
+- JSON-based configuration
+- Configurable refresh intervals
+- Customizable goals and targets
+- Vacation day settings (fallback when no days-off calendar is configured)
+- Work Planning tab: "Days Off Keywords" field (comma-separated) controlling which calendar events mark a day off (`days_off_keywords` key)
+- Work Planning tab: "This Month's Rev Share" field for variable rev-share income, added to the current month's projection (`monthly_rev_share` key, month-scoped)
+- Billing tab supports weekly local reminder rules like `Friday 14:00 → invoice Acme Inc`
+- Cache TTL controls
+- Project definitions with billing types (`projects` key)
+- Integrations tab is a **grid of integration cells** grouped by purpose (Time tracking, Assistant, Billing & invoicing, Planning). Each cell shows the integration name and its status — green "✓ Active" when configured, "Configure integration" when not — so the whole tab fits on one screen with no scrolling
+- Clicking a cell **drills into a detail pane** containing only that integration's fields and setup guidance, with a back arrow to the grid. Replaces the previous single long scrolling column of every credential
+- Covers Toggl (token + workspace id), OpenAI (natural-language logging), Stripe (draft invoices), Project Mapping (Toggl project → Stripe customer / Upwork contract grid), Gusto (contractor shift sync), Google Calendar (days off), and Agents (MCP) (agent read access, plus optional one-entry-at-a-time write access, see "Agent access (MCP server)"). "Open Google Calendar Settings" and "Open OpenAI API Keys" buttons open the relevant provider page in the browser
+- The active tab **and** the open integration are mirrored to Python (`settings_tab:` / `settings_intg:` bridge messages) and re-rendered on the next load. The popover is transient, so leaving to fetch a credential in a browser dismisses it; without this the user was dropped back on the first tab and had to re-navigate every time
+- Integrations tab also maps Toggl projects to Stripe customers by fetching live Stripe customers and letting the user pick by name
+- The same project-mapping grid can store optional Upwork contract ids per Toggl project; those ids power the dashboard shortcut that opens the correct Upwork work diary for today
+- `fixed_monthly` projects are always fixed in projections — no toggle needed
+- Legacy `retainer_hourly_rates` still supported
+
+### Monitoring & Logging
+- API audit log for transparency
+- Output and error logs
+- Status monitoring (memory, uptime)
+- API call tracking per operation
+
+### Billing Reminders
+- Billing reminders are local notifications generated by the menu bar app while it is running as a LaunchAgent
+- Reminder rules currently support:
+  - project name
+  - task type (`invoice`)
+  - schedule: either a weekday (fires weekly) **or** a `day_of_month` (fires monthly). `day_of_month` accepts `1`–`28` for nth-day-of-month and `-1`/`-2`/`-3` for last / 2nd-to-last / 3rd-to-last day
+  - local time in `HH:MM` 24-hour format
+- Notifications are deduped per reminder per local day, so a `Friday 14:00` reminder will alert once each Friday (and a `day_of_month: -1` reminder once on the last day of each month) even though the app checks on a 60-second loop
+- Preferences → `Billing` tab includes a `Send Test Notification` button that posts an example reminder immediately so the user can verify macOS notification permissions and preview the copy
+- Billing tab help text warns that notifications post as "Python" (because the LaunchAgent runs the interpreter directly, no `.app` bundle): any active Focus must allowlist Python, and full Do Not Disturb will suppress reminders entirely
+- Reminder delivery uses 0 Toggl API calls and 0 third-party API calls
+
+### CLI Version
+- Standalone command-line tool
+- Daily, weekly, monthly reports
+- Works independently of menu bar app
+
+### Hours CSV Export
+- Footer `Export/Invoice` drop-up in the dashboard popover includes an `Export CSV` path that lists every project that has a resolvable billing rate
+- Click a project to export a billing-ready CSV with columns: `Description, Start date, Start time, End date, End time, Duration, Time Billed (hours), Hourly Rate (USD), Money Billed (USD)` plus a `---- Total ----` row
+- Output format is byte-compatible with the standalone `process_toggl_hours.py` script (per-project, one CSV per export)
+- Range selection respects the project's billing cycle:
+  - `hourly_with_cap` projects with `last_billed_date` set and unbilled hours that exceed `cap_hours`: the "Since last billed" preset is replaced with an **"Unbilled (under cap)"** preset whose range is `last_billed_date + 1` through the project's `cap_fill_date` (the last day on which cumulative unbilled hours stay at or under the cap). The day that first pushes cumulative hours over the cap is excluded entirely — no partial-day splitting — so the exported CSV total never exceeds the cap.
+  - `hourly_with_cap` projects with `last_billed_date` set whose unbilled hours are still within the cap: the "Since last billed" preset runs from `last_billed_date + 1` through today, unchanged.
+  - All other projects: presets include `This week`, `Last week`, `Last month`, `Year to date`, plus a custom range
+- Hourly rate uses the project's effective rate from `get_effective_project_rate` (the same rate used everywhere else in the app)
+- Output saved to `~/Downloads/{project_slug}_{range}_hours.csv`, then revealed in Finder; a notification confirms the export
+- Also available as a submenu in the fallback dropdown menu when the WebKit dashboard is unavailable
+- API call cost: 0-1 calls per export range. Exports reuse the same shared day-based entry cache as the dashboard, so exporting right after a refresh or a prior export usually hits cached day shards only
+
+### Stripe Draft Invoice Creation
+- Footer `Export/Invoice` drop-up includes a `Create Stripe Invoice` workflow that mirrors the CSV flow: choose a project, choose a billing range, and create a Stripe draft invoice
+- Uses the same project/range presets as CSV export:
+  - `hourly_with_cap` projects with `last_billed_date` set and unbilled hours over the cap: "Unbilled (under cap)" preset from `last_billed_date + 1` through the project's `cap_fill_date`, same cap-safe semantics as the CSV export
+  - `hourly_with_cap` projects with `last_billed_date` set and unbilled hours still under the cap: "Since last billed" preset from `last_billed_date + 1` through today
+  - All other projects: this week, last week, last month, year to date, or a custom date range
+- If the project has not been linked to a Stripe customer yet, the dashboard fetches Stripe customers and prompts the user to pick one by name immediately after date selection; the mapping is then saved for future invoices
+- While creating the invoice, the dashboard shows an in-place loading state instead of silently dismissing
+- Success state is explicit that the app created a **draft** invoice only, and offers an `Open in Stripe` button so the user can review and send it manually
+- The draft invoice footer contains an hours breakdown line for each billed Toggl entry in the selected range
+- Output creates one Stripe draft invoice plus one attached invoice item for the selected project/range
+- API call cost:
+  - Toggl: 0-1 calls per invoice range (reuses the same shared day-based entry cache as the dashboard and CSV export)
+  - Stripe: 1 customer-list call only when associating an unmapped project, then 2 write calls per invoice (draft invoice + invoice item)
+
+### Gusto Shift Sync (contractor hours → Gusto timesheet)
+- Pushes one Toggl project's hours (`gusto_project`) into the user's Gusto **contractor** timesheet as shifts on their real dates, with each entry's start/end and its description as the shift note (Gusto requires a note; empty descriptions become "Logged from Toggl")
+- **Why a browser:** Gusto's public API is partner-only and its CLI/MCP need a company admin, so a contractor cannot log their own hours through them. The app drives the same internal GraphQL API Gusto's web app uses (`addHours`, `tracker.groupedShiftsWithTotals`), issuing `fetch` calls from inside a logged-in Gusto page. It is undocumented and can change; when it does, the run fails loudly and the `gusto-recapture` project skill (`.claude/skills/gusto-recapture/`) re-captures the request shapes
+- **Visible Chrome only.** Gusto sits behind a Cloudflare bot check that blocks headless Chrome; the app never runs headless and never tries to defeat a challenge. It uses the installed Google Chrome with a dedicated profile (`~/Library/Application Support/TogglMenuBar/gusto-browser`), started as its own process with a DevTools port bound to `127.0.0.1:9333`; each run attaches, works, and detaches. The window is **never closed by the app**, so the user can take over, and Gusto's session (a browser-session cookie Chrome drops on quit) survives between runs while it stays open. Trade-off: while that window is logged in, local processes can drive it through the port
+- **Login is a passkey.** If Gusto asks to log in, the app picks the remembered account and the user approves the passkey (Touch ID); a notification asks for it. The app never enters a password or approves a passkey. Settings → Integrations → **Gusto** → `Log in to Gusto` does the same on demand and stores the company (`gusto_company_slug`)
+- **Schedule:** Mondays from 09:00 local the app pushes the previous Monday–Sunday week (`check_gusto_sync`, 60-second timer).
+- **Month-end push:** a month's hours are due in Gusto by 15:00 local on its last business day (the last weekday that is not a US federal holiday), so on that day the app pushes everything through the day's finished entries from 13:00 (`deadline_push_due` / `deadline_window`). The same push also runs on the business day before (`month_end_push_kind` "early"), for redundancy: if the cutoff-day run is missed (Mac off or asleep, passkey unanswered), only that day's hours are outstanding. Both take priority over the weekly run, run even if a login was pending, and retry every 20 minutes until 15:00. Cutoff-day failures notify every time; the early push notifies its result and its first failure. A successful run that covered the cutoff day records `deadline_pushed`. Entries still running at the push, or logged after it, go out with the next run A run that needs a login waits 10 minutes for the passkey, then stops and does not retry until the user pushes manually or logs in; other failures retry with backoff (1h, 2h, 4h … capped at 24h), and a scheduled run only notifies the first time a given error appears
+- **Manual:** `Export/Invoice` → `Push to Gusto` pushes every finished day up to yesterday (today is excluded, except on the month's cutoff day, when today's finished entries are included) and shows a result card with anything that needs attention
+- **Stale badge:** an orange dot on `Export/Invoice` (and an orange status on the `Push to Gusto` row) from Monday 09:00 until last week is in Gusto, all day on the month's cutoff day until the month-end push succeeds, and whenever something needs the user: an expired login, a failed push, a shift Gusto refused, or a pushed entry later edited/deleted in Toggl
+- **Only ever adds.** Each pushed Toggl entry is recorded in a local ledger (`gusto_sync_state.json`) and never pushed twice; the ledger is saved after every write. A Toggl entry already matching a Gusto shift's start/end is adopted into the ledger instead of added, so a lost ledger cannot double-log. Entries edited or deleted in Toggl after pushing are flagged (Settings card, result card, badge), never mirrored: the app does not edit or delete Gusto shifts. Late additions to the last 35 days are pushed on the next run; Gusto may refuse a locked day, which is reported
+- First run pushes only the target week unless `gusto_sync_start_date` sets an earlier floor; a floor in the future means there is nothing to push yet
+- **Always fresh Toggl data.** Past days are cached forever once fetched, so a cached day can be missing hours logged after it was fetched. The push therefore fetches its whole window straight from Toggl (`toggl_data.fetch_entries_fresh`, which also refreshes the day shards) and fails the run on a rate limit or network error instead of pushing from stale or empty data
+- **One push at a time.** Real pushes hold a cross-process file lock (`gusto_sync.lock`) and load/save the ledger inside it, so the app's Monday run and a CLI `run` cannot both push the same entries
+- If Gusto's reply to a write is unusable, the day's shifts are re-read and a matching shift is adopted rather than reported as refused, so the next run cannot add it twice. Matching uses clock-in/out times, falling back to day + duration + note when Gusto omits them
+- Drift compares instants, not strings, so changing the Mac's time zone does not flag pushed entries
+- Settings card shows the next cutoff and payday ("Hours due Fri Oct 30 by 3 PM · payday Mon Nov 2"): hours are due by 15:00 on the month's last business day; payday is the first business day after the month ends (both skip weekends and US federal holidays). The Push to Gusto row reads "Month's hours due today by 3 PM" on the cutoff day until it is pushed
+- Preferences: `gusto_sync_enabled`, `gusto_project`, `gusto_company_slug` (set by login), `gusto_sync_start_date` (optional). Also on the fallback AppKit window's Advanced tab (enable + project)
+- CLI: `python gusto_sync.py login | dry-run | run [--start YYYY-MM-DD --end YYYY-MM-DD]`; `dry-run` lists what would be pushed and writes nothing
+- Implemented in `gusto_client.py` (Chrome session, GraphQL calls) and `gusto_sync.py` (schedule, planning, ledger, payday, status). Dependency: `playwright` Python package (drives the installed Chrome; no `playwright install`)
+- API call cost:
+  - Toggl: 1 call per run (the window is fetched fresh, never from cache)
+  - Gusto: 1 REST call (tracker id) + 1 GraphQL read for the window, then per new shift 1 read + 1 `addHours` write
+
+### Upwork Work Diary Shortcut
+- Footer `Export/Invoice` drop-up includes an `Open Upwork Diary` workflow that lists Toggl projects and shows whether each one is linked to an Upwork contract id
+- Clicking a linked project opens `https://www.upwork.com/nx/workdiary/` for **today's local date** with that project’s saved `contractId` and `tz=mine`
+- Unlinked projects remain visible with a `Needs contract` badge; clicking one opens an inline contract-id form inside the same dashboard flow, and `Save & Open Diary` persists the mapping before opening Upwork
+- Contract ids are configured in the Preferences `Integrations` tab alongside the Stripe customer mapping grid
+- Current implementation is a deep-link shortcut, not an Upwork API write path; Upwork’s documented public GraphQL docs expose work-diary reads but do not document a manual-time creation mutation
+- API call cost:
+  - Toggl: 0 calls
+  - Upwork: 0 app-side API calls; the app only opens the diary URL in the browser
+
+### Natural-Language Time Logging (optional, bring-your-own OpenAI key)
+- Lets the user type shorthand — "put 1 hour of Globex retainer at 9am for the past 2 days, no note" — and have it turned into proposed Toggl entries
+- **Nothing is written without confirmation.** The parse produces a *proposal* (one row per entry, e.g. "mon aug 3, 9:00am · 1.00h · Globex - Retainer"), which the user applies or cancels
+- Also classifies read questions ("how many hours on Acme this month?") into a local date-range query answered from the existing entry cache — **zero Toggl API calls**. The answer lists the total, a per-project breakdown, and per-entry rows (time range, project, note) for ranges of 7 days or less; longer ranges (max 92 days) get day totals only
+- **Follow-ups**: the last 8 transcript turns are sent with each command, proposals spelled out with absolute dates and whether they were applied, so "round to the half hour mark" or "actually that was yesterday" refines the previous proposal into a new, complete one instead of reading as a command with no subject
+- **Entry point**: a one-line input pinned to the top of the dashboard, shown only when an OpenAI key is configured (the absent key is the feature's off switch, so there is no separate preference). Submitting routes to a dedicated **Assistant view** — transcript, proposal cards, back arrow — so a long conversation never resizes the content-sized popover
+- **Proposal cards** list one row per entry with date, time range, project, duration, and note. Rows that overlap time already in Toggl render unchecked, highlighted, and labelled "Overlaps time already logged"; clean rows stay checked. Apply writes only the checked rows, so re-running "the past 2 days" cannot silently double-log while genuinely overlapping work stays possible
+- Applying invalidates the affected day caches (`invalidate_entry_days`) and triggers a dashboard refresh, so totals update immediately. Partial failures report how many entries actually landed, and a failed proposal stays retryable
+- **Threading**: the OpenAI call and the Toggl writes on apply both run on a worker thread (`background_work.py`) so the menu bar stays responsive, with completions delivered back via `NSOperationQueue.mainQueue()`. A generation token discards replies from superseded commands. While writes are in flight the card shows "Logging to Toggl…" with its rows disabled, and repeat clicks are ignored
+- Transcript text is selectable (the rest of the popover is not) so answers can be copied out
+- Transcript state lives in Python (`assistant.py`), not the DOM, because `loadHTML_` reloads the document on every dashboard refresh and would otherwise wipe an in-progress conversation. Capped at 40 turns
+- The view applies a proposal **by id**; entry data never travels back across the bridge, so a rendering bug cannot become a wrong time entry
+- The utterance is **base64-encoded** across the bridge, which splits raw action strings on `:` and spaces — a note like "note: sprint planning, 2:30 standup" would otherwise be shredded
+- Implemented in `nl_time.py` (parsing), `assistant.py` (session/write path), `assistant_view.py` (rendering); the write path reuses the long-standing `toggl_data.create_time_entry`
+- Available projects are passed to the model as a JSON-schema **enum**, so it cannot propose a project that does not exist in the workspace. Ambiguous commands return an `unclear` intent asking for what is missing rather than guessing a project
+- The model never performs timezone math: it returns a local calendar date plus a local wall-clock time, and `resolve_entries` attaches the machine's local zone to build the aware datetime `create_time_entry` requires
+- `find_collisions` flags proposals overlapping an entry already in Toggl, so re-running "the past 2 days" warns instead of silently double-logging
+- **Bring-your-own key**: set `OPENAI_API_KEY` in Settings → Integrations (stored in `.env`, never in `preferences.json`). With no key set, the feature is simply unavailable; every other feature is unaffected
+- The key is **verified with a live call when saved** (only when it actually changed), so a bad key surfaces in the settings pane rather than mid-command. Errors are distinguished: rejected key (401), no billing credit (`insufficient_quota`), rate limit, and service/network failure each produce a different message
+- Uses the OpenAI **Responses** API (`/v1/responses`), not chat/completions: a restricted project key with *Model capabilities: Request* grants Write on `/v1/responses` specifically, so this is the endpoint covered by the scoped key the setup guide tells users to mint
+- Model is pinned to `gpt-4.1-mini`, overridable via `OPENAI_MODEL` in `.env`
+- **Privacy**: the utterance and the user's Toggl *project names* (often client names) are sent to OpenAI under the user's own account and retention terms. This is stated in the Integrations tab. Nothing is sent unless the feature is used; no other credential leaves the machine
+- API call cost:
+  - Toggl: 0 calls to parse; **1 POST per entry** on apply (a "past 2 days" command applies 2 entries = 2 calls); read questions cost 0
+  - OpenAI: 1 call per command, plus 1 on key save; billed to the user's own account
+  - OpenAI calls are deliberately **not** recorded in the Toggl audit log, which stays Toggl-only so the documented Toggl call counts remain accurate
+
+### Agent access (MCP server)
+- `mcp_server.py` is a stdio [MCP](https://modelcontextprotocol.io) server that lets coding agents (Claude Code, Codex, any MCP host) read the same numbers the dashboard shows. Setup guide: `docs/mcp-agents.md`; design: `docs/mcp-server-plan.md`
+- **Reads are read-only and free.** The six `get_*` tools never write and never call Toggl
+- **Never calls Toggl.** The server runs the data layer in **cache-only mode** (`FREELANCE_TRACKER_CACHE_ONLY=1` → `toggl_data.CACHE_ONLY`): it reads the shared day-shard cache and projects cache as-is, serves a stale today shard rather than refetching, and raises `CacheMissError` ("open the dashboard or press Refresh Now") only for a day that has never been cached. Every response carries `data_as_of` (oldest shard mtime in the range)
+- It calls `calculate_period_earnings` / `calculate_monthly_projection` directly, never `get_monthly_earnings`, so the auto-carryover write never runs from the agent process
+- Tools: `get_overview` (today / week / month + projection summary), `get_month_status` (per-project pacing plus a ranked `attention` list: cap out of reach / way behind → behind → capped cycle ending within 3 business days with hours unfilled → over target → well ahead), `get_projection` (full projection incl. `trace`), `get_project_rules` (definitions, targets, rev share, vacation settings, plus plain-English rules), `get_time_entries` (cached entries between two dates, max 92 days, optional project filter), `get_data_freshness`. One prompt, `progress_checkin`, tells the host model to lead with `attention` and quote hours per remaining business day rather than labels
+- Pacing numbers come from `pacing.py`, the same pure module the dashboard now uses for its progress bars (`compute_pacing`): percentage, calendar progress, raw and shrunk pace ratio, band, label, colour, billing-cycle bounds, remaining business days, hours needed, hours per remaining day. Extracted from the dashboard renderer so both surfaces cannot drift
+- **Preferences** (Settings → Integrations → **Agents (MCP)** cell, in a new "Agents" group; also two checkboxes on the fallback AppKit window's Advanced tab):
+  - `mcp_enabled` (default `false`). Checked on every tool call; when off, every tool returns a "disabled" error, so registering the server with an agent before enabling it is harmless
+  - `mcp_anonymize` (default `false`). When on, project names become `Project A`, `Project B`, … and every dollar value is rescaled by one undisclosed constant (same approach as the diagnostics export); plain-English rules are hidden
+- The detail pane shows best-effort, read-only detection of existing registrations (`~/.claude.json` and `~/.codex/config.toml`), copy buttons for the Claude Code `claude mcp add` command and the Codex TOML block with real paths filled in, and a **Test server** button that spawns the server on a worker thread (`background_work`) and reports tool count and data freshness. The app never edits agent config files
+- stdio owns stdout, so the server redirects `sys.stdout` to stderr before importing project modules (some `print()` on error paths) and hands the real stdout back to the transport
+- API call cost: **0 Toggl calls** for every read tool, always. Writes cost exactly 1 call each (see below). Dependency: `mcp>=2.0` (Python SDK)
+- Tools carry MCP annotations so a host can style them: the six readers are `read_only_hint`, `delete_entry` is `destructive_hint`
+
+#### Agent write access (optional, off by default)
+
+Three write tools let an agent change tracked time: `log_time`, `update_entry`, `delete_entry`. Implemented in `mcp_write.py`.
+
+- **Off by default.** Gated behind `mcp_write_enabled` (Settings → Integrations → Agents (MCP) → "Allow agents to log and edit time"), *in addition to* `mcp_enabled`. With it off, every write tool returns a message naming the setting; reads are unaffected
+- **Exactly one time entry per call.** None of the three takes a list, a date range, or a count. Changing two entries means two previews and two confirmations. The tool descriptions tell the model not to loop
+- **Two-step confirmation, always.** The first call validates arguments, resolves the project, and returns a preview with a one-shot `confirm` token; nothing reaches Toggl. The second call replays the *same* arguments with that token and performs the write. This mirrors the in-app assistant's propose-then-apply contract: the user reads the exact change in the conversation before it happens
+  - Tokens are single-use, expire after 10 minutes, and are fingerprinted against the operation plus its arguments — a token issued to delete entry 1 cannot confirm deleting entry 2, and one issued for a 1-hour entry cannot confirm an 8-hour one
+  - Tokens live in the server process only, so they never outlive the agent session that created them
+- **`log_time`** takes a date, local 24-hour start time, duration in minutes, project name, optional description, and billable flag. The preview flags any existing cached entry the new one would overlap, so re-logging the same block warns instead of silently double-counting
+- **`update_entry`** takes an `entry_id` (from `get_time_entries`, which now returns one per entry) plus only the fields to change; everything else keeps its current value. The preview shows before, after, and the specific fields that differ. An update to values the entry already has is a no-op costing 0 calls. Moving an entry to another day relocates it between day shards
+- **`delete_entry`** takes an `entry_id` and carries a `destructive_hint` annotation; its preview restates the entry and warns that it cannot be undone from the agent
+- **Anonymization and writing are mutually exclusive.** With `mcp_anonymize` on, writes are refused: an agent that sees "Project A" cannot safely be trusted to edit hours on the right client
+- **Cache stays coherent without a refetch.** Toggl returns the authoritative entry on create/update, so the affected day shard is *patched in place* (`upsert_cached_entry` / `remove_cached_entry`) rather than invalidated. Invalidating would make the next cache-only read raise `CacheMissError` until the user opened the dashboard. Shards that were never fetched are left alone, so a never-cached day is never misrepresented as complete
+- Entry lookup for update/delete reads cached shards only (default window: the last 92 days, narrowed by the optional `on_date`). An id that is not cached returns an actionable message rather than a fetch
+- Every write failure — rate limit, network, bad id, expired token — comes back as a tool error the agent can read out, never as an exception that drops the connection
+- `toggl_data.delete_time_entry` is the new DELETE path; a 404 counts as success, since the entry is gone either way
+- **The menu bar catches up immediately.** The MCP server is its own process, so after a confirmed write it announces the change (`app_notify.notify_data_changed`) and the running app re-reads and re-renders at once, instead of showing a stale 💰 total until its next half-hourly refresh. Two signals, because they fail differently:
+  - A macOS **distributed notification** (`com.freelancetracker.dataChanged`), which the app observes and which arrives instantly. This is the one that normally does the work
+  - A **marker file** in the cache directory, polled once a minute by `check_external_changes`. It covers a notification that was never delivered (no PyObjC in the writing process, or a dropped post), so the worst case is a minute of staleness rather than thirty
+  - Neither costs a Toggl call: the writer already patched the day shard, so the app's re-read is served entirely from disk. Posting is best-effort and never fails a write
+  - Only *confirmed* writes announce. Previews, no-op updates, and failed writes stay silent
+- API call cost: **1 Toggl call per confirmed write**, 0 for every preview, 0 for a no-op update, 0 for the menu bar refresh that follows. All writes are recorded in the Toggl audit log (`~/Library/Logs/toggl-api-audit.log`) like every other call
+
+---
+
+## Key Benefits
+
+### Productivity
+- Instant visibility into daily earnings
+- No need to log into Toggl web interface
+- Always know where you stand financially
+- Motivating real-time feedback
+
+### Financial Planning
+- Accurate monthly projections
+- Accounts for vacation time
+- Project-level hour tracking
+- Trend visibility (week/month)
+
+### Efficiency
+- Minimal API usage (respects rate limits)
+- Smart caching reduces wait times
+- Background updates don't block
+- Low resource footprint
+
+### Native macOS Experience
+- True menu bar integration
+- No dock icon clutter
+- Standard storage locations
+- Auto-start capability
+- Clean, native UI
+
+### Developer-Friendly
+- Simple JSON configuration
+- Comprehensive logging
+- Easy management scripts
+- Clean, maintainable code
+- Well-documented
+
+### Reliability
+- Auto-restart on failures
+- Graceful error handling
+- Offline capability (uses cache)
+- Service management built-in
+
+---
+
+**When adding or changing features:**
+1. Update this file first
+2. Implement the feature
+3. Update README.md with user-facing changes

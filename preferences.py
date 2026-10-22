@@ -1,0 +1,450 @@
+"""Centralized preferences management using macOS standard locations."""
+
+import json
+from pathlib import Path
+
+# Use macOS standard locations
+APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "TogglMenuBar"
+CACHE_DIR = Path.home() / "Library" / "Caches" / "TogglMenuBar"
+PREFERENCES_FILE = APP_SUPPORT_DIR / "preferences.json"
+
+# Create directories
+APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Default preferences (only fields actually used in the app)
+DEFAULT_PREFERENCES = {
+    "cache_ttl_projects": 86400,  # 24 hours
+    "cache_ttl_today": 1800,  # 30 minutes
+    "vacation_days_per_month": 4,  # Vacation days to exclude from projection (fallback when no calendar is configured)
+    "days_off_keywords": [  # Calendar event title keywords that mark a day off (case-insensitive substring match)
+        "vacation",
+        "day off",
+        "ooo",
+        "out of office",
+        "ceo day",
+        "holiday",
+        "pto",
+    ],
+    "project_targets": {},  # Optional monthly hour targets by project name: {"ProjectName": 40}
+    "monthly_rev_share": {},  # Variable rev-share income by month: {"2026-06": 7000}. Added to that month's projection as guaranteed income.
+    "retainer_hourly_rates": {},  # Optional hourly overrides by project name: {"ProjectName": 150}
+    "projects": {},  # Project definitions by name: see docs/SOT.md for schema
+    "stripe_project_customers": {},  # Optional Stripe customer ids by project name
+    "upwork_contracts": {},  # Optional Upwork contract ids by project name
+    "billing_reminders": [],  # Optional weekly local reminders, e.g. invoice Friday at 14:00
+    "dashboard_sections": {
+        "today": True,
+        "week": False,
+        "month": True,
+    },  # Expanded/collapsed dashboard sections, persisted across launches
+    "mcp_enabled": False,  # Let agents (Claude Code, Codex) read hours/projections via mcp_server.py
+    "mcp_anonymize": False,  # Replace client names / dollar amounts in MCP responses
+    "mcp_write_enabled": False,  # Let agents log/edit/delete one time entry at a time (confirmed)
+    "gusto_sync_enabled": False,  # Push a project's Toggl hours into Gusto contractor shifts weekly
+    "gusto_project": "",  # Toggl project whose hours go to Gusto
+    "gusto_company_slug": "",  # Gusto company in app.gusto.com/<slug>; set by "Log in to Gusto"
+    "gusto_sync_start_date": "",  # Optional YYYY-MM-DD: earliest day ever pushed (backfill floor)
+}
+
+
+def load_preferences():
+    """Load preferences from disk, or create defaults."""
+    if PREFERENCES_FILE.exists():
+        try:
+            with open(PREFERENCES_FILE, 'r') as f:
+                prefs = json.load(f)
+                # Merge with defaults (in case new keys were added)
+                merged = {**DEFAULT_PREFERENCES, **prefs}
+                merged['dashboard_sections'] = {
+                    **DEFAULT_PREFERENCES['dashboard_sections'],
+                    **prefs.get('dashboard_sections', {})
+                } if isinstance(prefs.get('dashboard_sections', {}), dict) \
+                    else DEFAULT_PREFERENCES['dashboard_sections'].copy()
+                return merged
+        except Exception as e:
+            print(f"Error loading preferences: {e}")
+            return DEFAULT_PREFERENCES.copy()
+    else:
+        # Create default preferences file
+        save_preferences(DEFAULT_PREFERENCES)
+        return DEFAULT_PREFERENCES.copy()
+
+
+def save_preferences(preferences):
+    """Save preferences to disk."""
+    with open(PREFERENCES_FILE, 'w') as f:
+        json.dump(preferences, f, indent=2)
+
+
+def get_preference(key, default=None):
+    """Get a single preference value."""
+    prefs = load_preferences()
+    return prefs.get(key, default)
+
+
+def set_preference(key, value):
+    """Set a single preference value."""
+    prefs = load_preferences()
+    prefs[key] = value
+    save_preferences(prefs)
+
+
+def reset_preferences():
+    """Reset all preferences to defaults."""
+    save_preferences(DEFAULT_PREFERENCES)
+
+
+def validate_preferences(prefs):
+    """
+    Validate preferences structure and types.
+
+    Args:
+        prefs: Dictionary containing preferences to validate
+
+    Returns:
+        List of error messages (empty list if valid)
+    """
+    errors = []
+
+    # Required fields with (type, validator_function, error_message)
+    # validator_function is None if only type checking is needed
+    required_fields = {
+        'cache_ttl_projects': (int, lambda x: x > 0, "must be a positive integer"),
+        'cache_ttl_today': (int, lambda x: x > 0, "must be a positive integer"),
+        'vacation_days_per_month': (int, lambda x: 0 <= x <= 31, "must be between 0 and 31"),
+    }
+
+    # Check required fields
+    for field, (expected_type, validator, error_msg) in required_fields.items():
+        # Check if field exists
+        if field not in prefs:
+            errors.append(f"Missing required field: '{field}'")
+            continue
+
+        value = prefs[field]
+
+        # Type checking
+        if not isinstance(value, expected_type):
+            errors.append(
+                f"'{field}': expected {expected_type.__name__}, got {type(value).__name__}"
+            )
+            continue
+
+        # Custom validation
+        if validator is not None:
+            try:
+                if not validator(value):
+                    errors.append(f"'{field}': {error_msg} (got {value})")
+            except Exception as e:
+                errors.append(f"'{field}': validation error - {str(e)}")
+
+    # Optional field: project_targets
+    if 'project_targets' in prefs:
+        project_targets = prefs['project_targets']
+
+        # Type check - must be a dict
+        if not isinstance(project_targets, dict):
+            errors.append("'project_targets': must be an object/dictionary")
+        else:
+            # Validate each project target entry
+            for project_name, hours in project_targets.items():
+                # Project name must be string
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'project_targets': key '{project_name}' must be a string"
+                    )
+                    continue
+
+                # Hours must be a number (int or float)
+                if not isinstance(hours, (int, float)):
+                    errors.append(
+                        f"'project_targets.{project_name}': must be a number, got {type(hours).__name__}"
+                    )
+                    continue
+
+                # Hours must be non-negative
+                if hours < 0:
+                    errors.append(
+                        f"'project_targets.{project_name}': must be non-negative (got {hours})"
+                    )
+
+    # Optional fields: MCP server toggles (booleans)
+    for flag in ('mcp_enabled', 'mcp_anonymize', 'mcp_write_enabled'):
+        if flag in prefs and not isinstance(prefs[flag], bool):
+            errors.append(f"'{flag}': must be true or false")
+
+    # Optional fields: Gusto sync
+    if 'gusto_sync_enabled' in prefs and not isinstance(prefs['gusto_sync_enabled'], bool):
+        errors.append("'gusto_sync_enabled': must be true or false")
+    for key in ('gusto_project', 'gusto_company_slug', 'gusto_sync_start_date'):
+        if key in prefs and not isinstance(prefs[key], str):
+            errors.append(f"'{key}': must be a string")
+    start_date = prefs.get('gusto_sync_start_date')
+    if isinstance(start_date, str) and start_date.strip():
+        try:
+            from datetime import date as _date
+            _date.fromisoformat(start_date.strip())
+        except ValueError:
+            errors.append("'gusto_sync_start_date': must be a date like 2026-10-01")
+
+    # Optional field: days_off_keywords (list of non-empty strings)
+    if 'days_off_keywords' in prefs:
+        days_off_keywords = prefs['days_off_keywords']
+
+        if not isinstance(days_off_keywords, list):
+            errors.append("'days_off_keywords': must be a list of strings")
+        else:
+            for kw in days_off_keywords:
+                if not isinstance(kw, str) or not kw.strip():
+                    errors.append(
+                        f"'days_off_keywords': entries must be non-empty strings (got {kw!r})"
+                    )
+
+    # Optional field: monthly_rev_share (month key "YYYY-MM" -> non-negative amount)
+    if 'monthly_rev_share' in prefs:
+        monthly_rev_share = prefs['monthly_rev_share']
+
+        if not isinstance(monthly_rev_share, dict):
+            errors.append("'monthly_rev_share': must be an object/dictionary")
+        else:
+            import re
+            for month_key, amount in monthly_rev_share.items():
+                if not isinstance(month_key, str) or not re.match(r'^\d{4}-\d{2}$', month_key):
+                    errors.append(
+                        f"'monthly_rev_share': key '{month_key}' must be 'YYYY-MM' format"
+                    )
+                    continue
+                if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                    errors.append(
+                        f"'monthly_rev_share.{month_key}': must be a number, got {type(amount).__name__}"
+                    )
+                    continue
+                if amount < 0:
+                    errors.append(
+                        f"'monthly_rev_share.{month_key}': must be non-negative (got {amount})"
+                    )
+
+    # Optional field: retainer_hourly_rates
+    if 'retainer_hourly_rates' in prefs:
+        retainer_hourly_rates = prefs['retainer_hourly_rates']
+
+        # Type check - must be a dict
+        if not isinstance(retainer_hourly_rates, dict):
+            errors.append("'retainer_hourly_rates': must be an object/dictionary")
+        else:
+            # Validate each retainer rate entry
+            for project_name, rate in retainer_hourly_rates.items():
+                # Project name must be string
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'retainer_hourly_rates': key '{project_name}' must be a string"
+                    )
+                    continue
+
+                # Rate must be a number (int or float)
+                if not isinstance(rate, (int, float)):
+                    errors.append(
+                        f"'retainer_hourly_rates.{project_name}': must be a number, got {type(rate).__name__}"
+                    )
+                    continue
+
+                # Rate must be positive
+                if rate <= 0:
+                    errors.append(
+                        f"'retainer_hourly_rates.{project_name}': must be greater than 0 (got {rate})"
+                    )
+
+    # Optional field: projects
+    if 'projects' in prefs:
+        projects = prefs['projects']
+
+        if not isinstance(projects, dict):
+            errors.append("'projects': must be an object/dictionary")
+        else:
+            valid_billing_types = {'hourly', 'hourly_with_cap', 'fixed_monthly'}
+            valid_hour_tracking = {'required', 'soft', 'none'}
+
+            for project_name, defn in projects.items():
+                prefix = f"'projects.{project_name}'"
+
+                if not isinstance(defn, dict):
+                    errors.append(f"{prefix}: must be an object")
+                    continue
+
+                billing_type = defn.get('billing_type')
+                if billing_type not in valid_billing_types:
+                    errors.append(
+                        f"{prefix}: 'billing_type' must be one of {sorted(valid_billing_types)}, got {billing_type!r}"
+                    )
+                    continue
+
+                if billing_type == 'hourly_with_cap':
+                    hourly_rate = defn.get('hourly_rate')
+                    cap_hours = defn.get('cap_hours')
+                    if not isinstance(hourly_rate, (int, float)) or hourly_rate <= 0:
+                        errors.append(f"{prefix}: 'hourly_rate' must be a positive number")
+                    if not isinstance(cap_hours, (int, float)) or cap_hours <= 0:
+                        errors.append(f"{prefix}: 'cap_hours' must be a positive number")
+                    last_billed_date = defn.get('last_billed_date')
+                    if last_billed_date is not None:
+                        import re
+                        if not re.match(r'^\d{4}-\d{2}-\d{2}$', str(last_billed_date)):
+                            errors.append(f"{prefix}: 'last_billed_date' must be YYYY-MM-DD format")
+
+                elif billing_type == 'fixed_monthly':
+                    monthly_amount = defn.get('monthly_amount')
+                    if not isinstance(monthly_amount, (int, float)) or monthly_amount <= 0:
+                        errors.append(f"{prefix}: 'monthly_amount' must be a positive number")
+
+                    hour_tracking = defn.get('hour_tracking', 'none')
+                    if hour_tracking not in valid_hour_tracking:
+                        errors.append(
+                            f"{prefix}: 'hour_tracking' must be one of {sorted(valid_hour_tracking)}, got {hour_tracking!r}"
+                        )
+
+                    if hour_tracking in ('required', 'soft'):
+                        target_hours = defn.get('target_hours')
+                        if not isinstance(target_hours, (int, float)) or target_hours <= 0:
+                            errors.append(
+                                f"{prefix}: 'target_hours' must be a positive number when hour_tracking is '{hour_tracking}'"
+                            )
+
+    # Optional field: stripe_project_customers
+    if 'stripe_project_customers' in prefs:
+        stripe_project_customers = prefs['stripe_project_customers']
+
+        if not isinstance(stripe_project_customers, dict):
+            errors.append("'stripe_project_customers': must be an object/dictionary")
+        else:
+            for project_name, customer_id in stripe_project_customers.items():
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'stripe_project_customers': key '{project_name}' must be a string"
+                    )
+                    continue
+                if not isinstance(customer_id, str):
+                    errors.append(
+                        f"'stripe_project_customers.{project_name}': must be a string"
+                    )
+                    continue
+                if customer_id.strip() and not customer_id.startswith('cus_'):
+                    errors.append(
+                        f"'stripe_project_customers.{project_name}': must start with 'cus_'"
+                    )
+
+    # Optional field: upwork_contracts
+    if 'upwork_contracts' in prefs:
+        upwork_contracts = prefs['upwork_contracts']
+
+        if not isinstance(upwork_contracts, dict):
+            errors.append("'upwork_contracts': must be an object/dictionary")
+        else:
+            for project_name, contract_id in upwork_contracts.items():
+                if not isinstance(project_name, str):
+                    errors.append(
+                        f"'upwork_contracts': key '{project_name}' must be a string"
+                    )
+                    continue
+                if not isinstance(contract_id, str):
+                    errors.append(
+                        f"'upwork_contracts.{project_name}': must be a string"
+                    )
+                    continue
+                if contract_id.strip() and not contract_id.strip().isdigit():
+                    errors.append(
+                        f"'upwork_contracts.{project_name}': must contain digits only"
+                    )
+
+    # Optional field: billing_reminders
+    if 'billing_reminders' in prefs:
+        billing_reminders = prefs['billing_reminders']
+        valid_weekdays = {
+            'monday', 'tuesday', 'wednesday', 'thursday',
+            'friday', 'saturday', 'sunday',
+        }
+        valid_tasks = {'invoice'}
+
+        if not isinstance(billing_reminders, list):
+            errors.append("'billing_reminders': must be an array/list")
+        else:
+            import re
+
+            time_pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+            for idx, reminder in enumerate(billing_reminders):
+                prefix = f"'billing_reminders[{idx}]'"
+                if not isinstance(reminder, dict):
+                    errors.append(f"{prefix}: must be an object")
+                    continue
+
+                enabled = reminder.get('enabled', True)
+                if not isinstance(enabled, bool):
+                    errors.append(f"{prefix}.enabled: must be a boolean")
+
+                project_name = reminder.get('project_name', '')
+                if not isinstance(project_name, str) or not project_name.strip():
+                    errors.append(f"{prefix}.project_name: must be a non-empty string")
+
+                task = reminder.get('task')
+                if task not in valid_tasks:
+                    errors.append(
+                        f"{prefix}.task: must be one of {sorted(valid_tasks)}, got {task!r}"
+                    )
+
+                day_of_month = reminder.get('day_of_month')
+                valid_dom = set(range(1, 29)) | {-1, -2, -3}
+                if day_of_month is not None:
+                    if (
+                        isinstance(day_of_month, bool)
+                        or not isinstance(day_of_month, int)
+                        or day_of_month not in valid_dom
+                    ):
+                        errors.append(
+                            f"{prefix}.day_of_month: must be 1-28 or -1/-2/-3, got {day_of_month!r}"
+                        )
+                else:
+                    weekday = reminder.get('weekday')
+                    if weekday not in valid_weekdays:
+                        errors.append(
+                            f"{prefix}.weekday: must be one of {sorted(valid_weekdays)} "
+                            f"(or set day_of_month), got {weekday!r}"
+                        )
+
+                reminder_time = reminder.get('time')
+                if not isinstance(reminder_time, str) or not time_pattern.match(reminder_time):
+                    errors.append(f"{prefix}.time: must be in HH:MM 24-hour format")
+
+    # Optional field: dashboard_sections
+    if 'dashboard_sections' in prefs:
+        dashboard_sections = prefs['dashboard_sections']
+        valid_sections = {'today', 'week', 'month'}
+
+        if not isinstance(dashboard_sections, dict):
+            errors.append("'dashboard_sections': must be an object/dictionary")
+        else:
+            for section_name, expanded in dashboard_sections.items():
+                if section_name not in valid_sections:
+                    errors.append(
+                        f"'dashboard_sections': key '{section_name}' must be one of {sorted(valid_sections)}"
+                    )
+                    continue
+                if not isinstance(expanded, bool):
+                    errors.append(
+                        f"'dashboard_sections.{section_name}': must be a boolean, got {type(expanded).__name__}"
+                    )
+
+    return errors
+
+
+# Export paths for use by other modules
+__all__ = [
+    'APP_SUPPORT_DIR',
+    'CACHE_DIR',
+    'PREFERENCES_FILE',
+    'load_preferences',
+    'save_preferences',
+    'get_preference',
+    'set_preference',
+    'reset_preferences',
+    'validate_preferences',
+]
