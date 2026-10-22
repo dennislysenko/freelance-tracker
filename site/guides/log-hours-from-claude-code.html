@@ -372,6 +372,34 @@
 
   .tl-legend .t-num { margin-right: 6px; }
 
+  /* "How?" sidebar: in the right margin when there's room, inline otherwise */
+  .how {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    padding: 14px 16px;
+    margin: 0 0 24px;
+  }
+
+  .how-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .how p { font-size: 14px; line-height: 1.6; margin: 0; }
+
+  @media (min-width: 1240px) {
+    .how {
+      float: right;
+      width: 240px;
+      margin: -74px -288px 0 0;
+    }
+  }
+
   /* Callouts and guardrails */
   .callout {
     border: 1px solid var(--border);
@@ -516,7 +544,10 @@
     <pre class="wrap">log my hours so far today</pre>
     <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
   </div>
-  <p>That&apos;s the whole prompt. Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, and each message in it has a timestamp. The agent reads today&apos;s transcripts, treats long silences as breaks, and turns each stretch of work into an entry. It picks the project from the repo you were in, and asks when that isn&apos;t clear.</p>
+  <aside class="how">
+    <div class="how-label">How?</div>
+    <p>Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, and each message in it has a timestamp. The agent reads today&apos;s transcripts, treats long silences as breaks, and turns each stretch of work into an entry. It picks the project from the repo you were in, and asks when that isn&apos;t clear.</p>
+  </aside>
   <div class="timeline" aria-label="Two working blocks today, 9:10 to 11:40am and 1:40 to 3:10pm, with a lunch gap between them">
     <div class="tl-track">
       <div class="tl-block" style="left:0%; width:42%"></div>
