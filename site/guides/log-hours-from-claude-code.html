@@ -201,6 +201,23 @@
   article ul, article ol { margin: 0 0 16px 20px; }
   article li { margin-bottom: 6px; }
 
+  .kbd {
+    display: inline-block;
+    min-width: 26px;
+    padding: 0 7px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: center;
+    vertical-align: 1px;
+  }
+
   code {
     font-family: var(--mono);
     font-size: 0.86em;
@@ -477,7 +494,7 @@
   <p>The 💰 total in your menu bar updates as soon as each entry lands. You don&apos;t need to press Refresh.</p>
 
   <h2><span class="step">01</span> Turn on agent access</h2>
-  <p>Open the dashboard, then <strong>&middot;&middot;&middot; &rarr; Settings &rarr; Integrations &rarr; Agents (MCP)</strong>, and tick two boxes:</p>
+  <p>Open the dashboard, click the <span class="kbd" aria-label="more">&#8943;</span> menu, then <strong>Settings &rarr; Integrations &rarr; Agents (MCP)</strong>, and tick two boxes:</p>
   <ul>
     <li><strong>Enable MCP server.</strong> This lets agents read your hours, pacing and projection. Reads come from the app&apos;s cache and never call Toggl.</li>
     <li><strong>Allow agents to log and edit time.</strong> This is the switch for this guide. It&apos;s off by default.</li>
