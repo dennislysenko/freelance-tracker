@@ -315,63 +315,6 @@
     font-size: 11.5px;
   }
 
-  /* Timeline figure */
-  .timeline {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 18px 18px 14px;
-    margin: 8px 0 24px;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-tertiary);
-  }
-
-  .tl-track {
-    position: relative;
-    height: 26px;
-    background: var(--border-subtle);
-    border-radius: 6px;
-    margin-bottom: 8px;
-  }
-
-  .tl-block {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    background: var(--accent);
-    border-radius: 6px;
-    opacity: 0.85;
-  }
-
-  .tl-gap {
-    position: absolute;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    color: var(--text-secondary);
-    font-size: 10px;
-    white-space: nowrap;
-  }
-
-  .tl-ticks {
-    position: relative;
-    height: 16px;
-  }
-
-  .tl-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
-  .tl-ticks span:first-child { transform: none; }
-  .tl-ticks span:last-child { transform: translateX(-100%); }
-
-  .tl-legend {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-subtle);
-    display: grid;
-    gap: 4px;
-  }
-
-  .tl-legend .t-num { margin-right: 6px; }
-
   /* "How?" sidebar: in the right margin when there's room, inline otherwise */
   .how {
     border: 1px solid var(--border);
@@ -413,7 +356,7 @@
     .how {
       float: right;
       width: 240px;
-      margin: -74px -288px 0 0;
+      margin: -118px -288px 0 0;
     }
   }
 
@@ -579,7 +522,7 @@
   <div class="term">
     <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>claude &middot; ~/dev/acme-storefront</span></div>
     <div class="term-body">
-      <p class="t-user">log my hours so far today</p>
+      <p class="t-user">Log my hours so far today using FreelanceTracker</p>
       <p>You&apos;ve had two working blocks today, both in acme-storefront: <span class="t-num">9:10am&ndash;11:40am</span> and <span class="t-num">1:40pm&ndash;3:10pm</span>. I&apos;ll log them to Acme Corp. Here&apos;s the first:</p>
       <p class="t-tool">freelance-tracker &middot; log_time (preview)</p>
       <div class="t-box">
@@ -613,26 +556,16 @@
   <p>Check that it connected with <code>claude mcp list</code>. The Settings pane also has a <strong>Test server</strong> button and a copy button with your real paths filled in, if you installed somewhere else.</p>
 
   <h2><span class="step">03</span> Ask</h2>
+  <p>Send this prompt. This is all you really need in practice.</p>
   <div class="codeblock">
-    <pre class="wrap">log my hours so far today</pre>
+    <pre class="wrap">Log my hours so far today using FreelanceTracker</pre>
     <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
   </div>
+  <p>That&apos;s it.</p>
   <aside class="how">
     <div class="how-label"><svg class="how-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.2"/><path d="M9.4 9.4a2.7 2.7 0 0 1 5.2 1c0 1.9-2.6 2.3-2.6 4"/><circle class="how-dot" cx="12" cy="17.4" r="0.6"/></svg>How?</div>
     <p>Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, and each message in it has a timestamp. The agent reads today&apos;s transcripts, treats long silences as breaks, and turns each stretch of work into an entry. It picks the project from the repo you were in, and asks when that isn&apos;t clear.</p>
   </aside>
-  <div class="timeline" aria-label="Two working blocks today, 9:10 to 11:40am and 1:40 to 3:10pm, with a lunch gap between them">
-    <div class="tl-track">
-      <div class="tl-block" style="left:0%; width:42%"></div>
-      <span class="tl-gap" style="left:58%">lunch</span>
-      <div class="tl-block" style="left:75%; width:25%"></div>
-    </div>
-    <div class="tl-ticks"><span style="left:0%">9:10am</span><span style="left:42%">11:40</span><span style="left:75%">1:40pm</span><span style="left:100%">3:10pm</span></div>
-    <div class="tl-legend">
-      <div><span class="t-num">Entry 1</span>9:10am&ndash;11:40am &middot; 2.50h</div>
-      <div><span class="t-num">Entry 2</span>1:40pm&ndash;3:10pm &middot; 1.50h</div>
-    </div>
-  </div>
   <p>Add detail only when you need it:</p>
   <ul>
     <li>&ldquo;&hellip;to Acme Corp&rdquo; when the repo doesn&apos;t say which client it&apos;s for.</li>
