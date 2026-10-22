@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Have Claude Code log the session you just finished · Freelance Tracker</title>
-<meta name="description" content="Let Claude Code turn its own session timestamps into Toggl time entries through Freelance Tracker's MCP server, one previewed entry at a time.">
-<meta property="og:title" content="Have Claude Code log the session you just finished">
+<title>Log your hours from Claude Code · Freelance Tracker</title>
+<meta name="description" content="Say &ldquo;log my hours so far today&rdquo; and Claude Code turns its own session timestamps into Toggl entries through Freelance Tracker, one previewed entry at a time.">
+<meta property="og:title" content="Log your hours from Claude Code">
 <meta property="og:description" content="Your agent already knows when you started and stopped. Here's how to let it log the time, with a preview before anything is written.">
 <meta property="og:image" content="https://freelance-tracker-landing.vercel.app/og.png">
 <meta property="og:type" content="article">
@@ -211,13 +211,6 @@
     padding: 1px 5px;
   }
 
-  .path {
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--text-tertiary);
-    margin: 0 0 16px;
-  }
-
   /* Copyable code block */
   .codeblock {
     position: relative;
@@ -344,9 +337,13 @@
   }
 
   .tl-ticks {
-    display: flex;
-    justify-content: space-between;
+    position: relative;
+    height: 16px;
   }
+
+  .tl-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+  .tl-ticks span:first-child { transform: none; }
+  .tl-ticks span:last-child { transform: translateX(-100%); }
 
   .tl-legend {
     margin-top: 10px;
@@ -450,8 +447,8 @@
 
 <article>
   <div class="eyebrow">Guide &middot; Agents</div>
-  <h1>Have Claude Code log the session you just finished</h1>
-  <p class="lede">You spent the afternoon in Claude Code on a client&apos;s repo. You never started a timer, and now you&apos;re rebuilding the afternoon from memory. Claude Code already knows when you started and when you stopped. With Freelance Tracker&apos;s MCP server, it can log that time to Toggl for you, and you check every entry before it&apos;s written.</p>
+  <h1>Log your hours from Claude Code</h1>
+  <p class="lede">You spent the day in Claude Code on a client&apos;s repo and never started a timer. You don&apos;t have to rebuild it from memory: Claude Code knows when you were working. With Freelance Tracker&apos;s MCP server, &ldquo;log my hours so far today&rdquo; is all it takes, and you check every entry before it&apos;s written.</p>
   <div class="meta">
     <span class="chip">~5 min setup</span>
     <span class="chip">Claude Code</span>
@@ -460,21 +457,21 @@
   </div>
 
   <h2>Where you&apos;ll end up</h2>
-  <p>At the end of a session, one sentence turns into a Toggl entry:</p>
+  <p>At any point in the day, one sentence turns your Claude Code sessions into Toggl entries:</p>
   <div class="term">
     <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>claude &middot; ~/dev/acme-storefront</span></div>
     <div class="term-body">
-      <p class="t-user">/log-session Acme Corp</p>
-      <p>This session runs from <span class="t-num">1:40pm</span> to <span class="t-num">5:25pm</span>, with a 45-minute gap after 3:10pm. That makes two entries. Here&apos;s the first:</p>
+      <p class="t-user">log my hours so far today</p>
+      <p>You&apos;ve had two working blocks today, both in acme-storefront: <span class="t-num">9:10am&ndash;11:40am</span> and <span class="t-num">1:40pm&ndash;3:10pm</span>. I&apos;ll log them to Acme Corp. Here&apos;s the first:</p>
       <p class="t-tool">freelance-tracker &middot; log_time (preview)</p>
       <div class="t-box">
-        Log Tue Oct 20 1:40pm&ndash;3:10pm (1.50h) to Acme Corp &mdash; checkout flow refactor<br>
+        Log Tue Oct 20 9:10am&ndash;11:40am (2.50h) to Acme Corp &mdash; checkout flow refactor<br>
         <span class="t-warn">Nothing has been written yet.</span>
       </div>
       <p>Log it?</p>
       <p class="t-user">yes</p>
       <p class="t-tool">freelance-tracker &middot; log_time (confirm)</p>
-      <p>Logged. Second entry: Tue Oct 20 3:55pm&ndash;5:25pm (1.50h), &ldquo;cart tests and PR review&rdquo;. Log it?</p>
+      <p>Logged. Second entry: Tue Oct 20 1:40pm&ndash;3:10pm (1.50h), &ldquo;cart tests and PR review&rdquo;. Log it?</p>
     </div>
   </div>
   <p>The 💰 total in your menu bar updates as soon as each entry lands. You don&apos;t need to press Refresh.</p>
@@ -488,7 +485,7 @@
   <p>Leave <strong>Anonymize client names</strong> off. With it on, writes are refused: an agent that only sees &ldquo;Project A&rdquo; shouldn&apos;t be logging billable hours.</p>
 
   <h2><span class="step">02</span> Register the server with Claude Code</h2>
-  <p>Run this once. User scope makes the server available in every project, which is what you want: you&apos;ll log time from whichever repo you&apos;re working in.</p>
+  <p>Run this once. User scope makes the server available in every project, so you can log time from whichever repo you&apos;re in.</p>
   <div class="codeblock">
     <pre><span class="hl">claude</span> mcp add --scope user freelance-tracker -- \
   ~/.freelance-tracker/venv/bin/python \
@@ -497,74 +494,37 @@
   </div>
   <p>Check that it connected with <code>claude mcp list</code>. The Settings pane also has a <strong>Test server</strong> button and a copy button with your real paths filled in, if you installed somewhere else.</p>
 
-  <h2><span class="step">03</span> Where the times come from</h2>
-  <p>Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, in a folder named after your working directory. Each message in it carries a UTC timestamp. The newest file in that folder is the session you&apos;re in.</p>
-  <p>That gives the agent everything it needs: your first message is the start, your last message is the end, and any long silence in between is a break.</p>
-  <div class="timeline" aria-label="A session from 1:40pm to 5:25pm with a 45-minute break, split into two entries">
+  <h2><span class="step">03</span> Ask</h2>
+  <div class="codeblock">
+    <pre class="wrap">log my hours so far today</pre>
+    <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
+  </div>
+  <p>That&apos;s the whole prompt. Claude Code saves every session as a transcript in <code>~/.claude/projects/</code>, and each message in it has a timestamp. The agent reads today&apos;s transcripts, treats long silences as breaks, and turns each stretch of work into an entry. It picks the project from the repo you were in, and asks when that isn&apos;t clear.</p>
+  <div class="timeline" aria-label="Two working blocks today, 9:10 to 11:40am and 1:40 to 3:10pm, with a lunch gap between them">
     <div class="tl-track">
-      <div class="tl-block" style="left:0%; width:40%"></div>
-      <span class="tl-gap" style="left:50%">45 min away</span>
-      <div class="tl-block" style="left:60%; width:40%"></div>
+      <div class="tl-block" style="left:0%; width:42%"></div>
+      <span class="tl-gap" style="left:58%">lunch</span>
+      <div class="tl-block" style="left:75%; width:25%"></div>
     </div>
-    <div class="tl-ticks"><span>1:40pm</span><span>3:10</span><span>3:55</span><span>5:25pm</span></div>
+    <div class="tl-ticks"><span style="left:0%">9:10am</span><span style="left:42%">11:40</span><span style="left:75%">1:40pm</span><span style="left:100%">3:10pm</span></div>
     <div class="tl-legend">
-      <div><span class="t-num">Entry 1</span>1:40pm&ndash;3:10pm &middot; 1.50h</div>
-      <div><span class="t-num">Entry 2</span>3:55pm&ndash;5:25pm &middot; 1.50h</div>
+      <div><span class="t-num">Entry 1</span>9:10am&ndash;11:40am &middot; 2.50h</div>
+      <div><span class="t-num">Entry 2</span>1:40pm&ndash;3:10pm &middot; 1.50h</div>
     </div>
   </div>
-  <p>The agent has to convert those UTC times to your local time, because <code>log_time</code> takes a local date and a 24-hour start time. The prompt below spells that out, along with how to round and where to split.</p>
-
-  <h2><span class="step">04</span> Ask for it</h2>
-  <p>Paste this at the end of a session, with your Toggl project name in place of Acme Corp:</p>
-  <div class="codeblock">
-    <pre class="wrap">Log the time for this session to <span class="hl">Acme Corp</span> using freelance-tracker.
-
-Get the times from this session's transcript: the newest .jsonl file in ~/.claude/projects/ for this working directory. Use the timestamps of my messages, not tool output. Convert them from UTC to my local time.
-
-- Start at my first message and end at my last one.
-- Wherever I was silent for more than 30 minutes, split into separate entries.
-- Round each entry to the nearest 15 minutes.
-- For the note, describe what we worked on in a few words.
-
-Preview each entry with log_time and wait for my yes before logging it.</pre>
-    <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
-  </div>
-  <p>Change the numbers to suit how you bill. If you charge in 6-minute increments, say &ldquo;round up to the next 6 minutes&rdquo;.</p>
-
-  <h2><span class="step">05</span> Read the preview, then say yes</h2>
-  <p>The first <code>log_time</code> call writes nothing. It checks the project name against your Toggl projects and returns a preview with the date, the time range, the hours, the project and the note. If you already logged part of that afternoon by hand, the preview flags the overlap, so you don&apos;t bill it twice.</p>
-  <p>The preview comes with a one-time token. Only when you say yes does the agent call again with it. The token:</p>
+  <p>Add detail only when you need it:</p>
   <ul>
-    <li>works once,</li>
-    <li>expires after 10 minutes,</li>
-    <li>is tied to the exact entry you saw. A token for a 1.5-hour entry can&apos;t confirm an 8-hour one.</li>
+    <li>&ldquo;&hellip;to Acme Corp&rdquo; when the repo doesn&apos;t say which client it&apos;s for.</li>
+    <li>&ldquo;&hellip;rounded to quarter hours&rdquo;, or whatever increment you bill in.</li>
+    <li>&ldquo;log yesterday&apos;s hours&rdquo; works too, for the day you forgot.</li>
   </ul>
+
+  <h2><span class="step">04</span> Read the preview, then say yes</h2>
+  <p>The first <code>log_time</code> call writes nothing. It checks the project against your Toggl projects and returns a preview with the date, the time range, the hours, the project and the note. If you already logged some of that time by hand, the preview flags the overlap, so you don&apos;t bill it twice.</p>
+  <p>The preview comes with a one-time token, and the agent only uses it after you say yes. The token works once, expires after 10 minutes, and is tied to the exact entry you saw: a token for a 1.5-hour entry can&apos;t confirm an 8-hour one.</p>
   <div class="callout">
-    <p><strong>Two blocks mean two confirmations.</strong> Every write covers exactly one entry, so a split session asks you twice. That&apos;s deliberate: you see each entry before it lands, and an agent can&apos;t log a week in one go.</p>
+    <p><strong>Two blocks mean two confirmations.</strong> Every write covers exactly one entry, so you see each one before it lands, and an agent can&apos;t log a week in one go.</p>
   </div>
-
-  <h2><span class="step">06</span> Make it one command (optional)</h2>
-  <p>Save the prompt as a custom slash command and you&apos;ll never paste it again. Create this file:</p>
-  <p class="path">~/.claude/commands/log-session.md</p>
-  <div class="codeblock">
-    <pre class="wrap">---
-description: Log this session's time to Toggl via Freelance Tracker
-argument-hint: &lt;Toggl project name&gt;
----
-
-Log the time for this session to <span class="hl">$ARGUMENTS</span> using freelance-tracker.
-
-Get the times from this session's transcript: the newest .jsonl file in ~/.claude/projects/ for this working directory. Use the timestamps of my messages, not tool output. Convert them from UTC to my local time.
-
-- Start at my first message and end at my last one.
-- Wherever I was silent for more than 30 minutes, split into separate entries.
-- Round each entry to the nearest 15 minutes.
-- For the note, describe what we worked on in a few words.
-
-Preview each entry with log_time and wait for my yes before logging it.</pre>
-    <button class="copy-btn" onclick="copyBlock(this)">Copy</button>
-  </div>
-  <p>Then end any session with <code>/log-session Acme Corp</code>.</p>
 
   <h2>What the agent can and can&apos;t do</h2>
   <div class="rules">
