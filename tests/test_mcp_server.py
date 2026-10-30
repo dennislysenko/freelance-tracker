@@ -1,5 +1,6 @@
 """Tests for the MCP server's tool builders, with the data layer stubbed."""
 
+from contextlib import contextmanager as contextmanager_factory
 from datetime import date
 import json
 import sys
@@ -199,9 +200,123 @@ def test_registered_tools_and_prompt():
     assert tool_names == {
         "get_overview", "get_month_status", "get_projection",
         "get_project_rules", "get_time_entries", "get_data_freshness",
-        "log_time", "update_entry", "delete_entry",
+        "get_gusto_hours", "log_time", "update_entry", "delete_entry",
     }
     assert {p.name for p in S.mcp._prompt_manager.list_prompts()} == {"progress_checkin"}
+
+
+class _FakeGusto:
+    def __init__(self, shifts):
+        self.shifts = shifts
+        self.calls = []
+
+    def tracker_id(self):
+        return "12345"
+
+    def list_shifts(self, tracker_id, start, end):
+        self.calls.append((start, end))
+        return list(self.shifts)
+
+    def add_shift(self, *args, **kwargs):
+        raise AssertionError("a read must never add a shift")
+
+
+def _gusto_factory(session):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def factory(slug):
+        assert slug == "acme-inc"
+        yield session
+    return factory
+
+
+@pytest.fixture
+def gusto_stubbed(stubbed, monkeypatch, tmp_path):
+    import gusto_sync
+
+    prefs, entry_dir = stubbed
+    prefs.update({"gusto_project": "Acme Corp", "gusto_company_slug": "acme-inc"})
+    monkeypatch.setattr(gusto_sync, "LOCK_FILE", tmp_path / "gusto_sync.lock")
+    monkeypatch.setattr(S, "get_projects", lambda: {"111": {"name": "Acme Corp"}})
+    entries = [
+        {"id": 1, "project_id": 111, "description": "design review",
+         "start": "2026-04-02T14:00:00Z", "stop": "2026-04-02T16:00:00Z", "duration": 7200},
+        {"id": 2, "project_id": 111, "description": "call",
+         "start": "2026-04-14T17:00:00Z", "stop": "2026-04-14T17:15:00Z", "duration": 900},
+        {"id": 3, "project_id": 222, "description": "other client",
+         "start": "2026-04-03T14:00:00Z", "stop": "2026-04-03T15:00:00Z", "duration": 3600},
+    ]
+    monkeypatch.setattr(S, "get_entries_for_range", lambda start, end: entries)
+    shifts = [
+        {"id": "9001", "date": "2026-04-02", "minutes": 120, "notes": ["design review"],
+         "clock_in": "2026-04-02T14:00:00Z", "clock_out": "2026-04-02T16:00:00Z"},
+        {"id": "9002", "date": "2026-04-09", "minutes": 30, "notes": ["added by hand"],
+         "clock_in": "2026-04-09T14:00:00Z", "clock_out": "2026-04-09T14:30:00Z"},
+    ]
+    return _FakeGusto(shifts)
+
+
+def test_gusto_hours_compares_with_toggl(gusto_stubbed):
+    session = gusto_stubbed
+    out = S.build_gusto_hours(session_factory=_gusto_factory(session))
+    assert session.calls == [(date(2026, 4, 1), date(2026, 4, 15))]
+    assert out["gusto_total_hours"] == 2.5
+    assert [d["date"] for d in out["gusto_days"]] == ["2026-04-02", "2026-04-09"]
+    cmp = out["comparison"]
+    assert cmp["toggl_hours"] == 2.25
+    assert cmp["gusto_hours"] == 2.5
+    assert cmp["difference_hours"] == -0.25
+    assert [e["toggl_id"] for e in cmp["toggl_only"]] == ["2"]
+    assert [s["id"] for s in cmp["gusto_only"]] == ["9002"]
+
+
+def test_gusto_hours_compares_toggl_only_up_to_today(gusto_stubbed, monkeypatch):
+    seen = []
+    monkeypatch.setattr(S, "get_entries_for_range", lambda start, end: seen.append(end.date()) or [])
+    out = S.build_gusto_hours("2026-04-01", "2026-04-30", session_factory=_gusto_factory(gusto_stubbed))
+    assert gusto_stubbed.calls == [(date(2026, 4, 1), date(2026, 4, 30))]
+    assert seen == [date(2026, 4, 15)]
+    assert out["comparison"]["toggl_through"] == "2026-04-15"
+
+
+def test_gusto_hours_keeps_gusto_numbers_on_cache_miss(gusto_stubbed, monkeypatch):
+    def missing(start, end):
+        raise toggl_data.CacheMissError([date(2026, 4, 3)])
+    monkeypatch.setattr(S, "get_entries_for_range", missing)
+    out = S.build_gusto_hours("2026-04-01", "2026-04-10", session_factory=_gusto_factory(gusto_stubbed))
+    assert out["gusto_total_hours"] == 2.5
+    assert out["comparison"] is None
+    assert "Refresh Now" in out["comparison_error"]
+
+
+def test_gusto_hours_errors_are_tool_errors(gusto_stubbed, stubbed, monkeypatch):
+    import gusto_client
+
+    @contextmanager_factory
+    def expired(slug):
+        raise gusto_client.GustoLoginRequired()
+        yield
+
+    out = S._run(S.build_gusto_hours, session_factory=expired)
+    assert out["error_type"] == "ValueError"
+    assert "Log in to Gusto" in out["error"]
+
+    prefs, _ = stubbed
+    prefs["gusto_company_slug"] = ""
+    out = S._run(S.build_gusto_hours, session_factory=_gusto_factory(gusto_stubbed))
+    assert "not connected" in out["error"]
+
+
+def test_gusto_hours_waits_for_a_running_push(gusto_stubbed):
+    import fcntl
+    import gusto_sync
+
+    with open(gusto_sync.LOCK_FILE, "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        out = S._run(S.build_gusto_hours, session_factory=_gusto_factory(gusto_stubbed))
+    assert "push is running" in out["error"]
+    assert gusto_stubbed.calls == []
 
 
 def test_server_speaks_mcp_over_stdio(tmp_path):

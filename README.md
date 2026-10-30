@@ -247,6 +247,11 @@ confirmation before anything is written.
 2. Click **Copy Claude Code command** (or **Copy Codex config**) and run / paste it.
 3. In your agent: "Check in on my freelance month."
 
+If you push hours to Gusto, the agent can also check what is actually in your
+Gusto timesheet against Toggl ("are all my October hours in Gusto?"). That read
+opens the Gusto Chrome window and may ask for your passkey; it never changes
+anything in Gusto.
+
 Full setup, tool list, and troubleshooting: [docs/mcp-agents.md](docs/mcp-agents.md).
 
 ### Natural-Language Time Logging (optional)

@@ -6,6 +6,8 @@ state as the menu bar app and never calls Toggl itself; see
 docs/mcp-server-plan.md for the design and docs/mcp-agents.md for setup.
 
 Read-only. Nothing here writes to Toggl, preferences, or carryover.
+`get_gusto_hours` is the one read that leaves the machine: it reads the
+user's Gusto timesheet through the app's Chrome window (still 0 Toggl calls).
 """
 
 from __future__ import annotations
@@ -522,6 +524,91 @@ def build_time_entries(start: str, end: str, project: Optional[str] = None) -> D
     return _finish(prefs, payload, start_d, end_d)
 
 
+GUSTO_LOGIN_TIMEOUT_SECONDS = 120
+
+
+def build_gusto_hours(start: Optional[str] = None, end: Optional[str] = None,
+                      session_factory=None) -> Dict[str, Any]:
+    """Shifts in the user's Gusto timesheet, compared with cached Toggl entries
+    for the Gusto project. Reads Gusto live through the app's Chrome window
+    (0 Toggl calls); never writes to Gusto."""
+    import gusto_client
+    import gusto_sync
+
+    prefs = load_preferences()
+    _require_enabled(prefs)
+    project_name = (prefs.get("gusto_project") or "").strip()
+    company_slug = prefs.get("gusto_company_slug") or ""
+    if not company_slug:
+        raise ValueError("Gusto is not connected. Log in under Settings → Integrations → Gusto.")
+    today = _today()
+    try:
+        start_d = date.fromisoformat(start) if start else _month_start(today)
+        end_d = date.fromisoformat(end) if end else today
+    except ValueError as exc:
+        raise ValueError(f"Dates must be YYYY-MM-DD: {exc}") from exc
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+    if (end_d - start_d).days + 1 > MAX_ENTRY_RANGE_DAYS:
+        raise ValueError(f"Range too long: at most {MAX_ENTRY_RANGE_DAYS} days per call")
+
+    session_factory = session_factory or (
+        lambda slug: gusto_client.open_session(
+            slug, login_timeout_seconds=GUSTO_LOGIN_TIMEOUT_SECONDS))
+    try:
+        # The push's lock: a read must not drive the window mid-push.
+        with gusto_sync.run_lock(gusto_sync.LOCK_FILE), session_factory(company_slug) as session:
+            shifts = session.list_shifts(session.tracker_id(), start_d, end_d)
+    except gusto_sync.SyncBusy:
+        raise ValueError("A Gusto push is running right now. Try again in a minute.")
+    except Exception as exc:  # noqa: BLE001 - Chrome, Playwright, or Gusto: report, don't drop the call
+        raise ValueError(f"Could not read Gusto: {exc}") from exc
+
+    days: Dict[str, Dict[str, Any]] = {}
+    for shift in shifts:
+        day = shift.get("date") or ""
+        bucket = days.setdefault(day, {"date": day, "hours": 0.0, "shifts": []})
+        bucket["shifts"].append({
+            "start": shift.get("clock_in"),
+            "end": shift.get("clock_out"),
+            "hours": _round((shift.get("minutes") or 0) / 60),
+            "note": "; ".join(shift.get("notes") or []),
+        })
+        bucket["hours"] += (shift.get("minutes") or 0) / 60
+    for b in days.values():
+        b["hours"] = _round(b["hours"])
+        b["shifts"].sort(key=lambda s: s["start"] or "")
+
+    payload: Dict[str, Any] = {
+        "start": start_d.isoformat(),
+        "end": end_d.isoformat(),
+        "project": project_name or None,
+        "gusto_total_hours": _round(sum(s.get("minutes") or 0 for s in shifts) / 60),
+        "gusto_days": [days[k] for k in sorted(days)],
+    }
+    # The comparison is cache-only like every other read; a missing day only
+    # drops the comparison, not the Gusto numbers.
+    try:
+        project_id = gusto_sync._project_id(project_name, get_projects()) if project_name else None
+        if project_id is None:
+            raise ValueError("No Toggl project is set to push to Gusto.")
+        # Days after today have no finished hours and are never cached.
+        toggl_end = min(end_d, today)
+        entries = get_entries_for_range(
+            datetime.combine(start_d, datetime.min.time()).astimezone(),
+            datetime.combine(toggl_end, datetime.max.time()).astimezone(),
+        ) if start_d <= toggl_end else []
+        payload["comparison"] = gusto_sync.compare_hours(entries, project_id, shifts)
+        payload["comparison"]["toggl_through"] = toggl_end.isoformat()
+        payload["data_as_of"] = _data_as_of(start_d, toggl_end) if start_d <= toggl_end else None
+    except (CacheMissError, ValueError) as exc:
+        payload["comparison"] = None
+        payload["comparison_error"] = str(exc)
+        payload["data_as_of"] = None
+    payload["gusto_as_of"] = datetime.now().astimezone().isoformat(timespec="minutes")
+    return _maybe_anonymize(prefs, payload)
+
+
 def build_data_freshness() -> Dict[str, Any]:
     prefs = load_preferences()
     today = _today()
@@ -613,6 +700,12 @@ def get_time_entries(start: str, end: str, project: Optional[str] = None) -> Dic
 def get_data_freshness() -> Dict[str, Any]:
     """How fresh the cached data is, whether the server is enabled, and how to refresh."""
     return _run(build_data_freshness)
+
+
+@mcp.tool(annotations=ToolAnnotations(title='Gusto hours', read_only_hint=True, open_world_hint=True))
+def get_gusto_hours(start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Any]:
+    """Hours actually in the user's Gusto contractor timesheet between two YYYY-MM-DD dates (default: this month to today, max 92 days), by day, compared with the cached Toggl entries of the project pushed to Gusto: totals, the difference, Toggl entries not in Gusto yet (`toggl_only`), and Gusto shifts with no matching entry (`gusto_only`). Read-only, but unlike the other tools it reads Gusto LIVE: it brings up the app's visible Chrome window and may need the user to approve a passkey (waits up to 2 minutes). Call it once per question, not in a loop."""
+    return _run(build_gusto_hours, start, end)
 
 
 @mcp.tool(

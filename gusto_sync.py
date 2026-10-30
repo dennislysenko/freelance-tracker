@@ -427,6 +427,47 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
     return plan
 
 
+def compare_hours(entries, project_id, shifts):
+    """Toggl entries for the project vs. shifts in Gusto, matched one to one.
+
+    Returns hour totals for each side plus whatever is on only one side: Toggl
+    entries no shift matches (not in Gusto yet) and shifts no entry matches
+    (added or edited in Gusto by hand). Running timers are left out.
+    """
+    unmatched = list(shifts)
+    toggl_hours = 0.0
+    toggl_only = []
+    for entry in sorted(entries, key=lambda e: e.get("start") or ""):
+        if str(entry.get("project_id")) != str(project_id):
+            continue
+        bounds = entry_bounds(entry)
+        if bounds is None:
+            continue
+        entry_start, entry_stop = bounds
+        hours = (entry_stop - entry_start).total_seconds() / 3600
+        toggl_hours += hours
+        note = (entry.get("description") or "").strip() or DEFAULT_NOTE
+        match = next((s for s in unmatched if _same_shift(s, entry_start, entry_stop, note)), None)
+        if match is not None:
+            unmatched.remove(match)
+            continue
+        toggl_only.append({
+            "toggl_id": str(entry.get("id")),
+            "day": entry_start.date().isoformat(),
+            "start": entry_start.isoformat(timespec="minutes"),
+            "hours": round(hours, 2),
+            "description": entry.get("description") or "",
+        })
+    gusto_hours = sum(s.get("minutes") or 0 for s in shifts) / 60
+    return {
+        "gusto_hours": round(gusto_hours, 2),
+        "toggl_hours": round(toggl_hours, 2),
+        "difference_hours": round(toggl_hours - gusto_hours, 2),
+        "toggl_only": toggl_only,
+        "gusto_only": sorted(unmatched, key=lambda s: (s.get("date") or "", s.get("clock_in") or "")),
+    }
+
+
 def find_drift(entries, project_id, state, start, end):
     """Pushed entries (within the window) whose Toggl copy changed or vanished."""
     current = {

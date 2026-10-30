@@ -6,7 +6,7 @@ dashboard shows: hours, earnings, the month projection, per-project pacing, and
 the billing rules behind them. Ask an agent "how is my month going and where
 should I put more time?" and it answers from your real data.
 
-Reading is the default and costs nothing: the six `get_*` tools never call
+Reading is the default and costs nothing: the `get_*` tools never call
 Toggl, they read the app's local cache, so the data is exactly as fresh as the
 dashboard's last refresh (every response says `data_as_of`).
 
@@ -95,6 +95,14 @@ behind.
 | `get_project_rules` | Project definitions, targets, rev share, vacation settings, plus each rule in plain English |
 | `get_time_entries` | Cached entries between two dates (max 92 days), grouped by day, optional project filter |
 | `get_data_freshness` | Cache ages, whether today's data is past its TTL, whether the server is enabled and writable |
+| `get_gusto_hours` | Hours actually in your Gusto contractor timesheet between two dates (default: this month), by day, compared with the cached Toggl entries of the project you push to Gusto: totals, difference, entries not in Gusto yet, shifts with no matching entry |
+
+`get_gusto_hours` is the one read that leaves your Mac: it reads Gusto live
+through the app's visible Chrome window (the same one the Gusto push uses), so
+the window comes up and Gusto may ask you to approve your passkey (it waits two
+minutes). It never writes to Gusto and makes no Toggl calls. It needs Gusto
+connected (Settings → Integrations → Gusto), and waits its turn if a push is
+running.
 
 Three more appear only as write tools; they refuse until you enable writing:
 `log_time`, `update_entry`, `delete_entry`.
