@@ -112,11 +112,20 @@ then behind, then capped billing cycles ending within three business days
 with hours unfilled, then over-target (unbillable overflow), then well ahead
 (hours that could move elsewhere).
 
+### Billable and non-billable hours
+
+Entries marked non-billable in Toggl count toward nothing: earnings, targets,
+caps, carryover, the projection, or Gusto. Project rows report `hours` (the
+billable hours everything is computed from, also given as `billable_hours`),
+`non_billable_hours`, and `total_hours`; `get_month_status` adds
+`month_non_billable_hours` and `month_total_hours`. `get_time_entries` marks
+each entry `billable` and totals `billable_hours` / `non_billable_hours`.
+
 ### Pacing fields
 
 Each tracked project carries a `pacing` object:
 
-- `percentage`: hours ÷ carryover-adjusted target
+- `percentage`: billable hours ÷ carryover-adjusted target
 - `calendar_pct`: how far through the cycle you are (calendar month, or the
   billing cycle for capped projects with a last-billed date)
 - `pace_ratio`: `percentage / calendar_pct`, shrunk toward 1.0 in the first

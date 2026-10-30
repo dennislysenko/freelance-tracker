@@ -176,18 +176,27 @@ def format_period_label(period):
         return today.strftime("%B %Y")
 
 
+def is_billable_entry(entry):
+    """Toggl's per-entry billable flag; only an explicit false excludes."""
+    return entry.get("billable", True) is not False
+
+
 def calculate_earnings(period="daily"):
     """Calculate earnings for the specified period."""
     entries = get_entries_with_cache(period)
     projects = get_projects()
 
     # Group entries by project
-    project_data = defaultdict(lambda: {"duration": 0, "entries": []})
+    project_data = defaultdict(lambda: {"duration": 0, "non_billable_duration": 0, "entries": []})
 
     for entry in entries:
         project_id = str(entry.get("project_id"))
         if project_id and project_id != "None":
-            project_data[project_id]["duration"] += entry["duration"]
+            # Non-billable entries are listed but never earn.
+            if is_billable_entry(entry):
+                project_data[project_id]["duration"] += entry["duration"]
+            else:
+                project_data[project_id]["non_billable_duration"] += entry["duration"]
             project_data[project_id]["entries"].append({
                 "description": entry.get("description", "No description"),
                 "duration": entry["duration"],
@@ -212,11 +221,13 @@ def calculate_earnings(period="daily"):
     for project_id, data in project_data.items():
         project_info = projects.get(project_id, {})
         hours = data["duration"] / 3600
+        entry_non_billable_hours = data["non_billable_duration"] / 3600
 
         project_summary = {
             "name": project_info.get("name", "Unknown Project"),
             "client": project_info.get("client_name"),
             "hours": hours,
+            "non_billable_hours": entry_non_billable_hours,
             "rate": project_info.get("rate"),
             "billable": project_info.get("billable", False),
             "entries": data["entries"]
@@ -227,9 +238,11 @@ def calculate_earnings(period="daily"):
             earnings = hours * project_summary["rate"]
             billable_earnings += earnings
             billable_hours += hours
+            non_billable_hours += entry_non_billable_hours
         else:
+            project_summary["hours"] = hours + entry_non_billable_hours
             non_billable_projects.append(project_summary)
-            non_billable_hours += hours
+            non_billable_hours += project_summary["hours"]
 
     # Display billable projects
     if billable_projects:
@@ -241,6 +254,8 @@ def calculate_earnings(period="daily"):
             if proj["client"]:
                 print(f"  Client: {proj['client']}")
             print(f"  Time: {proj['hours']:.2f} hours")
+            if proj["non_billable_hours"]:
+                print(f"  Non-billable (not earned): {proj['non_billable_hours']:.2f} hours")
             print(f"  Earnings: ${earnings:.2f}")
 
             if period == "daily":

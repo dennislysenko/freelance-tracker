@@ -639,6 +639,17 @@ def entry_local_day(entry):
         return None
 
 
+def is_billable_entry(entry):
+    """Whether a raw Toggl entry is billable time.
+
+    Non-billable entries (Toggl's per-entry billable flag set to false) never
+    count toward targets, caps, carryover, earnings, the projection, invoices
+    or Gusto; they are only shown alongside the billable hours. Only an
+    explicit false excludes an entry, so data without the field still counts.
+    """
+    return (entry or {}).get("billable", True) is not False
+
+
 def _rewrite_shard(day, mutate):
     """Apply `mutate(entries)` to an existing day shard. No-op if absent."""
     if day is None:
@@ -844,22 +855,28 @@ def compute_lbd_cap_fill_date(project_name, last_billed_date, cap_hours, project
     """
     if not last_billed_date or cap_hours <= 0:
         return None
-    unbilled_entries = get_entries_since_date(last_billed_date + timedelta(days=1))
-    hours_by_day = defaultdict(float)
-    for e in unbilled_entries:
-        if (projects_map.get(str(e.get('project_id')), {}).get('name') == project_name
-                and e.get('duration', 0) > 0):
-            entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
-            hours_by_day[entry_date] += e['duration'] / 3600
+    hours_by_day = _lbd_hours_by_day(project_name, last_billed_date, projects_map)
     return _calculate_cap_fill_date(hours_by_day, cap_hours)
 
 
+def _lbd_hours_by_day(project_name, last_billed_date, projects_map):
+    """Billable hours per day logged on a project since its last billed date."""
+    hours_by_day = defaultdict(float)
+    for e in get_entries_since_date(last_billed_date + timedelta(days=1)):
+        if (projects_map.get(str(e.get('project_id')), {}).get('name') == project_name
+                and e.get('duration', 0) > 0 and is_billable_entry(e)):
+            entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+            hours_by_day[entry_date] += e['duration'] / 3600
+    return hours_by_day
+
+
 def _get_monthly_project_hours(project_id, projects_map, entries_cache=None):
-    """Get total hours for a project in the current month (from cache, no API calls)."""
+    """Get billable hours for a project in the current month (from cache, no API calls)."""
     monthly_entries = get_entries_with_cache("monthly")
     total = 0.0
     for e in monthly_entries:
-        if str(e.get("project_id")) == str(project_id) and e.get("duration", 0) > 0:
+        if (str(e.get("project_id")) == str(project_id) and e.get("duration", 0) > 0
+                and is_billable_entry(e)):
             total += e["duration"] / 3600
     return total
 
@@ -940,13 +957,7 @@ def calculate_period_earnings(period):
                     last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
                 except ValueError:
                     continue
-                unbilled_entries = get_entries_since_date(last_billed + timedelta(days=1))
-                hours_by_day = defaultdict(float)
-                for e in unbilled_entries:
-                    if (projects_map.get(str(e.get('project_id')), {}).get('name') == proj_name
-                            and e.get('duration', 0) > 0):
-                        entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
-                        hours_by_day[entry_date] += e['duration'] / 3600
+                hours_by_day = _lbd_hours_by_day(proj_name, last_billed, projects_map)
                 unbilled_h = sum(hours_by_day.values())
                 worked_days_count = len(hours_by_day)
                 cap_hours = defn.get('cap_hours', 0)
@@ -958,21 +969,30 @@ def calculate_period_earnings(period):
                     'cap_fill_date': _calculate_cap_fill_date(hours_by_day, cap_hours),
                 }
 
-    # Group entries by project
-    project_data = defaultdict(lambda: {"duration": 0, "entries": []})
+    # Group entries by project. "duration"/"entries" hold billable time only,
+    # which is all that counts; non-billable time is tallied for display.
+    project_data = defaultdict(
+        lambda: {"duration": 0, "non_billable_duration": 0, "entries": [], "all_entries": []}
+    )
 
     for entry in entries:
         if entry.get("duration", 0) <= 0:
             continue
         project_id = str(entry.get("project_id"))
         if project_id and project_id != "None":
-            project_data[project_id]["duration"] += entry["duration"]
-            project_data[project_id]["entries"].append(entry)
+            data = project_data[project_id]
+            data["all_entries"].append(entry)
+            if is_billable_entry(entry):
+                data["duration"] += entry["duration"]
+                data["entries"].append(entry)
+            else:
+                data["non_billable_duration"] += entry["duration"]
 
     # Calculate earnings
     total_earnings = 0
     fixed_earnings = 0
     total_hours = 0
+    total_non_billable_hours = 0
     billable_projects_list = []
     all_projects_list = []
 
@@ -980,22 +1000,27 @@ def calculate_period_earnings(period):
         project_info = projects_map.get(project_id, {})
         project_name = project_info.get("name", "Unknown Project")
         hours = data["duration"] / 3600
+        non_billable_hours = data["non_billable_duration"] / 3600
         total_hours += hours
+        total_non_billable_hours += non_billable_hours
 
         effective_rate, rate_source = get_effective_project_rate(
             project_info, retainer_hourly_rates, projects_config
         )
         has_earnings = effective_rate is not None or rate_source == "fixed_monthly_flat"
 
+        # "hours" is billable hours: what earnings, targets and pacing use.
         project_entry = {
             "name": project_name,
             "hours": hours,
+            "non_billable_hours": non_billable_hours,
+            "total_hours": hours + non_billable_hours,
             "billable": has_earnings
         }
 
         if period == "daily":
             time_blocks = []
-            for e in data["entries"]:
+            for e in data["all_entries"]:
                 if e.get("duration", 0) <= 0 or not e.get("start"):
                     continue
                 try:
@@ -1008,6 +1033,7 @@ def calculate_period_earnings(period):
                     "stop": stop_dt,
                     "duration": e["duration"],
                     "description": e.get("description") or "",
+                    "billable": is_billable_entry(e),
                 })
             time_blocks.sort(key=lambda b: b["start"])
             project_entry["time_blocks"] = time_blocks
@@ -1058,6 +1084,7 @@ def calculate_period_earnings(period):
                     # last_billed_date mode: use unbilled hours since that date
                     hours = lbd_results[project_name]['hours']
                     project_entry["hours"] = hours
+                    project_entry["total_hours"] = hours + project_entry["non_billable_hours"]
                     earnings = lbd_results[project_name]['earnings']
                     project_entry["cap_fill_date"] = lbd_results[project_name].get('cap_fill_date')
                 else:
@@ -1090,6 +1117,8 @@ def calculate_period_earnings(period):
                 entry = {
                     'name': proj_name,
                     'hours': lbd['hours'],
+                    'non_billable_hours': 0.0,
+                    'total_hours': lbd['hours'],
                     'earnings': lbd['earnings'],
                     'cap_fill_date': lbd.get('cap_fill_date'),
                     'billable': True,
@@ -1107,6 +1136,8 @@ def calculate_period_earnings(period):
         "total": total_earnings,
         "fixed_earnings": fixed_earnings,
         "hours": total_hours,
+        "non_billable_hours": total_non_billable_hours,
+        "total_hours": total_hours + total_non_billable_hours,
         "projects": billable_projects_list,
         "all_projects": all_projects_list
     }
@@ -1286,6 +1317,7 @@ def _try_calculate_last_month_carryover(projects_config):
             for e in prev_month_entries
             if projects_map.get(str(e.get("project_id")), {}).get("name") == project_name
                and e.get("duration", 0) > 0
+               and is_billable_entry(e)
         )
 
         if billing_type == 'hourly_with_cap':
@@ -1346,7 +1378,8 @@ def calculate_business_days(year, month):
 def get_worked_days_this_month():
     """
     Calculate the number of days this month with earnings-contributing time entries.
-    Returns a set of dates (YYYY-MM-DD) where work had an effective rate.
+    Returns a set of dates (YYYY-MM-DD) where billable work had an effective rate;
+    a day with only non-billable time earned nothing, so it does not count.
     """
     entries = get_entries_with_cache("monthly")
     projects_map = get_projects()
@@ -1357,6 +1390,8 @@ def get_worked_days_this_month():
     worked_days = set()
 
     for entry in entries:
+        if not is_billable_entry(entry):
+            continue
         project_id = str(entry.get("project_id"))
         if project_id and project_id != "None":
             project_info = projects_map.get(project_id, {})
@@ -1457,13 +1492,7 @@ def calculate_monthly_projection():
         except ValueError:
             continue
 
-        unbilled_entries = get_entries_since_date(last_billed + timedelta(days=1))
-        hours_by_day = defaultdict(float)
-        for e in unbilled_entries:
-            if (projects_map.get(str(e.get('project_id')), {}).get('name') == proj_name
-                    and e.get('duration', 0) > 0):
-                entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
-                hours_by_day[entry_date] += e['duration'] / 3600
+        hours_by_day = _lbd_hours_by_day(proj_name, last_billed, projects_map)
 
         unbilled_hours = sum(hours_by_day.values())
         worked_days_in_period = len(hours_by_day)

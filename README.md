@@ -17,6 +17,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 🧾 **Invoice-date pacing** for capped projects — paces from your last bill, not the 1st of the month
 - 💼 **Project definitions** with billing types: hourly, capped hourly, and fixed monthly
 - 🔁 **Carryover tracking** for capped and fixed-monthly projects across months
+- 🚫 **Non-billable time** — entries you mark non-billable in Toggl (say, fixing your own bug) are shown next to your hours ("+1.5h non-billable") but never count toward earnings, targets, caps, carryover, the projection, CSV exports, invoices, or Gusto
 - 🕐 **Last update timestamp**
 - 🧹 **Clear All Caches** action in the dashboard refresh menu for heavy cache recovery
 - 📂 **Open Cache Folder** action in the dashboard refresh menu for quick Finder access
@@ -224,6 +225,9 @@ shift on its real date, with the description as the note.
    also push any time from **Export/Invoice → Push to Gusto**. An orange dot on
    Export/Invoice means last week or the month isn't in Gusto yet, or something
    needs you (passkey, a Toggl entry edited after it was pushed).
+
+Only billable entries are pushed; an entry marked non-billable after it was
+pushed is flagged for you to fix in Gusto.
 
 The app only ever adds shifts; it never edits or deletes anything in Gusto. It
 uses Gusto's web app in a visible Chrome window (Gusto has no API contractors

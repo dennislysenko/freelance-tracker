@@ -5,6 +5,7 @@ from datetime import datetime
 import requests
 
 from hours_csv_export import get_project_entries_for_range
+from toggl_data import is_billable_entry
 from integrations import load_integration_settings
 
 STRIPE_API_BASE = "https://api.stripe.com/v1"
@@ -27,7 +28,10 @@ def create_draft_invoice_for_project_range(
     if not customer_id:
         raise RuntimeError(f"No Stripe customer configured for {project_name}")
 
-    entries = get_project_entries_for_range(project_id, project_name, start_d, end_d)
+    entries = [
+        entry for entry in get_project_entries_for_range(project_id, project_name, start_d, end_d)
+        if is_billable_entry(entry)
+    ]
     total_hours = sum(max(0, entry.get("duration", 0)) for entry in entries) / 3600
     if total_hours <= 0:
         raise RuntimeError(f"No billable hours found for {project_name}")

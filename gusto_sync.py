@@ -15,6 +15,8 @@ Contract:
   is reported, not retried forever.
 - A shift already in Gusto with the same start and end is not added again, so
   a lost ledger cannot double-log.
+- Non-billable Toggl entries are never pushed (they are not payable hours).
+  One that is marked non-billable after it was pushed is flagged like an edit.
 - The Gusto session is a browser login (see gusto_client). When it expires the
   run stops, the user is notified once a day, and nothing retries until they
   log in again.
@@ -358,6 +360,11 @@ def _parse(ts):
     return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
 
 
+def is_billable(entry):
+    """Toggl's per-entry billable flag; same rule as toggl_data.is_billable_entry."""
+    return (entry or {}).get("billable", True) is not False
+
+
 def entry_bounds(entry):
     """(start, stop) as local aware datetimes, or None for a running timer."""
     duration = entry.get("duration") or 0
@@ -404,6 +411,8 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
             continue
         if str(entry.get("id")) in pushed:
             continue
+        if not is_billable(entry):
+            continue
         bounds = entry_bounds(entry)
         if bounds is None:
             continue
@@ -432,10 +441,13 @@ def compare_hours(entries, project_id, shifts):
 
     Returns hour totals for each side plus whatever is on only one side: Toggl
     entries no shift matches (not in Gusto yet) and shifts no entry matches
-    (added or edited in Gusto by hand). Running timers are left out.
+    (added or edited in Gusto by hand). Running timers are left out, and so
+    are non-billable entries: they never belong in Gusto, so they only show
+    up as `toggl_non_billable_hours`.
     """
     unmatched = list(shifts)
     toggl_hours = 0.0
+    non_billable_hours = 0.0
     toggl_only = []
     for entry in sorted(entries, key=lambda e: e.get("start") or ""):
         if str(entry.get("project_id")) != str(project_id):
@@ -445,6 +457,9 @@ def compare_hours(entries, project_id, shifts):
             continue
         entry_start, entry_stop = bounds
         hours = (entry_stop - entry_start).total_seconds() / 3600
+        if not is_billable(entry):
+            non_billable_hours += hours
+            continue
         toggl_hours += hours
         note = (entry.get("description") or "").strip() or DEFAULT_NOTE
         match = next((s for s in unmatched if _same_shift(s, entry_start, entry_stop, note)), None)
@@ -462,6 +477,7 @@ def compare_hours(entries, project_id, shifts):
     return {
         "gusto_hours": round(gusto_hours, 2),
         "toggl_hours": round(toggl_hours, 2),
+        "toggl_non_billable_hours": round(non_billable_hours, 2),
         "difference_hours": round(toggl_hours - gusto_hours, 2),
         "toggl_only": toggl_only,
         "gusto_only": sorted(unmatched, key=lambda s: (s.get("date") or "", s.get("clock_in") or "")),
@@ -469,7 +485,8 @@ def compare_hours(entries, project_id, shifts):
 
 
 def find_drift(entries, project_id, state, start, end):
-    """Pushed entries (within the window) whose Toggl copy changed or vanished."""
+    """Pushed entries (within the window) whose Toggl copy changed, vanished,
+    or was marked non-billable."""
     current = {
         str(e.get("id")): e for e in entries if str(e.get("project_id")) == str(project_id)
     }
@@ -484,6 +501,10 @@ def find_drift(entries, project_id, state, start, end):
         if entry is None:
             issues.append({"kind": "deleted", "day": day,
                            "message": f"{label}: an entry pushed to Gusto was deleted in Toggl"})
+            continue
+        if not is_billable(entry):
+            issues.append({"kind": "non_billable", "day": day,
+                           "message": f"{label}: an entry pushed to Gusto was marked non-billable in Toggl"})
             continue
         bounds = entry_bounds(entry)
         if bounds is None:

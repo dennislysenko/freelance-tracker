@@ -11,6 +11,7 @@ from pathlib import Path
 
 from toggl_data import (
     get_entries_for_range,
+    is_billable_entry,
 )
 
 CSV_HEADER = [
@@ -52,13 +53,16 @@ def _format_rate(rate):
 def build_rows(entries, hourly_rate):
     """Convert Toggl entries into CSV row dicts.
 
-    Filters running/zero-length entries. Converts UTC timestamps to local time.
+    Filters running/zero-length and non-billable entries (the CSV is a bill).
+    Converts UTC timestamps to local time.
     Sorts by start datetime descending to match the sample CSV ordering.
     """
     rows = []
     for entry in entries:
         duration_seconds = entry.get("duration", 0)
         if not duration_seconds or duration_seconds <= 0:
+            continue
+        if not is_billable_entry(entry):
             continue
 
         start_iso = entry.get("start")

@@ -1082,7 +1082,9 @@ class FreelanceTrackerApp(rumps.App):
                         f"  {project['name']}: ${project['earnings']:.0f} ({project['hours']:.1f}h)"
                     )
                 else:
-                    menu_items.append(f"  {project['name']}: {project['hours']:.1f}h")
+                    menu_items.append(
+                        f"  {project['name']}: {project.get('total_hours', project['hours']):.1f}h"
+                    )
         else:
             menu_items.append("  No time logged today")
 

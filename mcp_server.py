@@ -225,9 +225,15 @@ def _round(v: Any, nd: int = 2) -> Any:
 
 
 def _slim_project(p: Dict[str, Any]) -> Dict[str, Any]:
+    # `hours` is billable hours, the figure earnings and pacing use.
+    hours = p.get("hours", 0.0)
+    non_billable = p.get("non_billable_hours", 0.0)
     return {
         "name": p.get("name"),
-        "hours": _round(p.get("hours", 0.0)),
+        "hours": _round(hours),
+        "billable_hours": _round(hours),
+        "non_billable_hours": _round(non_billable),
+        "total_hours": _round(p.get("total_hours", hours + non_billable)),
         "earnings": _round(p.get("earnings")),
         "rate": p.get("rate"),
         "rate_source": p.get("rate_source"),
@@ -269,6 +275,8 @@ def build_overview() -> Dict[str, Any]:
         return {
             "total": _round(d.get("total", 0.0)),
             "hours": _round(d.get("hours", 0.0)),
+            "non_billable_hours": _round(d.get("non_billable_hours", 0.0)),
+            "total_hours": _round(d.get("total_hours", d.get("hours", 0.0))),
             "projects": [_slim_project(p) for p in d.get("all_projects", [])],
         }
 
@@ -313,7 +321,8 @@ def build_month_status() -> Dict[str, Any]:
     projects: List[Dict[str, Any]] = []
     attention: List[Dict[str, Any]] = []
     for name in dict.fromkeys(names):
-        p = by_name.get(name, {"name": name, "hours": 0.0, "billable": False})
+        p = by_name.get(name, {"name": name, "hours": 0.0, "non_billable_hours": 0.0,
+                               "total_hours": 0.0, "billable": False})
         target, proj_def, billing_type, hour_tracking = _resolve_target(
             name, project_targets, projects_config
         )
@@ -325,7 +334,7 @@ def build_month_status() -> Dict[str, Any]:
 
         if not (p.get("billable") or target or name in projects_config):
             continue
-        if p.get("hours", 0) <= 0 and not target:
+        if p.get("total_hours", p.get("hours", 0)) <= 0 and not target:
             continue
 
         if target:
@@ -350,6 +359,12 @@ def build_month_status() -> Dict[str, Any]:
         "today_date": today.isoformat(),
         "month_total": _round(monthly.get("total", 0.0)),
         "month_hours": _round(monthly.get("hours", 0.0)),
+        "month_non_billable_hours": _round(monthly.get("non_billable_hours", 0.0)),
+        "month_total_hours": _round(monthly.get("total_hours", monthly.get("hours", 0.0))),
+        "hours_note": (
+            "hours/billable_hours count toward earnings, targets, caps, carryover and the "
+            "projection; non_billable_hours are shown for reference only."
+        ),
         "projected_earnings": _round(projection.get("projected_earnings")),
         "is_projection_capped": projection.get("is_projection_capped"),
         "worked_days": projection.get("worked_days"),
@@ -453,7 +468,10 @@ def build_project_rules() -> Dict[str, Any]:
         "monthly_rev_share": {ym: (prefs.get("monthly_rev_share") or {}).get(ym, 0)},
         "vacation_days_per_month": prefs.get("vacation_days_per_month"),
         "days_off_keywords": prefs.get("days_off_keywords", []),
-        "rules_plain_english": rules,
+        "rules_plain_english": rules + [
+            "Entries marked non-billable in Toggl never count toward earnings, targets, caps, "
+            "carryover, the projection, invoices or Gusto; they are reported separately."
+        ],
         "pacing_bands": (
             "Bands on pace_ratio (hours% / calendar%): >=1.5 well_ahead, >=1.15 ahead, "
             ">=0.85 on_pace, >=0.5 behind, else way_behind. Percentage >105 over_target, "
@@ -488,6 +506,7 @@ def build_time_entries(start: str, end: str, project: Optional[str] = None) -> D
 
     days: Dict[str, Dict[str, Any]] = {}
     total_seconds = 0
+    non_billable_seconds = 0
     for e in entries:
         if e.get("duration", 0) <= 0 or not e.get("start"):
             continue
@@ -499,19 +518,26 @@ def build_time_entries(start: str, end: str, project: Optional[str] = None) -> D
         except ValueError:
             continue
         day_key = start_local.date().isoformat()
-        bucket = days.setdefault(day_key, {"date": day_key, "hours": 0.0, "entries": []})
+        billable = toggl_data.is_billable_entry(e)
+        bucket = days.setdefault(day_key, {"date": day_key, "hours": 0.0,
+                                           "non_billable_hours": 0.0, "entries": []})
         bucket["entries"].append({
             "entry_id": e.get("id"),
             "project": pname,
             "description": e.get("description") or "",
             "start": start_local.isoformat(timespec="minutes"),
             "hours": _round(e["duration"] / 3600),
+            "billable": billable,
         })
         bucket["hours"] += e["duration"] / 3600
         total_seconds += e["duration"]
+        if not billable:
+            bucket["non_billable_hours"] += e["duration"] / 3600
+            non_billable_seconds += e["duration"]
 
     for b in days.values():
         b["hours"] = _round(b["hours"])
+        b["non_billable_hours"] = _round(b["non_billable_hours"])
         b["entries"].sort(key=lambda x: x["start"])
 
     payload = {
@@ -519,6 +545,8 @@ def build_time_entries(start: str, end: str, project: Optional[str] = None) -> D
         "end": end_d.isoformat(),
         "project_filter": project,
         "total_hours": _round(total_seconds / 3600),
+        "billable_hours": _round((total_seconds - non_billable_seconds) / 3600),
+        "non_billable_hours": _round(non_billable_seconds / 3600),
         "days": [days[k] for k in sorted(days)],
     }
     return _finish(prefs, payload, start_d, end_d)

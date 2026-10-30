@@ -494,3 +494,42 @@ def test_gusto_result_card():
     assert "Pushed 3 shifts (5.50h)" in html
     assert "times changed in Toggl" in html
     assert "postAction('gusto_dismiss')" in html
+
+
+def test_rows_show_non_billable_hours_without_counting_them(monkeypatch):
+    controller = _make_controller()
+    monkeypatch.setattr(
+        dashboard_panel,
+        "load_preferences",
+        lambda: {
+            "project_targets": {},
+            "projects": {
+                "Retainer Client": {
+                    "billing_type": "fixed_monthly",
+                    "monthly_amount": 1500,
+                    "hour_tracking": "required",
+                    "target_hours": 10,
+                },
+            },
+            "dashboard_sections": {"today": True, "week": True, "month": True},
+        },
+    )
+    monkeypatch.setattr(dashboard_panel, "get_previous_month_balance", lambda name: (0.0, "Mar"))
+
+    retainer = {"name": "Retainer Client", "earnings": 1500, "hours": 9.0,
+                "non_billable_hours": 5.0, "total_hours": 14.0, "billable": True}
+    personal = {"name": "Side Project", "earnings": 0, "hours": 0.0,
+                "non_billable_hours": 2.0, "total_hours": 2.0, "billable": False}
+    html = controller._generate_html(
+        {"total": 0, "all_projects": [dict(retainer, earnings=0, hours=0.0,
+                                           non_billable_hours=0.5, total_hours=0.5), personal]},
+        {"total": 0, "all_projects": []},
+        {"total": 1500, "all_projects": [retainer], "projection": {}},
+    )
+
+    # Pacing bar uses the 9 billable hours; the 5 are listed, not counted.
+    assert "Retainer Client: 9.0h / 10.0h (90%)" in html
+    assert "+5.0h non-billable, not counted (14.0h total)" in html
+    assert "(0.0h +0.5h non-billable)" in html
+    # A project with no rate shows all its time, no split.
+    assert '<span class="hours">2.0h</span>' in html

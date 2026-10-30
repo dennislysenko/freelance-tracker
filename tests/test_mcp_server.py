@@ -368,3 +368,58 @@ def test_detect_registrations(tmp_path):
 
     (tmp_path / ".claude.json").write_text("{not json")
     assert mcp_support.detect_registrations(tmp_path)["claude_code"] is False
+
+
+def test_month_status_separates_billable_and_non_billable_hours(stubbed):
+    _, _ = stubbed
+    monthly = S.calculate_period_earnings("monthly")
+    monthly.update({"hours": 32.0, "non_billable_hours": 5.0, "total_hours": 37.0})
+    globex = monthly["all_projects"][1]
+    globex.update({"non_billable_hours": 5.0, "total_hours": 27.0})
+
+    out = S.get_month_status()
+    row = {p["name"]: p for p in out["projects"]}["Globex"]
+
+    assert out["month_hours"] == 32.0
+    assert out["month_non_billable_hours"] == 5.0
+    assert out["month_total_hours"] == 37.0
+    assert row["hours"] == row["billable_hours"] == 22.0
+    assert row["non_billable_hours"] == 5.0
+    assert row["total_hours"] == 27.0
+    # Pacing is on billable hours only: 22/30 on day 15 -> "ahead", as before.
+    assert row["pacing"]["band"] == "ahead"
+
+
+def test_time_entries_flag_non_billable(stubbed, monkeypatch):
+    entries = [
+        {"id": 1, "project_id": 1, "start": "2026-04-14T14:00:00Z", "duration": 3600,
+         "description": "a", "billable": True},
+        {"id": 2, "project_id": 1, "start": "2026-04-14T16:00:00Z", "duration": 1800,
+         "description": "own bug", "billable": False},
+    ]
+    monkeypatch.setattr(S, "get_entries_for_range", lambda s, e: entries)
+    monkeypatch.setattr(S, "get_projects", lambda: {"1": {"name": "Acme Corp"}})
+
+    out = S.get_time_entries("2026-04-14", "2026-04-14")
+
+    assert out["total_hours"] == 1.5
+    assert out["billable_hours"] == 1.0
+    assert out["non_billable_hours"] == 0.5
+    assert out["days"][0]["non_billable_hours"] == 0.5
+    assert [e["billable"] for e in out["days"][0]["entries"]] == [True, False]
+
+
+def test_gusto_hours_comparison_skips_non_billable(gusto_stubbed, monkeypatch):
+    entries = [
+        {"id": 1, "project_id": 111, "description": "design review", "billable": True,
+         "start": "2026-04-02T14:00:00Z", "stop": "2026-04-02T16:00:00Z", "duration": 7200},
+        {"id": 2, "project_id": 111, "description": "own bug", "billable": False,
+         "start": "2026-04-14T17:00:00Z", "stop": "2026-04-14T17:15:00Z", "duration": 900},
+    ]
+    monkeypatch.setattr(S, "get_entries_for_range", lambda start, end: entries)
+
+    cmp = S.build_gusto_hours(session_factory=_gusto_factory(gusto_stubbed))["comparison"]
+
+    assert cmp["toggl_hours"] == 2.0
+    assert cmp["toggl_non_billable_hours"] == 0.25
+    assert cmp["toggl_only"] == []

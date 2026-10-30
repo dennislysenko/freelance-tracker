@@ -451,3 +451,53 @@ def test_early_push_marks_its_day_but_cutoff_day_stays_due():
     assert state["deadline_pushed"] == "2026-10-29"
     assert not g.status_view(PREFS, state, now=datetime(2026, 10, 29, 16))["stale"]
     assert g.status_view(PREFS, state, now=datetime(2026, 10, 30, 9))["stale"]
+
+
+# --- non-billable entries ----------------------------------------------------
+
+
+def _non_billable(entry):
+    return {**entry, "billable": False}
+
+
+def test_plan_never_pushes_non_billable_entries():
+    entries = [
+        _entry(1, _local(2026, 10, 6, 9), 60, "billable"),
+        _non_billable(_entry(2, _local(2026, 10, 6, 11), 30, "own bug")),
+    ]
+    plan = g.plan_pushes(entries, PROJECT_ID, {"pushed": {}}, date(2026, 10, 5), date(2026, 10, 11))
+    assert [item["toggl_id"] for item in plan] == ["1"]
+
+
+def test_run_skips_non_billable_entries():
+    entries = [
+        _entry(1, _local(2026, 10, 6, 9), 60, "billable"),
+        _non_billable(_entry(2, _local(2026, 10, 7, 9), 120, "own bug")),
+    ]
+    session, (state, summary) = _run(entries)
+    assert summary["pushed"] == 1
+    assert summary["hours"] == 1.0
+    assert list(state["pushed"]) == ["1"]
+    assert len(session.added) == 1
+
+
+def test_compare_hours_leaves_non_billable_out_of_toggl_side():
+    start = _local(2026, 10, 6, 9)
+    entries = [
+        _entry(1, start, 60, "billable"),
+        _non_billable(_entry(2, start + timedelta(hours=2), 30, "own bug")),
+    ]
+    out = g.compare_hours(entries, PROJECT_ID, [])
+    assert out["toggl_hours"] == 1.0
+    assert out["toggl_non_billable_hours"] == 0.5
+    assert [e["toggl_id"] for e in out["toggl_only"]] == ["1"]
+
+
+def test_drift_flags_pushed_entry_later_marked_non_billable():
+    start = _local(2026, 10, 6, 9)
+    state = {"pushed": {"1": {"day": "2026-10-06", "start": start.isoformat(timespec="seconds"),
+                              "stop": (start + timedelta(hours=1)).isoformat(timespec="seconds")}}}
+    entries = [_non_billable(_entry(1, start, 60))]
+    issues = g.find_drift(entries, PROJECT_ID, state, date(2026, 10, 5), date(2026, 10, 11))
+    assert [i["kind"] for i in issues] == ["non_billable"]
+    assert "non-billable" in issues[0]["message"]

@@ -189,6 +189,7 @@ class AssistantSession:
         by_day = {}
         by_project = {}
         total = 0.0
+        non_billable = 0.0
         for entry in self._entries_provider(start, end) or []:
             seconds = entry.get("duration") or 0
             if seconds <= 0 or not entry.get("start"):
@@ -203,9 +204,13 @@ class AssistantSession:
             except ValueError:
                 continue
             hours = seconds / 3600
+            billable = entry.get("billable", True) is not False
             total += hours
+            if not billable:
+                non_billable += hours
             by_project[name] = by_project.get(name, 0.0) + hours
-            by_day.setdefault(start_dt.date(), []).append((start_dt, hours, name, entry.get("description") or ""))
+            by_day.setdefault(start_dt.date(), []).append(
+                (start_dt, hours, name, entry.get("description") or "", billable))
 
         span = (
             start.strftime("%a %b %-d")
@@ -217,6 +222,8 @@ class AssistantSession:
             return f"No {scope}time logged for {span}."
 
         lines = [f"{scope}{span}: {total:.2f}h total"]
+        if non_billable:
+            lines[0] += f" ({non_billable:.2f}h non-billable)"
         if not wanted and len(by_project) > 1:
             for name, hours in sorted(by_project.items(), key=lambda kv: -kv[1]):
                 lines.append(f"  {name}: {hours:.2f}h")
@@ -229,7 +236,7 @@ class AssistantSession:
             if start != end or not detailed:
                 lines.append(f"{day.strftime('%a %b %-d')}: {day_hours:.2f}h")
             if detailed:
-                for start_dt, hours, name, desc in items:
+                for start_dt, hours, name, desc, billable in items:
                     end_dt = start_dt + timedelta(hours=hours)
                     row = (
                         f"  {start_dt.strftime('%-I:%M%p').lower()}"
@@ -240,6 +247,8 @@ class AssistantSession:
                         row += f" \u00b7 {name}"
                     if desc:
                         row += f" \u00b7 {desc}"
+                    if not billable:
+                        row += " \u00b7 non-billable"
                     lines.append(row)
         return "\n".join(lines)
 

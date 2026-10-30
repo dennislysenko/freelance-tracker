@@ -313,6 +313,17 @@ class TestQuestions(unittest.TestCase):
                                      "end_date": "2026-09-15"})
         self.assertEqual(result["message"], "No Acme time logged for Tue Sep 15.")
 
+    def test_non_billable_time_is_called_out(self):
+        session = self._session([
+            self._entry(1, "2026-09-15T13:00:00Z", 60, "feature"),
+            {**self._entry(1, "2026-09-15T15:00:00Z", 30, "own bug"), "billable": False},
+        ])
+        msg = self._ask(session, {"project": None, "start_date": "2026-09-15",
+                                  "end_date": "2026-09-15"})["message"]
+        self.assertIn("1.50h total (0.50h non-billable)", msg)
+        self.assertIn("own bug \u00b7 non-billable", msg)
+        self.assertNotIn("feature \u00b7 non-billable", msg)
+
     def test_long_range_gives_day_totals_only(self):
         entries = [self._entry(1, f"2026-09-{d:02d}T13:00:00Z", 60, "note")
                    for d in range(1, 15)]

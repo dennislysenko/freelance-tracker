@@ -409,3 +409,174 @@ def test_required_fixed_monthly_earns_monthly_amount_regardless_of_hours(monkeyp
     monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: over)
     monkeypatch.setattr(toggl_data, "_get_monthly_project_hours", lambda *a, **k: 12.0)
     assert toggl_data.calculate_period_earnings("weekly")["total"] == pytest.approx(1500)
+
+
+# --- non-billable entries --------------------------------------------------
+
+
+def _nb(entry):
+    return {**entry, "billable": False}
+
+
+def _non_billable_env(monkeypatch, tmp_path, projects):
+    _configure_cache_env(
+        monkeypatch,
+        tmp_path,
+        prefs={
+            "cache_ttl_today": 1800,
+            "cache_ttl_projects": 86400,
+            "projects": projects,
+            "retainer_hourly_rates": {},
+        },
+    )
+
+
+def test_is_billable_entry_only_excludes_explicit_false():
+    assert toggl_data.is_billable_entry({"billable": True})
+    assert toggl_data.is_billable_entry({})
+    assert not toggl_data.is_billable_entry({"billable": False})
+
+
+def test_non_billable_time_earns_nothing_and_is_reported_separately(monkeypatch, tmp_path):
+    _non_billable_env(monkeypatch, tmp_path, {
+        "Client S": {"billing_type": "fixed_monthly", "monthly_amount": 3000,
+                     "hour_tracking": "soft", "target_hours": 30},
+        "Client C": {"billing_type": "hourly_with_cap", "hourly_rate": 100, "cap_hours": 5},
+    })
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {
+        "101": {"name": "Client S"},
+        "102": {"name": "Client C"},
+        "103": {"name": "Client H", "billable": True, "rate": 100},
+    })
+    entries = [
+        _entry(1, 101, "2026-04-06T14:00:00Z", 10 * 3600, "billable"),
+        _nb(_entry(2, 101, "2026-04-07T14:00:00Z", 5 * 3600, "own bug")),
+        _entry(3, 102, "2026-04-06T14:00:00Z", 4 * 3600, "billable"),
+        _nb(_entry(4, 102, "2026-04-07T14:00:00Z", 3 * 3600, "own bug")),
+        _entry(5, 103, "2026-04-06T14:00:00Z", 2 * 3600, "billable"),
+        _nb(_entry(6, 103, "2026-04-07T14:00:00Z", 1 * 3600, "own bug")),
+    ]
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: entries)
+
+    data = toggl_data.calculate_period_earnings("monthly")
+    by_name = {p["name"]: p for p in data["all_projects"]}
+
+    # Soft retainer: 10 billable h x $100, not 15h; the 5h is only shown.
+    assert by_name["Client S"]["hours"] == pytest.approx(10)
+    assert by_name["Client S"]["non_billable_hours"] == pytest.approx(5)
+    assert by_name["Client S"]["total_hours"] == pytest.approx(15)
+    assert by_name["Client S"]["earnings"] == pytest.approx(1000)
+    # Capped: 4 billable h stay under the 5h cap; non-billable does not fill it.
+    assert by_name["Client C"]["hours"] == pytest.approx(4)
+    assert by_name["Client C"]["earnings"] == pytest.approx(400)
+    assert by_name["Client C"]["cap_fill_date"] is None
+    # Toggl-rate hourly: only billable hours earn.
+    assert by_name["Client H"]["earnings"] == pytest.approx(200)
+
+    assert data["total"] == pytest.approx(1600)
+    assert data["hours"] == pytest.approx(16)
+    assert data["non_billable_hours"] == pytest.approx(9)
+    assert data["total_hours"] == pytest.approx(25)
+
+
+def test_project_with_only_non_billable_time_is_listed_with_zero_hours(monkeypatch, tmp_path):
+    _non_billable_env(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(toggl_data, "get_projects",
+                        lambda: {"103": {"name": "Client H", "billable": True, "rate": 100}})
+    entries = [_nb(_entry(1, 103, "2026-04-11T14:00:00Z", 1800, "own bug"))]
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: entries)
+
+    data = toggl_data.calculate_period_earnings("daily")
+
+    (project,) = data["all_projects"]
+    assert project["hours"] == 0
+    assert project["non_billable_hours"] == pytest.approx(0.5)
+    assert project["earnings"] == 0
+    # The day's timeline still shows the block, marked non-billable.
+    assert [b["billable"] for b in project["time_blocks"]] == [False]
+
+
+def test_daily_soft_retainer_counts_only_billable_month_hours_toward_target(monkeypatch, tmp_path):
+    _non_billable_env(monkeypatch, tmp_path, {
+        "Client S": {"billing_type": "fixed_monthly", "monthly_amount": 1000,
+                     "hour_tracking": "soft", "target_hours": 10},
+    })
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {"101": {"name": "Client S"}})
+    month = [
+        _entry(1, 101, "2026-04-06T14:00:00Z", 8 * 3600, "billable"),
+        _nb(_entry(2, 101, "2026-04-07T14:00:00Z", 6 * 3600, "own bug")),
+        _entry(3, 101, "2026-04-11T14:00:00Z", 1 * 3600, "today"),
+    ]
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache",
+                        lambda period: month if period == "monthly" else month[2:])
+
+    # 8 billable h before today leave 2h of target; the 6 non-billable h do
+    # not use it up, so today's hour still earns.
+    assert toggl_data.calculate_period_earnings("daily")["total"] == pytest.approx(100)
+
+
+def test_lbd_unbilled_hours_and_cap_fill_skip_non_billable(monkeypatch, tmp_path):
+    _non_billable_env(monkeypatch, tmp_path, {
+        "Client A": {"billing_type": "hourly_with_cap", "hourly_rate": 100,
+                     "cap_hours": 6, "last_billed_date": "2026-03-31"},
+    })
+    projects = {"101": {"name": "Client A"}}
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: projects)
+    entries = [
+        _entry(1, 101, "2026-04-06T14:00:00Z", 4 * 3600, "billable"),
+        _nb(_entry(2, 101, "2026-04-07T14:00:00Z", 4 * 3600, "own bug")),
+        _entry(3, 101, "2026-04-08T14:00:00Z", 1 * 3600, "billable"),
+    ]
+    monkeypatch.setattr(toggl_data, "get_entries_since_date", lambda start: entries)
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: entries)
+
+    data = toggl_data.calculate_period_earnings("monthly")
+    (project,) = data["all_projects"]
+
+    assert project["hours"] == pytest.approx(5)
+    assert project["non_billable_hours"] == pytest.approx(4)
+    assert project["earnings"] == pytest.approx(500)
+    assert project["cap_fill_date"] is None
+    assert toggl_data.compute_lbd_cap_fill_date(
+        "Client A", date(2026, 3, 31), 6, projects) is None
+
+
+def test_auto_carryover_ignores_non_billable_hours(monkeypatch, tmp_path):
+    _configure_cache_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {"101": {"name": "Client A"}})
+    march = [
+        _entry(1, 101, "2026-03-10T15:00:00Z", 9 * 3600, "billable"),
+        _nb(_entry(2, 101, "2026-03-11T15:00:00Z", 3 * 3600, "own bug")),
+    ]
+    monkeypatch.setattr(toggl_data, "get_entries_for_range", lambda start, end: march)
+
+    toggl_data._try_calculate_last_month_carryover({
+        "Client A": {"billing_type": "fixed_monthly", "monthly_amount": 2000,
+                     "hour_tracking": "required", "target_hours": 10},
+    })
+
+    # 9 billable h against 10h: 1h owed, not 2h over.
+    assert carryover.get_balance("Client A", "2026-03") == pytest.approx(-1.0)
+
+
+def test_days_with_only_non_billable_time_are_not_worked_days(monkeypatch, tmp_path):
+    _non_billable_env(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(toggl_data, "get_projects",
+                        lambda: {"103": {"name": "Client H", "billable": True, "rate": 100}})
+    entries = [
+        _entry(1, 103, "2026-04-06T14:00:00Z", 3600, "billable"),
+        _nb(_entry(2, 103, "2026-04-07T14:00:00Z", 3600, "own bug")),
+    ]
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: entries)
+
+    assert toggl_data.get_worked_days_this_month() == {"2026-04-06"}
+
+
+def test_csv_export_bills_only_billable_entries():
+    rows = hours_csv_export.build_rows([
+        _entry(1, 101, "2026-04-06T14:00:00Z", 3600, "billable"),
+        _nb(_entry(2, 101, "2026-04-07T14:00:00Z", 3600, "own bug")),
+    ], 150)
+
+    assert [r["Description"] for r in rows] == ["billable"]
+    assert rows[0]["Money Billed (USD)"] == "150.0"

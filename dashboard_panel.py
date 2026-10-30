@@ -772,6 +772,8 @@ class DashboardPanelController:
             display_projects.append({
                 "name": name,
                 "hours": 0.0,
+                "non_billable_hours": 0.0,
+                "total_hours": 0.0,
                 "billable": proj_def.get("billing_type") in ("fixed_monthly", "hourly_with_cap"),
             })
 
@@ -816,8 +818,11 @@ class DashboardPanelController:
                 if not (is_billable or has_target or has_def):
                     continue
 
-                if project['hours'] <= 0 and not target:
+                if _total_hours(project) <= 0 and not target:
                     continue
+
+                if project.get('non_billable_hours', 0) > 0 and (target or is_billable):
+                    height += 14
 
                 if target:
                     height += 52  # header + progress bar + status
@@ -864,10 +869,10 @@ class DashboardPanelController:
             if p.get('billable', True):
                 value_html = (
                     f'<span class="money">${p["earnings"]:.0f}</span>'
-                    f'<span class="hours">({p["hours"]:.1f}h)</span>'
+                    f'<span class="hours">({_billable_hours_label(p)})</span>'
                 )
             else:
-                value_html = f'<span class="hours">{p["hours"]:.1f}h</span>'
+                value_html = f'<span class="hours">{_total_hours(p):.1f}h</span>'
 
             if blocks:
                 project_key = _esc(p['name'])
@@ -877,10 +882,13 @@ class DashboardPanelController:
                     stop_s = self._format_block_time(block["stop"])
                     mins = max(1, round(block["duration"] / 60))
                     desc = block.get("description") or "(no description)"
+                    nb_tag = ""
+                    if p.get('billable', True) and block.get("billable") is False:
+                        nb_tag = '<span class="time-block-duration">non-billable</span>'
                     blocks_html += f"""
                     <div class="time-block">
                         <span class="time-block-range">{start_s}\u2013{stop_s}</span>
-                        <span class="time-block-duration">({mins}m)</span>
+                        <span class="time-block-duration">({mins}m)</span>{nb_tag}
                         <button class="time-block-desc" type="button"
                                 data-copy-text="{_esc(desc)}"
                                 onclick="copyDescription(this)">{_esc(desc)}</button>
@@ -920,7 +928,7 @@ class DashboardPanelController:
                     <span class="project-name">{_esc(p['name'])}</span>
                     <span class="project-value">
                         <span class="money">${p['earnings']:.0f}</span>
-                        <span class="hours">({p['hours']:.1f}h)</span>
+                        <span class="hours">({_billable_hours_label(p)})</span>
                     </span>
                 </div>"""
             else:
@@ -928,7 +936,7 @@ class DashboardPanelController:
                 <div class="project-row">
                     <span class="project-name">{_esc(p['name'])}</span>
                     <span class="project-value">
-                        <span class="hours">{p['hours']:.1f}h</span>
+                        <span class="hours">{_total_hours(p):.1f}h</span>
                     </span>
                 </div>"""
 
@@ -959,8 +967,10 @@ class DashboardPanelController:
             if not (is_billable or has_target or has_def):
                 continue
 
-            if p['hours'] <= 0 and not target:
+            if _total_hours(p) <= 0 and not target:
                 continue
+
+            non_billable_html = _non_billable_note(p)
 
             # Determine target
             carryover_balance = 0.0
@@ -1013,6 +1023,7 @@ class DashboardPanelController:
                         <div class="calendar-marker" style="left: {calendar_pct:.1f}%;"></div>
                     </div>
                     <div class="status-text">{status_text}</div>
+                    {non_billable_html}
                     {carryover_html}
                     {cap_html}
                 </div>"""
@@ -1024,6 +1035,7 @@ class DashboardPanelController:
                         <span class="project-name">{_esc(name)}: {p['hours']:.1f}h</span>
                         <span class="money">${p['earnings']:.0f}</span>
                     </div>
+                    {non_billable_html}
                 </div>"""
                 untracked_projects.append(row_html)
 
@@ -3223,6 +3235,30 @@ html, body {{
                 {body_html}
             </div>
         </div>"""
+
+
+def _total_hours(p):
+    """All hours logged on a project row, billable or not."""
+    return p.get('total_hours', p.get('hours', 0.0))
+
+
+def _billable_hours_label(p):
+    """'1.0h', or '1.0h +0.5h non-billable' when some time was not billable."""
+    label = f"{p['hours']:.1f}h"
+    if p.get('non_billable_hours', 0) > 0:
+        label += f" +{p['non_billable_hours']:.1f}h non-billable"
+    return label
+
+
+def _non_billable_note(p):
+    """Monthly sub-line for time that was logged but does not count."""
+    non_billable = p.get('non_billable_hours', 0)
+    if non_billable <= 0:
+        return ""
+    return (
+        f'<div class="carryover">↳ +{non_billable:.1f}h non-billable, not counted '
+        f'({_total_hours(p):.1f}h total)</div>'
+    )
 
 
 def _esc(text):
