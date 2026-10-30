@@ -291,3 +291,121 @@ def test_lbd_projection_uses_remaining_business_days_in_billing_cycle(monkeypatc
     assert remaining_days == 29
     assert projection["projected_variable"] == expected_projected_variable
     assert projection["projected_earnings"] == expected_projected_variable
+
+
+def _frozen_at(year, month, day, hour=16):
+    class _At(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(year, month, day, hour, 0, 0, tzinfo=timezone.utc)
+            return base.astimezone(tz) if tz is not None else base.astimezone()
+    return _At
+
+
+def _projection_env(monkeypatch, tmp_path, *, now, variable_earnings, worked_days, days_off):
+    import calendar_days_off
+
+    _configure_cache_env(
+        monkeypatch,
+        tmp_path,
+        prefs={
+            "cache_ttl_today": 1800,
+            "cache_ttl_projects": 86400,
+            "projects": {
+                "Client F": {"billing_type": "fixed_monthly", "monthly_amount": 1000,
+                             "hour_tracking": "none"},
+            },
+            "retainer_hourly_rates": {},
+            "monthly_rev_share": {f"{now.year:04d}-{now.month:02d}": 500},
+        },
+    )
+    monkeypatch.setattr(toggl_data, "datetime", _frozen_at(now.year, now.month, now.day))
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {})
+    monkeypatch.setattr(
+        toggl_data,
+        "calculate_period_earnings",
+        lambda period: {"total": 1000 + variable_earnings, "fixed_earnings": 1000, "projects": []},
+    )
+    monkeypatch.setattr(toggl_data, "get_worked_days_this_month", lambda: set(worked_days))
+    monkeypatch.setattr(calendar_days_off, "get_month_days_off", lambda y, m, prefs=None: days_off)
+
+
+def test_projection_at_month_end_equals_earned_even_when_worked_days_exceed_workable(monkeypatch, tmp_path):
+    # Worked a weekend day and days marked off, so worked days (19) exceed
+    # workable days (22 - 5 = 17). Nothing is left to pace: projection == earned.
+    worked = ["2026-10-%02d" % d for d in
+              (5, 6, 7, 8, 9, 12, 13, 14, 19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30)]
+    _projection_env(
+        monkeypatch, tmp_path, now=date(2026, 10, 30), variable_earnings=8317.5,
+        worked_days=worked,
+        days_off={"source": "calendar", "vacation_days": 5,
+                  "dates": ["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-19", "2026-10-27"]},
+    )
+
+    projection = toggl_data.calculate_monthly_projection()
+
+    assert projection["remaining_workable_days"] == 0
+    assert projection["projected_variable"] == pytest.approx(8317.5)
+    assert projection["projected_earnings"] == pytest.approx(1000 + 500 + 8317.5)
+
+
+def test_projection_paces_only_remaining_days_excluding_calendar_days_off(monkeypatch, tmp_path):
+    # Tue Oct 20, already worked today. Business days ahead: Oct 21-23, 26-30
+    # (8), minus the Oct 27 day off = 7.
+    worked = ["2026-10-%02d" % d for d in (6, 7, 8, 9, 12, 13, 14, 15, 16, 20)]
+    _projection_env(
+        monkeypatch, tmp_path, now=date(2026, 10, 20), variable_earnings=1000,
+        worked_days=worked,
+        days_off={"source": "calendar", "vacation_days": 2, "dates": ["2026-10-19", "2026-10-27"]},
+    )
+
+    projection = toggl_data.calculate_monthly_projection()
+
+    assert projection["remaining_workable_days"] == 7
+    assert projection["projected_variable"] == pytest.approx(1000 + 100 * 7)
+
+
+def test_projection_counts_today_until_work_is_logged_and_spreads_static_days_off(monkeypatch, tmp_path):
+    # Fri Oct 30 with nothing logged today: 1 business day ahead, scaled by the
+    # flat estimate's workable share (22 - 4) / 22.
+    _projection_env(
+        monkeypatch, tmp_path, now=date(2026, 10, 30), variable_earnings=900,
+        worked_days=["2026-10-28", "2026-10-29"],
+        days_off={"source": "static", "vacation_days": 4, "dates": []},
+    )
+
+    projection = toggl_data.calculate_monthly_projection()
+
+    assert projection["remaining_workable_days"] == pytest.approx(18 / 22)
+    assert projection["projected_variable"] == pytest.approx(900 + 450 * 18 / 22)
+
+
+def test_required_fixed_monthly_earns_monthly_amount_regardless_of_hours(monkeypatch, tmp_path):
+    _configure_cache_env(
+        monkeypatch,
+        tmp_path,
+        prefs={
+            "cache_ttl_today": 1800,
+            "cache_ttl_projects": 86400,
+            "projects": {
+                "Client R": {"billing_type": "fixed_monthly", "monthly_amount": 1500,
+                             "hour_tracking": "required", "target_hours": 10},
+            },
+            "retainer_hourly_rates": {},
+        },
+    )
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {"101": {"name": "Client R"}})
+    over = [_entry(1, 101, "2026-04-06T14:00:00Z", 12 * 3600, "over target")]
+    under = [_entry(2, 101, "2026-04-06T14:00:00Z", 6 * 3600, "under target")]
+
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: over)
+    assert toggl_data.calculate_period_earnings("monthly")["total"] == pytest.approx(1500)
+
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: under)
+    assert toggl_data.calculate_period_earnings("monthly")["total"] == pytest.approx(1500)
+
+    # Daily/weekly: hours beyond the monthly target earn nothing, so the
+    # periods add up to the fixed fee.
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: over)
+    monkeypatch.setattr(toggl_data, "_get_monthly_project_hours", lambda *a, **k: 12.0)
+    assert toggl_data.calculate_period_earnings("weekly")["total"] == pytest.approx(1500)

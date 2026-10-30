@@ -1032,10 +1032,14 @@ def calculate_period_earnings(period):
 
             elif rate_source == "fixed_monthly":
                 hour_tracking = proj_def.get('hour_tracking', 'none')
-                if hour_tracking == 'soft':
+                if hour_tracking in ('soft', 'required'):
                     target_hours = proj_def.get('target_hours', 0)
                     monthly_amount = proj_def.get('monthly_amount', 0)
-                    if period == 'monthly':
+                    if period == 'monthly' and hour_tracking == 'required':
+                        # The fee is fixed; hours over/under target roll into
+                        # carryover, never into dollars.
+                        earnings = monthly_amount
+                    elif period == 'monthly':
                         # Cap at the fixed monthly amount
                         earnings = min(hours * effective_rate, monthly_amount)
                     else:
@@ -1371,6 +1375,27 @@ def get_worked_days_this_month():
     return worked_days
 
 
+def _remaining_workable_days(today, days_off_info, total_business_days, workable_days, worked_days):
+    """Business days still ahead this month that are expected to be worked.
+
+    Today counts while nothing is logged on it yet. Calendar days off are
+    excluded by date; the flat vacation estimate has no dates, so it is spread
+    evenly over the month's business days.
+    """
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    first = today.day + 1 if today.isoformat() in worked_days else today.day
+    ahead = [
+        today.replace(day=d) for d in range(first, last_day + 1)
+        if today.replace(day=d).weekday() < 5
+    ]
+    if days_off_info.get('source') == 'calendar':
+        off = set(days_off_info.get('dates') or [])
+        return sum(1 for d in ahead if d.isoformat() not in off)
+    if total_business_days <= 0:
+        return 0
+    return len(ahead) * max(0, workable_days) / total_business_days
+
+
 def calculate_monthly_projection():
     """
     Calculate monthly earnings projection.
@@ -1378,7 +1403,12 @@ def calculate_monthly_projection():
     fixed_monthly projects are treated as guaranteed income (full monthly_amount).
     Only hourly/hourly_with_cap earnings are extrapolated by pace.
 
-    Formula: fixed_monthly_total + (variable_earnings / worked_days) * workable_days
+    Formula: fixed_monthly_total + rev_share
+             + variable_earnings + (variable_earnings / worked_days) * remaining_workable_days
+             + capped (last_billed_date) projects projected to their cap
+
+    Earnings already logged count as they are, so the projection never falls
+    below what has been earned; only the workable days still ahead are paced.
     """
     now = datetime.now()
     today = now.date()
@@ -1408,13 +1438,6 @@ def calculate_monthly_projection():
     # income for this month only — not extrapolated by pace).
     current_month_key = today.strftime('%Y-%m')
     rev_share_amount = prefs.get('monthly_rev_share', {}).get(current_month_key, 0) or 0
-
-    # Remaining business days in current month (from tomorrow onwards)
-    last_day_of_month = calendar.monthrange(today.year, today.month)[1]
-    remaining_biz_days = sum(
-        1 for d in range(today.day + 1, last_day_of_month + 1)
-        if datetime(today.year, today.month, d).weekday() < 5
-    )
 
     # Handle hourly_with_cap projects with last_billed_date separately.
     # Their unbilled hours span from last_billed_date+1 through the end of the
@@ -1470,10 +1493,14 @@ def calculate_monthly_projection():
     worked_days = get_worked_days_this_month()
     worked_days_count = len(worked_days)
 
-    # Project generic variable earnings by pace
+    remaining_workable_days = _remaining_workable_days(
+        today, days_off_info, total_business_days, workable_days, worked_days
+    )
+
+    # Project generic variable earnings by pace over the days still ahead
     if worked_days_count > 0:
         daily_variable_avg = variable_earnings / worked_days_count
-        projected_variable = daily_variable_avg * workable_days
+        projected_variable = variable_earnings + daily_variable_avg * remaining_workable_days
     else:
         daily_variable_avg = 0
         projected_variable = 0
@@ -1526,6 +1553,7 @@ def calculate_monthly_projection():
         "worked_days": worked_days_count,
         "total_business_days": total_business_days,
         "workable_days": workable_days,
+        "remaining_workable_days": remaining_workable_days,
         "vacation_days": vacation_days,
         "vacation_source": days_off_info['source'],
         "daily_average": daily_variable_avg,

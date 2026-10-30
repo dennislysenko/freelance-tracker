@@ -1040,7 +1040,7 @@ class DashboardPanelController:
         if projection and projection.get('worked_days', 0) > 0:
             projected = projection['projected_earnings']
             worked = projection['worked_days']
-            workable = projection['workable_days']
+            days_left = projection.get('remaining_workable_days', 0)
             vacation = projection.get('vacation_days', 0)
             daily_avg = projection.get('daily_average', 0)
             fixed_total = projection.get('fixed_monthly_total', 0)
@@ -1061,7 +1061,7 @@ class DashboardPanelController:
             projection_html = f"""
             <div class="section projection-section">
                 <div class="projection-line">
-                    Month Projection: <span class="money">${projected:,.0f}</span> · {worked}/{workable} workable days
+                    Month Projection: <span class="money">${projected:,.0f}</span> · {worked} days worked, {days_left:.0f} left
                 </div>
                 {projection_details}
             </div>"""

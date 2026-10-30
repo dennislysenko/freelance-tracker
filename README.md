@@ -158,12 +158,12 @@ If the WebKit bridge is unavailable on a given machine (missing PyObjC, etc.), t
 The app automatically calculates your projected monthly earnings based on:
 - **Worked days**: Days with earnings-contributing time entries this month (Toggl billable rates or configured retainer overrides)
 - **Workable days**: Business days minus days off — from your Google Calendar when connected (see below), otherwise the flat vacation-days estimate (default: 4 days)
-- **Daily average**: Current earnings ÷ worked days
-- **Projection**: Daily average × workable days
+- **Daily average**: Current hourly earnings ÷ worked days
+- **Projection**: Fixed monthly amounts + rev share + hourly earned so far + daily average × workable days still ahead. It never drops below what you've already earned, and on the last workday it equals your actual month.
 
 For `hourly_with_cap` projects that set `last_billed_date`, the dashboard switches to billing-cycle pacing instead of calendar-month pacing: unbilled hours are measured from `last_billed_date + 1 day`, and the pace marker / capped projection run through the end of the following month. This keeps billing-ahead retainers from looking artificially behind just because the current calendar month is mostly over.
 
-Example: If you earned $1,000 in 4 worked days, with 20 business days and 4 vacation days (16 workable days), your projection is $4,000.
+Example: If you earned $1,000 hourly in 4 worked days and have 12 workable days left (no days off among them), your hourly projection is $1,000 + $250 × 12 = $4,000.
 
 **Monthly rev share**: If a contract pays you a variable rev share that you know (at least approximately) at the start of the month, enter it under **Settings → Work Planning → This Month's Rev Share**. The amount is added to that month's projection as guaranteed income — it is *not* extrapolated by pace — and appears as a "$X rev share (this month)" line in the projection breakdown. It is stored per month, so it never carries a stale value into the next month: each new month starts blank until you enter the new amount (enter `0` to clear it). No Toggl API calls are made.
 
