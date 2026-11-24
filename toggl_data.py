@@ -934,8 +934,17 @@ def get_effective_project_rate(project_info, retainer_hourly_rates, projects_con
     return None, None
 
 
+def get_month_rev_share(prefs, today):
+    """This month's manually entered rev share (0 when none is set)."""
+    return (prefs.get('monthly_rev_share', {}) or {}).get(today.strftime('%Y-%m'), 0) or 0
+
+
 def calculate_period_earnings(period):
-    """Calculate earnings for a given period and return in menu bar format."""
+    """Calculate earnings for a given period and return in menu bar format.
+
+    The monthly total includes this month's rev share as a flat amount, the
+    same way fixed retainers count their full fee.
+    """
     entries = get_entries_with_cache(period)
     projects_map = get_projects()
     prefs = load_preferences()
@@ -1129,12 +1138,18 @@ def calculate_period_earnings(period):
                 all_projects_list.append(entry)
                 total_earnings += lbd['earnings']
 
+    # Rev share is income for the month, not tied to any entry: it counts in
+    # full in the monthly total, like a fixed retainer's fee.
+    rev_share = get_month_rev_share(prefs, today) if period == "monthly" else 0
+    total_earnings += rev_share
+
     billable_projects_list.sort(key=lambda x: x["earnings"], reverse=True)
     all_projects_list.sort(key=lambda x: x["hours"], reverse=True)
 
     return {
         "total": total_earnings,
         "fixed_earnings": fixed_earnings,
+        "rev_share": rev_share,
         "hours": total_hours,
         "non_billable_hours": total_non_billable_hours,
         "total_hours": total_hours + total_non_billable_hours,
@@ -1471,8 +1486,7 @@ def calculate_monthly_projection():
 
     # Rev share for the current month (manually entered, treated as guaranteed
     # income for this month only — not extrapolated by pace).
-    current_month_key = today.strftime('%Y-%m')
-    rev_share_amount = prefs.get('monthly_rev_share', {}).get(current_month_key, 0) or 0
+    rev_share_amount = get_month_rev_share(prefs, today)
 
     # Handle hourly_with_cap projects with last_billed_date separately.
     # Their unbilled hours span from last_billed_date+1 through the end of the
@@ -1511,8 +1525,12 @@ def calculate_monthly_projection():
 
         lbd_projected_earnings += min(projected_unbilled, cap_hours) * hourly_rate
 
-    # Variable earnings so far this month (hourly + hourly_with_cap), excluding lbd projects
-    variable_earnings = current_total - fixed_earnings_so_far - lbd_current_earnings
+    # Variable earnings so far this month (hourly + hourly_with_cap), excluding
+    # lbd projects and the rev share (already in the month total, never paced)
+    rev_share_so_far = monthly_data.get("rev_share", 0)
+    variable_earnings = (
+        current_total - fixed_earnings_so_far - rev_share_so_far - lbd_current_earnings
+    )
 
     # Business days and workable days
     total_business_days = calculate_business_days(today.year, today.month)
@@ -1593,6 +1611,7 @@ def calculate_monthly_projection():
         "trace": {
             "current_total": current_total,
             "fixed_earnings_so_far": fixed_earnings_so_far,
+            "rev_share_so_far": rev_share_so_far,
             "lbd_current_earnings": lbd_current_earnings,
             "lbd_projected_earnings": lbd_projected_earnings,
             "variable_earnings": variable_earnings,

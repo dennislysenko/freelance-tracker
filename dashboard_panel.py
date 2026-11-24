@@ -1046,6 +1046,17 @@ class DashboardPanelController:
         monthly_rows = "".join(html for _, html in tracked_projects)
         monthly_rows += "".join(untracked_projects)
 
+        # Rev share counts in the month total, so show it as its own row.
+        month_rev_share = monthly.get('rev_share', 0)
+        if month_rev_share > 0:
+            monthly_rows += f"""
+                <div class="monthly-project rev-share-row">
+                    <div class="monthly-project-header">
+                        <span class="project-name">Rev share</span>
+                        <span class="money">${month_rev_share:,.0f}</span>
+                    </div>
+                </div>"""
+
         # === PROJECTION section ===
         projection = monthly.get('projection', {})
         projection_html = ""

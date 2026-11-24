@@ -98,7 +98,7 @@ _MONEY_KEYS = frozenset({
     "fixed_earnings", "projected_earnings", "fixed_monthly_total",
     "rev_share_amount", "projected_variable", "daily_average", "capped_ceiling",
     "current_total", "fixed_earnings_so_far", "lbd_current_earnings",
-    "lbd_projected_earnings", "variable_earnings",
+    "lbd_projected_earnings", "variable_earnings", "rev_share", "rev_share_so_far",
 })
 # Dicts whose *values* are all dollars, keyed by project or month.
 _MONEY_VALUE_DICTS = frozenset({"retainer_hourly_rates", "monthly_rev_share"})
@@ -274,6 +274,7 @@ def build_overview() -> Dict[str, Any]:
     def period(d):
         return {
             "total": _round(d.get("total", 0.0)),
+            "rev_share": _round(d.get("rev_share", 0.0)),
             "hours": _round(d.get("hours", 0.0)),
             "non_billable_hours": _round(d.get("non_billable_hours", 0.0)),
             "total_hours": _round(d.get("total_hours", d.get("hours", 0.0))),
@@ -358,6 +359,7 @@ def build_month_status() -> Dict[str, Any]:
     payload = {
         "today_date": today.isoformat(),
         "month_total": _round(monthly.get("total", 0.0)),
+        "rev_share": _round(monthly.get("rev_share", 0.0)),
         "month_hours": _round(monthly.get("hours", 0.0)),
         "month_non_billable_hours": _round(monthly.get("non_billable_hours", 0.0)),
         "month_total_hours": _round(monthly.get("total_hours", monthly.get("hours", 0.0))),

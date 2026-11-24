@@ -580,3 +580,56 @@ def test_csv_export_bills_only_billable_entries():
 
     assert [r["Description"] for r in rows] == ["billable"]
     assert rows[0]["Money Billed (USD)"] == "150.0"
+
+
+def test_monthly_total_includes_this_months_rev_share_only(monkeypatch, tmp_path):
+    _configure_cache_env(
+        monkeypatch,
+        tmp_path,
+        prefs={
+            "cache_ttl_today": 1800,
+            "cache_ttl_projects": 86400,
+            "projects": {
+                "Client R": {"billing_type": "fixed_monthly", "monthly_amount": 1500,
+                             "hour_tracking": "required", "target_hours": 10},
+            },
+            "retainer_hourly_rates": {},
+            "monthly_rev_share": {"2026-04": 700, "2026-03": 9999},
+        },
+    )
+    monkeypatch.setattr(toggl_data, "datetime", _frozen_at(2026, 4, 20))
+    monkeypatch.setattr(toggl_data, "get_projects", lambda: {"101": {"name": "Client R"}})
+    entries = [_entry(1, 101, "2026-04-06T14:00:00Z", 10 * 3600, "design review")]
+    monkeypatch.setattr(toggl_data, "get_entries_with_cache", lambda period: entries)
+    monkeypatch.setattr(toggl_data, "_get_monthly_project_hours", lambda *a, **k: 10.0)
+
+    monthly = toggl_data.calculate_period_earnings("monthly")
+    assert monthly["rev_share"] == 700
+    assert monthly["total"] == pytest.approx(1500 + 700)
+
+    weekly = toggl_data.calculate_period_earnings("weekly")
+    assert weekly["rev_share"] == 0
+    assert weekly["total"] == pytest.approx(1500)
+
+
+def test_projection_keeps_rev_share_out_of_the_hourly_pace(monkeypatch, tmp_path):
+    # The month total now carries the rev share; it must not leak into the
+    # variable earnings that get paced over the days ahead.
+    worked = ["2026-10-%02d" % d for d in (6, 7, 8, 9, 12, 13, 14, 15, 16, 20)]
+    _projection_env(
+        monkeypatch, tmp_path, now=date(2026, 10, 20), variable_earnings=1000,
+        worked_days=worked,
+        days_off={"source": "calendar", "vacation_days": 2, "dates": ["2026-10-19", "2026-10-27"]},
+    )
+    monkeypatch.setattr(
+        toggl_data,
+        "calculate_period_earnings",
+        lambda period: {"total": 1000 + 500 + 1000, "fixed_earnings": 1000,
+                        "rev_share": 500, "projects": []},
+    )
+
+    projection = toggl_data.calculate_monthly_projection()
+
+    assert projection["daily_average"] == pytest.approx(100)
+    assert projection["projected_variable"] == pytest.approx(1000 + 100 * 7)
+    assert projection["projected_earnings"] == pytest.approx(1000 + 500 + 1700)

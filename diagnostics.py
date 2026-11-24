@@ -53,7 +53,7 @@ _MONEY_KEYS = frozenset({
     "fixed_earnings", "projected_earnings", "fixed_monthly_total",
     "rev_share_amount", "projected_variable", "daily_average", "capped_ceiling",
     "current_total", "fixed_earnings_so_far", "lbd_current_earnings",
-    "lbd_projected_earnings", "variable_earnings",
+    "lbd_projected_earnings", "variable_earnings", "rev_share", "rev_share_so_far",
 })
 
 # Dicts whose *values* (not keys) are all monetary, keyed by project/month.
@@ -191,6 +191,7 @@ def build_diagnostics(anonymize: bool = True) -> Dict[str, Any]:
         "earnings": {
             "total": earnings.get("total"),
             "fixed_earnings": earnings.get("fixed_earnings"),
+            "rev_share": earnings.get("rev_share"),
             "hours": earnings.get("hours"),
             "projects": _slim_earnings_projects(earnings.get("projects", [])),
             "all_projects": _slim_earnings_projects(earnings.get("all_projects", [])),
