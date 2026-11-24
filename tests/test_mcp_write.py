@@ -13,6 +13,13 @@ import toggl_data
 TODAY = date(2026, 10, 8)
 
 
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        base = datetime(TODAY.year, TODAY.month, TODAY.day, 12, 0, tzinfo=timezone.utc)
+        return base.astimezone(tz) if tz is not None else base.astimezone().replace(tzinfo=None)
+
+
 def _iso(day, hhmm, tz_hours=0):
     h, m = (int(p) for p in hhmm.split(":"))
     return datetime(day.year, day.month, day.day, h, m,
@@ -80,6 +87,9 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(toggl_data, "update_time_entry", fake_update)
     monkeypatch.setattr(toggl_data, "delete_time_entry", fake_delete)
     monkeypatch.setattr(mcp_write, "LOOKUP_WINDOW_DAYS", 5)
+    # The id lookup searches back from "now"; pin it to TODAY so the fixture's
+    # entry stays inside the window whatever the real date is.
+    monkeypatch.setattr(mcp_write, "datetime", _FrozenDatetime)
     # Writes announce themselves to a running menu bar app. Tests must not
     # poke the real one, nor touch the real cache directory's marker file.
     announced = []
