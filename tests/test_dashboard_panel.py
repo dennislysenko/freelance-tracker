@@ -94,8 +94,8 @@ def test_dashboard_html_measures_document_height():
     assert "Refresh Projects" in html
     assert "Clear All Caches" in html
     assert "Open Cache Folder" in html
-    assert "Open Upwork Diary" in html
-    assert "open_upwork_diary:" in html
+    assert "Push to Upwork" in html
+    assert "upwork_push:" in html
     assert "save_upwork_contract:" in html
     assert "copyDescription(this)" in html
     assert "copy_text:" in html
@@ -496,6 +496,32 @@ def test_gusto_result_card():
     assert "postAction('gusto_dismiss')" in html
 
 
+def test_gusto_surplus_option_card_button_and_pushed_line():
+    controller = _make_controller()
+    status = {"configured": True, "stale": True, "running": False, "project": "Acme",
+              "meta": "1.5h over the 30h cap held back", "held_hours": 1.5,
+              "held": ["Nov: 1.5h over the 30h cap held back (0.5h still fits)"],
+              "pushed_line": "Gusto: 29.5h of 30h pushed for Nov · as of Mon Nov 23, 9:00 AM"}
+    controller.set_gusto_status(status)
+    html = _gusto_html(controller)
+    assert 'onclick="gustoPushSurplus(event)"' in html and "1.5h over cap" in html
+
+    line = controller._gusto_pushed_html("Acme")
+    assert "Gusto: 29.5h of 30h pushed for Nov" in line and "0.5h still fits" in line
+    assert 'class="carryover warn"' in line
+    assert controller._gusto_pushed_html("Other") == ""
+
+    controller.set_gusto_status({**status, "held_hours": 0, "held": [], "stale": False})
+    assert 'onclick="gustoPushSurplus(event)"' not in _gusto_html(controller)
+    assert 'class="carryover"' in controller._gusto_pushed_html("Acme")
+
+    controller.set_gusto_card({"status": "success", "title": "Pushed to Gusto",
+                               "detail": "Nothing new", "held": True})
+    assert ">Push surplus too<" in _gusto_html(controller)
+    controller.set_gusto_card({"status": "success", "title": "Pushed to Gusto", "detail": "x"})
+    assert ">Push surplus too<" not in _gusto_html(controller)
+
+
 def test_rows_show_non_billable_hours_without_counting_them(monkeypatch):
     controller = _make_controller()
     monkeypatch.setattr(
@@ -533,3 +559,58 @@ def test_rows_show_non_billable_hours_without_counting_them(monkeypatch):
     assert "(0.0h +0.5h non-billable)" in html
     # A project with no rate shows all its time, no split.
     assert '<span class="hours">2.0h</span>' in html
+
+
+def _upwork_status(connected=True, pending=130):
+    return {
+        "configured": True, "connected": connected, "stale": bool(pending),
+        "token": "abcd1234", "extension_seen": "2026-03-06T10:00:00" if connected else "",
+        "extension_folder": "/path/to/upwork_extension",
+        "meta": "2h 10m to add · locks Mon 7:00 AM" if pending else "Up to date",
+        "projects": {"Acme": {"line": "Upwork: 2h 10m to add before Mon 7:00 AM",
+                              "pending_minutes": pending, "warn": bool(pending)}},
+    }
+
+
+def test_push_to_upwork_lists_linked_projects_first_with_time_to_add():
+    controller = _make_controller()
+    controller.set_exportable_projects([
+        {"id": "1", "name": "Aardvark", "can_export": True, "can_invoice": True},
+        {"id": "2", "name": "Acme", "can_export": True, "can_invoice": True,
+         "upwork_contract_id": "12345"},
+    ])
+    controller.set_upwork_status(_upwork_status())
+    html = _gusto_html(controller)
+    stage = html[html.index('id="upworkStage1"'):html.index('id="upworkSetup"')]
+    assert stage.index('data-project-name="Acme"') < stage.index('data-project-name="Aardvark"')
+    assert "2h 10m to add" in stage and "Needs contract" in stage
+    assert "<span>Push to Upwork</span>" in html and "locks Mon 7:00 AM" in html
+    assert 'class="export-badge"' in html
+    assert 'data-upwork-connected="1"' in html
+
+
+def test_upwork_setup_walkthrough_and_project_sub_line():
+    controller = _make_controller()
+    controller.set_upwork_status(_upwork_status(connected=False))
+    html = _gusto_html(controller)
+    assert "Set up Upwork push" in html and "Load unpacked" in html
+    assert "abcd1234" in html and "/path/to/upwork_extension" in html
+    assert "postAction('upwork_setup_extensions')" in html
+    assert "Waiting for the extension" in html
+    assert 'data-upwork-connected="1"' not in html
+
+    controller.set_upwork_status(_upwork_status(connected=True))
+    assert "Extension connected" in _gusto_html(controller)
+
+    # Firefox-based browsers (Zen) load it as a temporary add-on instead.
+    controller.set_upwork_status({**_upwork_status(connected=False), "browser": "Zen", "gecko": True})
+    html = _gusto_html(controller)
+    assert "Load Temporary Add-on" in html and "about:debugging#/runtime/this-firefox" in html
+    assert "Load unpacked" not in html and "In Zen, open" in html
+
+    line = controller._upwork_line_html("Acme")
+    assert "Upwork: 2h 10m to add before Mon 7:00 AM" in line and "warn" in line
+    assert controller._upwork_line_html("Other") == ""
+    controller.set_upwork_status(_upwork_status(pending=0))
+    assert 'class="carryover"' in controller._upwork_line_html("Acme")
+    assert 'class="export-badge"' not in _gusto_html(controller)

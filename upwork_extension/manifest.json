@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Freelance Tracker – Upwork fill",
+  "version": "1.0.0",
+  "description": "Fills Upwork's Add manual time form from your Freelance Tracker hours. You check it and click Save yourself.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "upwork-fill@freelance-tracker.local",
+      "strict_min_version": "121.0"
+    }
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:47619/*",
+    "https://www.upwork.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "action": {
+    "default_title": "Freelance Tracker – Upwork fill",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.upwork.com/nx/workdiary/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

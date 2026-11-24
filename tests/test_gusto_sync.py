@@ -501,3 +501,104 @@ def test_drift_flags_pushed_entry_later_marked_non_billable():
     issues = g.find_drift(entries, PROJECT_ID, state, date(2026, 10, 5), date(2026, 10, 11))
     assert [i["kind"] for i in issues] == ["non_billable"]
     assert "non-billable" in issues[0]["message"]
+
+
+# --- monthly cap ---------------------------------------------------------------
+
+
+CAPPED_PREFS = {**PREFS, "projects": {"Acme": {"billing_type": "hourly_with_cap",
+                                                "hourly_rate": 100, "cap_hours": 4}}}
+
+
+def _ledger(day, start_hour, hours):
+    start = _local(*day, start_hour)
+    return {"shift_id": "1", "day": start.date().isoformat(),
+            "start": start.isoformat(timespec="seconds"),
+            "stop": (start + timedelta(hours=hours)).isoformat(timespec="seconds"),
+            "pushed_at": "2026-10-05T09:00:00"}
+
+
+def _run_capped(entries, state, session=None, **kwargs):
+    session = session or FakeSession()
+    return session, g.run_sync(
+        CAPPED_PREFS, state, now=datetime(2026, 10, 12, 9, 30),
+        session_factory=_factory(session),
+        entries_provider=lambda start, end: entries,
+        projects_provider=lambda: {PROJECT_ID: {"name": "Acme"}},
+        **kwargs,
+    )
+
+
+def test_cap_comes_from_the_gusto_projects_capped_definition():
+    assert g.cap_hours(CAPPED_PREFS) == 4.0
+    assert g.cap_hours(PREFS) is None
+    fixed = {**PREFS, "projects": {"Acme": {"billing_type": "fixed_monthly", "monthly_amount": 1}}}
+    assert g.cap_hours(fixed) is None
+
+
+def test_hours_past_the_cap_are_held_from_the_first_overflow_on():
+    # 2.5h already in Gusto for October; cap 4h. The 1h on Oct 6 fits (3.5h),
+    # the 1h on Oct 7 would cross it, and the 0.5h on Oct 8 is held too even
+    # though it would fit: the surplus is always the month's tail.
+    state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 2.5)}}
+    entries = [_entry(1, _local(2026, 10, 6, 9), 60, "a"),
+               _entry(2, _local(2026, 10, 7, 9), 60, "b"),
+               _entry(3, _local(2026, 10, 8, 9), 30, "c")]
+    session, (state, summary) = _run_capped(entries, state)
+
+    assert [a["note"] for a in session.added] == ["a"]
+    assert summary["held"] == [{"month": "2026-10", "hours": 1.5, "entries": 2, "room": 0.5}]
+    assert state["held"] == summary["held"]
+    assert set(state["pushed"]) == {"900", "1"}
+    text = g.describe_result(summary)
+    assert "Oct: 1.5h over the 4h cap held back (0.5h still fits)" in text
+
+
+def test_push_surplus_sends_the_held_hours_and_says_so():
+    state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 3.5)}}
+    entries = [_entry(1, _local(2026, 10, 6, 9), 60, "a")]
+    session, (state, summary) = _run_capped(entries, state, allow_surplus=True)
+
+    assert [a["note"] for a in session.added] == ["a"]
+    assert summary["held"] == [] and state["held"] == []
+    assert summary["over_cap_hours"] == 1.0
+    assert "1.00h of it over the cap" in g.describe_result(summary)
+
+
+def test_each_month_has_its_own_cap_and_gusto_shifts_are_never_held():
+    state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 4)}}
+    adopted_start = _local(2026, 10, 7, 9)
+    session = FakeSession(existing=[{"id": "77", "clock_in": adopted_start.isoformat(),
+                                     "clock_out": (adopted_start + timedelta(hours=1)).isoformat()}])
+    entries = [_entry(1, adopted_start, 60, "already there"),
+               _entry(2, _local(2026, 10, 8, 9), 60, "october surplus"),
+               _entry(3, _local(2026, 11, 2, 9), 60, "november")]
+    session, (state, summary) = _run_capped(entries, state, session=session,
+                                            window=(date(2026, 10, 1), date(2026, 11, 2)))
+
+    assert [a["note"] for a in session.added] == ["november"]
+    assert state["pushed"]["1"]["shift_id"] == "77"
+    assert summary["held"] == [{"month": "2026-10", "hours": 1.0, "entries": 1, "room": 0.0}]
+
+
+def test_dry_run_reports_held_hours_without_saving_them():
+    state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 4)}}
+    session, (new_state, summary) = _run_capped([_entry(1, _local(2026, 10, 6, 9), 60)], state,
+                                                dry_run=True)
+    assert session.added == [] and summary["held"][0]["hours"] == 1.0
+    assert "held" not in new_state
+    assert "Oct: 1h over the 4h cap held back" in g.describe_result(summary)
+
+
+def test_status_alerts_on_held_hours_and_always_shows_hours_in_gusto():
+    state = {"synced_through": "2026-10-11", "last_success": "2026-10-12T09:00:05",
+             "pushed": {"900": _ledger((2026, 10, 1), 9, 2.5), "901": _ledger((2026, 9, 30), 9, 3)},
+             "held": [{"month": "2026-10", "hours": 1.5, "entries": 2, "room": 0.5}]}
+    view = g.status_view(CAPPED_PREFS, state, now=datetime(2026, 10, 12, 10))
+    assert view["stale"] and view["meta"] == "1.5h over the 4h cap held back"
+    assert view["held_hours"] == 1.5
+    assert view["held"] == ["Oct: 1.5h over the 4h cap held back (0.5h still fits)"]
+    assert view["pushed_line"] == "Gusto: 2.5h of 4h pushed for Oct · as of Mon Oct 12, 9:00 AM"
+
+    fresh = g.status_view(PREFS, {"pushed": {}}, now=datetime(2026, 10, 12, 10))
+    assert fresh["pushed_line"] == "Gusto: 0h pushed for Oct · not pushed yet"

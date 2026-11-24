@@ -21,7 +21,7 @@ A macOS menu bar app that tracks your daily, weekly, and monthly freelance earni
 - 🕐 **Last update timestamp**
 - 🧹 **Clear All Caches** action in the dashboard refresh menu for heavy cache recovery
 - 📂 **Open Cache Folder** action in the dashboard refresh menu for quick Finder access
-- 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV`, `Create Stripe Invoice`, or `Open Upwork Diary`. CSV and Stripe flows include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
+- 📤 **Export/Invoice drop-up** in the dashboard footer — choose `Export CSV`, `Create Stripe Invoice`, or `Push to Upwork`. CSV and Stripe flows include `This week`, `Last week`, `Last month`, `Year to date`, plus custom dates
 - ⏰ **Billing reminders** in Settings → `Billing` for local notifications on a weekly (`Friday 14:00`) or monthly (`Day 15`, `Last day of month`, `2nd-to-last day`) schedule
 - 🗣️ **Natural-language time logging** (optional, bring your own OpenAI key) — type "1 hour of Acme retainer at 9am the past 2 days, no note", confirm the proposed entries, and they are written to Toggl. Also answers read questions about your hours from cache
 - 🔌 **Integrations settings** so users can update their Toggl API token, workspace id, Stripe API key, Google Calendar ICS URL, and OpenAI API key after installation, plus save optional Upwork contract ids per project
@@ -203,9 +203,18 @@ Credentials you can set after install:
 
 The same tab also lets you map Toggl projects to Stripe customers by picking from the live Stripe customer list by name. If you try to create a Stripe invoice for an unmapped project, the dashboard will ask you to pick a customer right after you choose the date range, then save that association for next time.
 
-That project-mapping grid also has an **Upwork Contract ID** column. Add the Upwork hourly contract id for any project where you want a fast work-diary shortcut. The dashboard can also save that id inline the first time you click an unmapped project from `Export/Invoice → Open Upwork Diary`, then open the diary immediately.
+That project-mapping grid also has an **Upwork Contract ID** column. Add the Upwork hourly contract id for a project billed through Upwork (or save it inline the first time you click the project under `Export/Invoice → Push to Upwork`).
 
-The current Upwork integration is intentionally a deep-link shortcut, not a direct API write. Upwork’s documented GraphQL docs expose work-diary reads, but they do not document a manual-time creation mutation, so the app currently opens the contract-specific work diary URL instead of attempting an unsupported write.
+### Upwork — add your hours as manual time
+
+Upwork has no API for adding time and doesn't allow tools that drive the site, so the app does the arithmetic and a small browser extension (Chrome, or a Firefox-based browser such as Zen) fills the form for you:
+
+- For each linked project the app works out the week's manual-time entries from Toggl in Upwork's **10-minute steps**: same-day entries that touch become one, starts land on 10-minute marks, and a week never adds up to more than Toggl (lone 15-minute entries come out 10, 20, 10, 20). Non-billable time is never included.
+- `Export/Invoice → Push to Upwork` lists linked projects first with what is still to add, and opens the work diary on the first day that needs it. The extension shows a small panel there: click **Fill**, check the form, click **Save**. It never saves for you. Each saved entry is recorded so it's never offered again.
+- The first time, the same menu walks you through installing the extension and pasting its pairing code. In Chrome: Developer mode → **Load unpacked** → `upwork_extension/`. In Zen or Firefox (set the browser in Settings → Integrations → Upwork): `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → `upwork_extension/manifest.json`, then turn on its two site permissions in `about:addons` → the extension → **Permissions**. Firefox-based browsers only keep an unsigned add-on until you quit, so load it again after a browser restart.
+- Upwork locks each week on **Monday 12:00 UTC**. The project's monthly row shows "↳ Upwork: 2h 10m to add before Mon 7:00 AM", the `Export/Invoice` button gets an orange dot, and you get a reminder on Friday afternoon and Sunday evening while anything is waiting (Settings → Integrations → Upwork to turn reminders off or change the browser).
+- If you change an entry in Toggl after adding it to Upwork, the app flags it for you to fix in Upwork; it never edits Upwork time.
+- Agents logging time through the MCP server are told to use 10-minute steps for Upwork projects (15 for everything else).
 
 ### Gusto — push contractor hours automatically
 
@@ -228,6 +237,13 @@ shift on its real date, with the description as the note.
 
 Only billable entries are pushed; an entry marked non-billable after it was
 pushed is flagged for you to fix in Gusto.
+
+If the project has a monthly hour cap (say 30h), the app never pushes past it.
+Hours over the cap are held back, and you get an alert saying how much and how
+much still fits. Move the extra to next month in Toggl, or send it anyway with
+**Export/Invoice → Push surplus to Gusto**. Under the project's bar the
+dashboard always shows how many hours are in Gusto for the month, as of the
+last push ("Gusto: 14.5h of 30h pushed for Nov · as of Mon Nov 16, 9:00 AM").
 
 The app only ever adds shifts; it never edits or deletes anything in Gusto. It
 uses Gusto's web app in a visible Chrome window (Gusto has no API contractors

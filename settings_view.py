@@ -25,6 +25,7 @@ import json
 
 import gusto_sync
 import mcp_support
+import upwork_push
 
 from carryover import get_balance, get_previous_month_str
 from preferences import CACHE_DIR
@@ -1183,7 +1184,9 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
         last business day (hours are due by 3 PM), or any time from
         <strong>Export/Invoice &rarr; Push to Gusto</strong>. It only ever adds shifts;
         if you edit or delete an entry in Toggl after it was pushed, it is flagged here
-        for you to fix in Gusto.
+        for you to fix in Gusto. If the project has a monthly hour cap, hours past it are
+        held back and flagged; move them to next month in Toggl, or send them anyway with
+        <strong>Push surplus to Gusto</strong>.
     </div>
     <label class="br-toggle mcp-toggle">
         <input type="checkbox" id="set_gusto_sync_enabled"{' checked' if gusto_enabled else ''}>
@@ -1195,6 +1198,8 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     </div>
     <div class="gusto-status">{gusto_login_line} &middot; {_esc(gusto_status["meta"])}</div>
     <div class="gusto-status">{_esc(gusto_status["next_deadline"])}</div>
+    <div class="gusto-status">{_esc(gusto_status["pushed_line"])}</div>
+    {"".join(f'<div class="gusto-status warn">&#9888; {_esc(t)}</div>' for t in gusto_status["held"])}
     {f'<div class="gusto-status">Last push: {_esc(gusto_status["last_result"])}</div>' if gusto_status["last_result"] else ''}
     {gusto_error_line}
     {gusto_issue_lines}
@@ -1211,6 +1216,42 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     </div>
     """
 
+    upwork_linked = upwork_push.linked_contracts(prefs)
+    upwork_state = upwork_push.load_state()
+    upwork_seen = upwork_state.get("extension_seen") or ""
+    upwork_reminders = bool(prefs.get("upwork_reminders_enabled", True))
+    upwork_browser = prefs.get("upwork_browser") or "Google Chrome"
+    upwork_projects_line = (
+        "Linked: " + ", ".join(_esc(n) for n in sorted(upwork_linked))
+        if upwork_linked else
+        '<span class="warn">No project linked yet: add its Upwork contract id under Project Mapping</span>'
+    )
+    upwork_ext_line = (
+        f"Browser extension connected (last seen {_esc(upwork_seen[:16].replace('T', ' '))})"
+        if upwork_seen else
+        '<span class="warn">Browser extension not set up: Export/Invoice &rarr; Push to Upwork walks you through it</span>'
+    )
+    upwork_detail = f"""
+    <div class="settings-help">
+        For projects with an Upwork hourly contract. Upwork has no API for adding time,
+        so the app works out your manual-time entries from Toggl in Upwork&rsquo;s
+        10-minute steps (each week never more than Toggl) and a browser extension fills
+        Upwork&rsquo;s <strong>Add manual time</strong> form for you to check and Save.
+        Upwork weeks lock Monday 12:00 UTC; the dashboard shows what is still waiting and
+        you get a reminder on Friday afternoon and Sunday evening.
+    </div>
+    <div class="gusto-status">{upwork_projects_line}</div>
+    <div class="gusto-status">{upwork_ext_line}</div>
+    <label class="br-toggle mcp-toggle">
+        <input type="checkbox" id="set_upwork_reminders_enabled"{' checked' if upwork_reminders else ''}>
+        <span>Remind me before the weekly lock</span>
+    </label>
+    <div class="gusto-row">
+        <span>Browser</span>
+        <input type="text" id="set_upwork_browser" value="{_esc(upwork_browser)}" placeholder="Google Chrome">
+    </div>
+    """
+
     # (key, label, icon, configured, detail html) grouped for the index.
     groups = [
         ("Time tracking", "Where your hours come from.", [
@@ -1224,6 +1265,7 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
             ("mapping", "Project Mapping", "&#128279;", bool(all_names), mapping_detail),
             ("gusto", "Gusto", "&#128181;", gusto_status["configured"] and bool(gusto_status["company"]),
              gusto_detail),
+            ("upwork", "Upwork", "&#9200;", bool(upwork_linked and upwork_seen), upwork_detail),
         ]),
         ("Planning", "Feeds the month projection.", [
             ("calendar", "Google Calendar", "&#128197;", bool(calendar_url), calendar_detail),
@@ -1616,6 +1658,8 @@ def generate_settings_js():
         return {
             gusto_sync_enabled: settingsReadBool('set_gusto_sync_enabled'),
             gusto_project: (document.getElementById('set_gusto_project') || {}).value || '',
+            upwork_reminders_enabled: settingsReadBool('set_upwork_reminders_enabled'),
+            upwork_browser: (document.getElementById('set_upwork_browser') || {}).value || '',
             mcp_enabled: settingsReadBool('set_mcp_enabled'),
             mcp_anonymize: settingsReadBool('set_mcp_anonymize'),
             mcp_write_enabled: settingsReadBool('set_mcp_write_enabled'),

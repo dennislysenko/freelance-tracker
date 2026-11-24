@@ -725,6 +725,16 @@ class PreferencesWindowController:
         gusto_project_field.setPlaceholderString_("Toggl project name")
         view.addSubview_(gusto_project_field)
         self.widgets['gusto_project'] = gusto_project_field
+        y -= 32
+        self.widgets['upwork_reminders_enabled'] = self._create_checkbox(
+            view, "Remind me before Upwork's weekly lock. Browser:", 20, y,
+            bool(self.current_prefs.get('upwork_reminders_enabled', True)),
+        )
+        upwork_browser_field = NSTextField.alloc().initWithFrame_(NSMakeRect(370, y, 170, 24))
+        upwork_browser_field.setStringValue_(self.current_prefs.get('upwork_browser', 'Google Chrome') or '')
+        upwork_browser_field.setPlaceholderString_("Google Chrome")
+        view.addSubview_(upwork_browser_field)
+        self.widgets['upwork_browser'] = upwork_browser_field
 
         tab.setView_(view)
         tab_view.addTabViewItem_(tab)
@@ -1210,6 +1220,8 @@ class PreferencesWindowController:
             'mcp_write_enabled': self.widgets['mcp_write_enabled'].state() == NSOnState,
             'gusto_sync_enabled': self.widgets['gusto_sync_enabled'].state() == NSOnState,
             'gusto_project': str(self.widgets['gusto_project'].stringValue() or '').strip(),
+            'upwork_reminders_enabled': self.widgets['upwork_reminders_enabled'].state() == NSOnState,
+            'upwork_browser': str(self.widgets['upwork_browser'].stringValue() or '').strip() or 'Google Chrome',
         })
 
         integration_settings = {
@@ -1331,6 +1343,8 @@ class PreferencesWindowController:
             self.widgets['mcp_write_enabled'].setState_(NSOffState)
             self.widgets['gusto_sync_enabled'].setState_(NSOffState)
             self.widgets['gusto_project'].setStringValue_("")
+            self.widgets['upwork_reminders_enabled'].setState_(NSOnState)
+            self.widgets['upwork_browser'].setStringValue_("Google Chrome")
 
             # Clear all project target fields
             for i in range(self.PROJECT_TARGET_ROWS):

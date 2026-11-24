@@ -300,6 +300,23 @@ def locate_entry(entry_id, day_hint: Optional[str] = None):
 # The three operations
 # --------------------------------------------------------------------------
 
+def step_warning(prefs: Dict[str, Any], project_name: Optional[str], minutes: int) -> Optional[str]:
+    """Upwork-linked projects bill in 10-minute steps; flag a duration that isn't one."""
+    import upwork_push
+
+    if not project_name or project_name not in upwork_push.linked_contracts(prefs):
+        return None
+    step = upwork_push.STEP_MINUTES
+    if minutes % step == 0:
+        return None
+    lower = (minutes // step) * step
+    options = " or ".join(f"{m} min" for m in (lower, lower + step) if m > 0)
+    return (
+        f"{project_name} is billed through Upwork in {step}-minute steps; {minutes} min "
+        f"isn't one. Suggest {options} to the user before confirming."
+    )
+
+
 def build_log_time(
     prefs: Dict[str, Any],
     date_: str,
@@ -345,6 +362,9 @@ def build_log_time(
                 f"This overlaps {len(overlaps)} entry already logged that day. "
                 "Check with the user before confirming."
             )
+        step_note = step_warning(prefs, project_name, minutes)
+        if step_note:
+            preview["step_warning"] = step_note
         return _issue("log_time", args, preview)
 
     _redeem(confirm, "log_time", args)
@@ -463,6 +483,9 @@ def build_update_entry(
             preview["warning"] = (
                 f"The new time overlaps {len(overlaps)} other entry that day."
             )
+        step_note = step_warning(prefs, new_project_name, new_minutes)
+        if step_note:
+            preview["step_warning"] = step_note
         return _issue("update_entry", args, preview)
 
     _redeem(confirm, "update_entry", args)

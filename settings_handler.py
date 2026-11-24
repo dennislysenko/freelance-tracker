@@ -38,6 +38,8 @@ _SETTINGS_KEYS = (
     "gusto_sync_enabled",
     "gusto_project",
     "gusto_sync_start_date",
+    "upwork_reminders_enabled",
+    "upwork_browser",
 )
 
 
@@ -221,10 +223,12 @@ def apply_settings_save(payload: Dict[str, Any]) -> Dict[str, Any]:
         if key in payload:
             value = payload[key]
             if key in ("mcp_enabled", "mcp_anonymize", "mcp_write_enabled",
-                       "gusto_sync_enabled"):
+                       "gusto_sync_enabled", "upwork_reminders_enabled"):
                 value = bool(value)
             elif key in ("gusto_project", "gusto_sync_start_date"):
                 value = str(value or "").strip()
+            elif key == "upwork_browser":
+                value = str(value or "").strip() or "Google Chrome"
             new_prefs[key] = value
             prefs_changed = True
 

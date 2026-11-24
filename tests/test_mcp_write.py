@@ -402,3 +402,12 @@ def test_failed_write_announces_nothing(env, monkeypatch):
     out = S.log_time("2026-10-08", "09:00", 60, "Acme Corp", confirm=preview["confirm"])
     assert out["error_type"] == "RuntimeError"
     assert notices == []
+
+
+def test_step_warning_for_upwork_linked_projects():
+    prefs = {"upwork_contracts": {"Acme": "12345"}}
+    warning = mcp_write.step_warning(prefs, "Acme", 15)
+    assert "10-minute steps" in warning and "10 min or 20 min" in warning
+    assert mcp_write.step_warning(prefs, "Acme", 20) is None
+    assert mcp_write.step_warning(prefs, "Other", 15) is None
+    assert mcp_write.step_warning(prefs, "Acme", 5).endswith("Suggest 10 min to the user before confirming.")

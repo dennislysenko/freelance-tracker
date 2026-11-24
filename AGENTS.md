@@ -60,6 +60,8 @@ Current API usage per operation:
 
 **MCP write rule:** writes (`mcp_write.py`) are the one exception, at 1 Toggl call each. Any new write must keep all three properties: gated behind `mcp_write_enabled` (off by default), **one entry per call** with no bulk form, and two-step — preview with a one-shot fingerprinted `confirm` token, then execute. After writing, patch the day shard in place (`upsert_cached_entry` / `remove_cached_entry`); never invalidate it, or the next cache-only read breaks until the user opens the dashboard. Then call `app_notify.notify_data_changed(...)` so the running menu bar app re-reads and the 💰 total is current at once (0 Toggl calls; the cache is already patched).
 
+**Upwork push:** 0 Toggl calls for the dashboard line, badge, reminders and `get_upwork_push` (day cache); opening the diary to fill entries costs 1 fresh call, memoised 5 minutes for the extension's requests. The app never calls Upwork; the extension (`upwork_extension/`) only fills the form and never clicks Save.
+
 **Gusto push:** 1 Toggl call per run (fetched fresh via `fetch_entries_fresh`, never the day cache, so payroll is never under-reported).
 
 **Gusto rule:** `gusto_client.py` must only ever drive a **visible** Chrome window (never headless) and never try to get past Gusto's Cloudflare check; never enter passwords or approve passkeys; never save Gusto request headers/cookies to disk. Tests must use fake sessions, never real Gusto. Don't submit test shifts: the only real writes are the user's own Toggl hours. When Gusto's API changes, use the `gusto-recapture` skill.

@@ -30,6 +30,7 @@ from mcp.types import ToolAnnotations  # noqa: E402
 
 import mcp_write  # noqa: E402
 import toggl_data  # noqa: E402
+import upwork_push  # noqa: E402
 from carryover import get_previous_month_balance  # noqa: E402
 from diagnostics import _excel_label  # noqa: E402
 from pacing import compute_pacing  # noqa: E402
@@ -64,6 +65,11 @@ call without `confirm` to get a preview plus a token, show that preview to the
 user, and only call again with the token once they say yes. Never chain writes
 to cover several entries without checking back in between, and never confirm
 on the user's behalf.
+
+Durations: projects linked to an Upwork contract are billed in 10-minute
+steps (Upwork's manual time), every other project in 15-minute steps; see
+`billing_step_minutes` in `get_project_rules`. Write previews carry a
+`step_warning` when a duration doesn't fit.
 """
 
 mcp = MCPServer(SERVER_NAME, instructions=INSTRUCTIONS)
@@ -456,6 +462,12 @@ def build_project_rules() -> Dict[str, Any]:
     ym = today.strftime("%Y-%m")
 
     rules = [describe_rule(n, d) for n, d in projects_config.items() if isinstance(d, dict)]
+    upwork_linked = upwork_push.linked_contracts(prefs)
+    for name in upwork_linked:
+        rules.append(
+            f"{name}: billed through Upwork; log time in {upwork_push.STEP_MINUTES}-minute steps "
+            f"(10, 20, 30 min...), not {upwork_push.DEFAULT_STEP_MINUTES}"
+        )
     for name, hours in (prefs.get("project_targets") or {}).items():
         rules.append(f"{name}: monthly hour target {hours:g}h")
     for name, rate in (prefs.get("retainer_hourly_rates") or {}).items():
@@ -469,6 +481,10 @@ def build_project_rules() -> Dict[str, Any]:
         "retainer_hourly_rates": prefs.get("retainer_hourly_rates", {}),
         "monthly_rev_share": {ym: (prefs.get("monthly_rev_share") or {}).get(ym, 0)},
         "vacation_days_per_month": prefs.get("vacation_days_per_month"),
+        "billing_step_minutes": {
+            "default": upwork_push.DEFAULT_STEP_MINUTES,
+            **{name: upwork_push.STEP_MINUTES for name in upwork_linked},
+        },
         "days_off_keywords": prefs.get("days_off_keywords", []),
         "rules_plain_english": rules + [
             "Entries marked non-billable in Toggl never count toward earnings, targets, caps, "
@@ -639,6 +655,54 @@ def build_gusto_hours(start: Optional[str] = None, end: Optional[str] = None,
     return _maybe_anonymize(prefs, payload)
 
 
+def build_upwork_push() -> Dict[str, Any]:
+    """Upwork manual time each linked project still needs, from the cache only.
+
+    The same plan the dashboard and the browser extension use: 10-minute
+    segments for every Upwork week that is still open, which are already in
+    the local "added" ledger, and drift issues.
+    """
+    prefs = load_preferences()
+    _require_enabled(prefs)
+    now = datetime.now().astimezone()
+    contracts = upwork_push.linked_contracts(prefs)
+    state = upwork_push.load_state()
+    start, end = upwork_push.window_for(now)
+    entries = get_entries_for_range(start, end) if contracts else []
+    projects_map = get_projects() if contracts else {}
+    out = []
+    for name, contract in contracts.items():
+        pid = next((p for p, info in projects_map.items() if (info or {}).get("name") == name), None)
+        if pid is None:
+            out.append({"project": name, "contract_id": contract, "error": "Toggl project not found"})
+            continue
+        plan = upwork_push.plan(entries, pid, name, contract, state, now)
+        out.append({
+            "project": name,
+            "contract_id": contract,
+            "summary": upwork_push.project_line(plan),
+            "weeks": plan["weeks"],
+            "segments": [
+                {k: seg[k] for k in ("date", "start", "end", "minutes", "memo", "added")}
+                for seg in plan["segments"]
+            ],
+            "issues": plan["issues"],
+        })
+    payload = {
+        "projects": out,
+        "step_minutes": upwork_push.STEP_MINUTES,
+        "rules": (
+            "Upwork weeks run Monday-Sunday UTC and lock the next Monday 12:00 UTC. Each week's "
+            "segments total floor-to-10 of the Toggl minutes, so Upwork never exceeds Toggl. "
+            "`added` comes from the local ledger (the browser extension records each Save); "
+            "to check against Upwork itself, compare with Upwork's timesheet for the contract."
+        ),
+        "extension_last_seen": state.get("extension_seen") or None,
+    }
+    payload["data_as_of"] = _data_as_of(start.date(), min(end.date(), _today()))
+    return _maybe_anonymize(prefs, payload)
+
+
 def build_data_freshness() -> Dict[str, Any]:
     prefs = load_preferences()
     today = _today()
@@ -736,6 +800,12 @@ def get_data_freshness() -> Dict[str, Any]:
 def get_gusto_hours(start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, Any]:
     """Hours actually in the user's Gusto contractor timesheet between two YYYY-MM-DD dates (default: this month to today, max 92 days), by day, compared with the cached Toggl entries of the project pushed to Gusto: totals, the difference, Toggl entries not in Gusto yet (`toggl_only`), and Gusto shifts with no matching entry (`gusto_only`). Read-only, but unlike the other tools it reads Gusto LIVE: it brings up the app's visible Chrome window and may need the user to approve a passkey (waits up to 2 minutes). Call it once per question, not in a loop."""
     return _run(build_gusto_hours, start, end)
+
+
+@mcp.tool(annotations=ToolAnnotations(title='Upwork manual time to add', read_only_hint=True))
+def get_upwork_push() -> Dict[str, Any]:
+    """For each Toggl project linked to an Upwork contract: the manual-time segments (date, start, end, minutes, memo) for the Upwork weeks still open, which are already added (per the local ledger the browser extension keeps), how long until each week locks, and drift issues. Cache-only, 0 Toggl calls. Use it to remind the user before Monday's lock or to check against Upwork's own timesheet."""
+    return _run(build_upwork_push)
 
 
 @mcp.tool(

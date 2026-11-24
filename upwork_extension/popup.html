@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    /* Copied from the Freelance Tracker dashboard (dashboard_panel.py). */
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; font-size: 13px; line-height: 1.35;
+           margin: 0; padding: 12px; width: 290px; background: #1c1c1e; color: #c9d1d9; }
+    h1 { font-size: 11px; font-weight: 700; letter-spacing: 1.8px; color: #8b949e; text-transform: uppercase; margin: 2px 0 8px; }
+    p { margin: 0 0 12px; color: #6e7681; font-size: 12px; }
+    .section { border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 10px 12px; }
+    label { display: block; font-size: 13px; color: #b0b8c1; margin-bottom: 6px; }
+    input { width: 100%; padding: 7px 9px; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+            background: rgba(255,255,255,0.04); color: #f0f6fc; font: 13px ui-monospace, Menlo, monospace; letter-spacing: 0.5px; }
+    input:focus { outline: none; border-color: rgba(63,185,80,0.5); }
+    input::placeholder { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; font-size: 12px; letter-spacing: 0; color: #6e7681; }
+    button { margin-top: 10px; width: 100%; padding: 10px 12px; border: 0; border-radius: 10px;
+             background: rgba(63,185,80,0.92); color: #fff; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #3fb950; }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { margin-top: 10px; min-height: 1.2em; font-size: 12px; }
+    .ok { color: #3fb950; font-weight: 700; }
+    .err { color: #f85149; }
+  </style>
+</head>
+<body>
+  <h1>Freelance Tracker</h1>
+  <p>Fills Upwork's Add manual time form from your tracked hours. You still click Save.</p>
+  <div class="section">
+  <label for="code">Pairing code</label>
+  <input id="code" type="text" autocomplete="off" spellcheck="false"
+         placeholder="From the dashboard: Export/Invoice → Push to Upwork">
+  <button id="connect">Connect</button>
+  <div id="status"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

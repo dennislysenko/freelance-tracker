@@ -211,7 +211,7 @@ def is_stale(now, state):
     month_due = (today == last_business_day(today.year, today.month)
                  and state.get("deadline_pushed") != today.isoformat())
     return bool(behind or month_due or state.get("login_required") or state.get("issues")
-                or state.get("last_error"))
+                or state.get("last_error") or state.get("held"))
 
 
 def status_view(prefs, state, now=None, running=False):
@@ -226,6 +226,9 @@ def status_view(prefs, state, now=None, running=False):
     due_today = month_open and now.hour < DEADLINE_HOUR
     missed_today = month_open and now.hour >= DEADLINE_HOUR
     issues = [issue.get("message", "") for issue in state.get("issues") or []]
+    cap = cap_hours(prefs)
+    held = state.get("held") or []
+    held_hours = round(sum(row.get("hours", 0) for row in held), 2)
 
     if running:
         meta = "Pushing\u2026"
@@ -233,6 +236,8 @@ def status_view(prefs, state, now=None, running=False):
         meta = "Needs your Gusto passkey"
     elif state.get("last_error"):
         meta = "Last push failed"
+    elif held:
+        meta = f"{held_hours:g}h over the {cap:g}h cap held back" if cap else f"{held_hours:g}h held back"
     elif issues:
         meta = f"{len(issues)} need{'s' if len(issues) == 1 else ''} attention"
     elif due_today:
@@ -269,7 +274,33 @@ def status_view(prefs, state, now=None, running=False):
                           f" \u00b7 payday {payday.strftime('%a %b %-d')}"),
         "project": prefs.get("gusto_project") or "",
         "company": prefs.get("gusto_company_slug") or "",
+        "cap_hours": cap,
+        "held": [held_text(row, cap) for row in held],
+        "held_hours": held_hours,
+        "pushed_line": pushed_line(state, cap, now),
     }
+
+
+def pushed_line(state, cap=None, now=None):
+    """"Gusto: 14.5h of 30h pushed for Nov · as of Mon Nov 16, 9:00 AM".
+
+    Counts the ledger (shifts this app pushed or matched), so it is as of
+    the last successful push, not a live read of Gusto.
+    """
+    now = now or datetime.now()
+    month = now.strftime("%Y-%m")
+    hours = round(pushed_hours_by_month(state).get(month, 0.0), 2)
+    of_cap = f" of {cap:g}h" if cap else ""
+    text = f"Gusto: {hours:g}h{of_cap} pushed for {now.strftime('%b')}"
+    checked = state.get("last_success")
+    if checked:
+        try:
+            text += f" \u00b7 as of {datetime.fromisoformat(checked).strftime('%a %b %-d, %-I:%M %p')}"
+        except ValueError:
+            pass
+    else:
+        text += " \u00b7 not pushed yet"
+    return text
 
 
 # --- payday (for display) --------------------------------------------------
@@ -436,6 +467,91 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
     return plan
 
 
+# --- cap -------------------------------------------------------------------
+
+
+def cap_hours(prefs):
+    """The Gusto project's monthly hour cap, or None when it has none.
+
+    Read from the project's `hourly_with_cap` definition, so the push stops
+    where the projection stops paying.
+    """
+    project = (prefs.get("gusto_project") or "").strip()
+    defn = (prefs.get("projects") or {}).get(project) or {}
+    if defn.get("billing_type") != "hourly_with_cap":
+        return None
+    cap = defn.get("cap_hours") or 0
+    return float(cap) if cap > 0 else None
+
+
+def _record_hours(record):
+    try:
+        return (_parse(record["stop"]) - _parse(record["start"])).total_seconds() / 3600
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def pushed_hours_by_month(state):
+    """Hours the ledger has put in Gusto (pushed or adopted), per "YYYY-MM"."""
+    totals = {}
+    for record in (state.get("pushed") or {}).values():
+        month = (record.get("day") or "")[:7]
+        if month:
+            totals[month] = totals.get(month, 0.0) + _record_hours(record)
+    return totals
+
+
+def apply_cap(plan, state, cap, allow_surplus=False):
+    """Split a plan into (to_push, held) so no month goes over `cap` hours.
+
+    Each month fills in date order: hours already in Gusto count first, then
+    planned entries oldest first. The first entry that would cross the cap
+    and everything after it that month are held, so the surplus is always the
+    month's tail, the part to move to next month. Shifts Gusto already has are
+    never held. With `allow_surplus` (the user's explicit "push surplus")
+    nothing is held; entries past the cap are pushed and marked `over_cap`.
+    Held entries carry `room`: the hours still free under the cap.
+    """
+    if cap is None:
+        return list(plan), []
+    used = pushed_hours_by_month(state)
+    full = set()
+    to_push, held = [], []
+    for item in plan:
+        month = item["day"][:7]
+        if item.get("existing_shift_id"):
+            used[month] = used.get(month, 0.0) + item["hours"]
+            to_push.append(item)
+            continue
+        if month not in full and used.get(month, 0.0) + item["hours"] <= cap + 1e-6:
+            used[month] = used.get(month, 0.0) + item["hours"]
+            to_push.append(item)
+            continue
+        full.add(month)
+        if allow_surplus:
+            to_push.append(dict(item, over_cap=True))
+        else:
+            held.append(dict(item, room=max(0.0, cap - used.get(month, 0.0))))
+    return to_push, held
+
+
+def held_by_month(held):
+    """Held entries summed per month: [{month, hours, entries, room}]."""
+    months = {}
+    for item in held:
+        month = item["day"][:7]
+        row = months.setdefault(month, {"month": month, "hours": 0.0, "entries": 0,
+                                        "room": item.get("room", 0.0)})
+        row["hours"] += item["hours"]
+        row["entries"] += 1
+    return [dict(row, hours=round(row["hours"], 2), room=round(row["room"], 2))
+            for _, row in sorted(months.items())]
+
+
+def _month_label(month):
+    return date.fromisoformat(month + "-01").strftime("%b")
+
+
 def compare_hours(entries, project_id, shifts):
     """Toggl entries for the project vs. shifts in Gusto, matched one to one.
 
@@ -552,8 +668,11 @@ def _project_id(project_name, projects):
 
 def run_sync(prefs, state, now=None, dry_run=False, window=None,
              session_factory=None, entries_provider=None, projects_provider=None,
-             persist=None):
+             persist=None, allow_surplus=False):
     """Push due entries. Returns (new_state, summary).
+
+    Hours past the project's monthly cap are held back and reported in
+    `summary["held"]` unless `allow_surplus` (see `apply_cap`).
 
     Never raises for Gusto or Toggl failures; they are recorded in the state
     and summary instead. `window` overrides the computed (start, end) dates
@@ -579,11 +698,13 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
     if start > end:  # e.g. "push hours from" is in the future
         return state, {"start": end.isoformat(), "end": end.isoformat(), "pushed": 0,
                        "hours": 0.0, "adopted": 0, "planned": [], "issues": [], "error": None,
-                       "login_required": False, "dry_run": dry_run, "empty": True}
+                       "login_required": False, "dry_run": dry_run, "empty": True,
+                       "held": [], "over_cap_hours": 0.0}
     summary = {"start": start.isoformat(), "end": end.isoformat(), "pushed": 0, "hours": 0.0,
                "adopted": 0,
                "planned": [], "issues": [], "error": None, "login_required": False,
-               "dry_run": dry_run}
+               "dry_run": dry_run, "held": [], "over_cap_hours": 0.0,
+               "cap": cap_hours(prefs)}
     if not dry_run:
         state["last_attempt"] = now.isoformat(timespec="seconds")
         if not state.get("first_day"):
@@ -619,6 +740,10 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
             timezone = session.browser_timezone()
             existing = session.list_shifts(tracker_id, start, end)
             plan = plan_pushes(entries, project_id, state, start, end, existing)
+            plan, held = apply_cap(plan, state, summary["cap"], allow_surplus)
+            summary["held"] = held_by_month(held)
+            summary["over_cap_hours"] = round(
+                sum(item["hours"] for item in plan if item.get("over_cap")), 2)
             summary["planned"] = [
                 {k: (v.isoformat(timespec="minutes") if isinstance(v, datetime) else v)
                  for k, v in item.items()}
@@ -673,6 +798,7 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
         state["synced_through"] = max(end.isoformat(), state.get("synced_through") or "")
         state["last_success"] = now.isoformat(timespec="seconds")
         state["last_result"] = {k: summary[k] for k in ("start", "end", "pushed", "hours")}
+        state["held"] = summary["held"]
         state["last_error"] = None
         state["login_required"] = False
         state["consecutive_failures"] = 0
@@ -727,7 +853,16 @@ def run_locked(prefs, now=None, window=None, session_factory=None, state_path: P
             "start": start.isoformat(), "end": end.isoformat(), "pushed": 0, "hours": 0.0,
             "adopted": 0, "planned": [], "issues": [], "error": str(exc),
             "login_required": False, "dry_run": False, "busy": True,
+            "held": [], "over_cap_hours": 0.0,
         }
+
+
+def held_text(row, cap=None):
+    """"Nov: 1.25h over the 30h cap held back (0.5h still fits)"."""
+    cap_label = f"the {cap:g}h cap" if cap else "the cap"
+    room = f" ({row['room']:g}h still fits)" if row.get("room") else ""
+    return (f"{_month_label(row['month'])}: {row['hours']:g}h over {cap_label} "
+            f"held back{room}")
 
 
 def describe_result(summary):
@@ -740,11 +875,15 @@ def describe_result(summary):
     if summary.get("dry_run"):
         new = [item for item in summary.get("planned", []) if not item.get("existing_shift_id")]
         hours = sum(item["hours"] for item in new)
-        return f"Would push {len(new)} shifts ({hours:.2f}h) for {span}"
+        held = "".join(f" · {held_text(row, summary.get('cap'))}" for row in summary.get("held") or [])
+        return f"Would push {len(new)} shifts ({hours:.2f}h) for {span}{held}"
     if summary.get("pushed"):
         text = f"Pushed {summary['pushed']} shifts ({summary['hours']:.2f}h) for {span}"
+        if summary.get("over_cap_hours"):
+            text += f", {summary['over_cap_hours']:.2f}h of it over the cap"
     else:
         text = f"Nothing new to push for {span}"
+    text += "".join(f" · {held_text(row, summary.get('cap'))}" for row in summary.get("held") or [])
     if summary.get("issues"):
         text += f" · {len(summary['issues'])} need attention"
     return text

@@ -9,6 +9,7 @@ import objc
 import rumps
 import subprocess
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -27,6 +28,9 @@ from update_window import UpdateWindowController
 from carryover import get_previous_month_balance
 from upwork_work_diary import build_work_diary_url
 import gusto_sync
+import upwork_bridge
+import upwork_push
+from background_work import on_main_thread
 from billing_reminders import (
     collect_due_reminders,
     load_reminder_state,
@@ -52,6 +56,9 @@ from Foundation import (
     NSNotificationSuspensionBehaviorDeliverImmediately,
 )
 from app_notify import NOTIFICATION_NAME, marker_mtime
+
+UPWORK_EXTENSION_DIR = Path(__file__).resolve().parent / "upwork_extension"
+UPWORK_FRESH_SECONDS = 300  # one fresh Toggl read covers a run of fills
 bundle = NSBundle.mainBundle()
 info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
 if info:
@@ -131,6 +138,12 @@ class FreelanceTrackerApp(rumps.App):
         self._seen_data_change = marker_mtime()
         self._data_observer = None
         self._gusto_running = False
+        # Upwork push: fresh plans served to the extension, memoised briefly so
+        # a run of fills costs one Toggl call, not one per page load.
+        self._upwork_fresh = (0.0, None)
+        self._upwork_lock = threading.Lock()
+        self._upwork_bridge = None
+        self._start_upwork_bridge()
 
         if self._dashboard_enabled:
             # Set up dashboard popover with action callbacks
@@ -162,7 +175,11 @@ class FreelanceTrackerApp(rumps.App):
                 'settings:test_mcp': self._dashboard_settings_test_mcp,
                 'settings:gusto_login': self._dashboard_settings_gusto_login,
                 'gusto_push': self._dashboard_gusto_push,
+                'gusto_push_surplus': self._dashboard_gusto_push_surplus,
                 'gusto_dismiss': self._dashboard_gusto_dismiss,
+                'upwork_push': self._dashboard_upwork_push,
+                'upwork_setup_extensions': self._dashboard_upwork_setup_extensions,
+                'upwork_setup_folder': self._dashboard_upwork_setup_folder,
                 'assistant_ask': self._dashboard_assistant_ask,
                 'assistant_apply': self._dashboard_assistant_apply,
                 'assistant_clear': self._dashboard_assistant_clear,
@@ -382,7 +399,7 @@ class FreelanceTrackerApp(rumps.App):
         if rerender:
             self.dashboard.refresh_contents()
 
-    def _start_gusto_sync(self, manual, deadline=False):
+    def _start_gusto_sync(self, manual, deadline=False, allow_surplus=False):
         """Push Toggl hours to Gusto on a worker thread.
 
         Manual pushes (Export/Invoice -> Push to Gusto) cover every finished
@@ -393,6 +410,9 @@ class FreelanceTrackerApp(rumps.App):
         its result; cutoff-day failures notify every time, since the cutoff
         is hours away. Gusto runs in its own
         visible Chrome window, which is left open afterwards.
+
+        Hours past the project's monthly cap are held back and alerted on;
+        only a manual `allow_surplus` push (Push surplus to Gusto) sends them.
         """
         if self._gusto_running:
             return
@@ -418,7 +438,7 @@ class FreelanceTrackerApp(rumps.App):
             start, end = window
             self.dashboard.set_gusto_card({
                 "status": "running",
-                "title": "Pushing to Gusto…",
+                "title": "Pushing surplus to Gusto…" if allow_surplus else "Pushing to Gusto…",
                 "detail": f"{prefs.get('gusto_project')} · {start.strftime('%b %-d')}–{end.strftime('%b %-d')}",
             })
         self._refresh_gusto_status()
@@ -438,6 +458,7 @@ class FreelanceTrackerApp(rumps.App):
             # Locked across processes; the ledger is re-read inside the lock.
             return gusto_sync.run_locked(
                 prefs, now=now, window=window, session_factory=session_factory,
+                allow_surplus=allow_surplus,
             )
 
         def done(result):
@@ -467,6 +488,12 @@ class FreelanceTrackerApp(rumps.App):
                     else "Month so far submitted (cutoff is tomorrow)",
                     text,
                 )
+            elif not manual and summary.get("held"):
+                rumps.notification(
+                    "Gusto", f"{prefs.get('gusto_project') or ''}: over the monthly cap",
+                    f"{text}. Move the extra hours to next month in Toggl, "
+                    "or use Export/Invoice → Push surplus to Gusto.",
+                )
             elif not manual and (summary.get("pushed") or summary.get("issues")):
                 rumps.notification("Gusto", prefs.get('gusto_project') or "", text)
             if manual and self.dashboard is not None:
@@ -475,6 +502,7 @@ class FreelanceTrackerApp(rumps.App):
                     "title": "Gusto push failed" if summary.get("error") else "Pushed to Gusto",
                     "detail": text,
                     "issues": [issue["message"] for issue in summary.get("issues") or []],
+                    "held": bool(summary.get("held")),
                 })
             self._refresh_gusto_status()
 
@@ -492,10 +520,174 @@ class FreelanceTrackerApp(rumps.App):
     def _dashboard_gusto_push(self):
         self._start_gusto_sync(manual=True)
 
+    def _dashboard_gusto_push_surplus(self):
+        self._start_gusto_sync(manual=True, allow_surplus=True)
+
     def _dashboard_gusto_dismiss(self):
         if self.dashboard is not None:
             self.dashboard.set_gusto_card(None)
             self.dashboard.refresh_contents()
+
+    # --- Upwork push -------------------------------------------------------
+
+    def _upwork_plans(self, fresh=False):
+        """{project name: upwork_push.plan()} for every Upwork-linked project.
+
+        fresh=False reads the day cache (0 Toggl calls; the dashboard keeps
+        this week warm). fresh=True is for the extension's queue: past days
+        are cached forever, so an entry added to one later would be missed;
+        it costs 1 Toggl call, memoised for UPWORK_FRESH_SECONDS.
+        """
+        import time as _time
+        from toggl_data import get_projects, get_entries_for_range, fetch_entries_fresh
+
+        prefs = load_preferences()
+        contracts = upwork_push.linked_contracts(prefs)
+        if not contracts:
+            return {}
+        now = datetime.now().astimezone()
+        with self._upwork_lock:
+            if fresh:
+                stamp, cached = self._upwork_fresh
+                if cached is not None and _time.time() - stamp < UPWORK_FRESH_SECONDS:
+                    entries = cached
+                else:
+                    entries = fetch_entries_fresh(*upwork_push.window_for(now))
+                    self._upwork_fresh = (_time.time(), entries)
+            else:
+                entries = get_entries_for_range(*upwork_push.window_for(now))
+        state = upwork_push.load_state()
+        projects = get_projects() or {}
+        plans = {}
+        for name, contract in contracts.items():
+            pid = next((p for p, info in projects.items() if (info or {}).get('name') == name), None)
+            if pid is not None:
+                plans[name] = upwork_push.plan(entries, pid, name, contract, state, now)
+        return plans
+
+    def _refresh_upwork_status(self, rerender=True):
+        """Recompute the Upwork sub-lines, badge and Push to Upwork row."""
+        if self.dashboard is None:
+            return
+        prefs = load_preferences()
+        status = None
+        if upwork_push.is_configured(prefs):
+            try:
+                state = upwork_push.load_state()
+                status = upwork_push.status_view(prefs, state, self._upwork_plans())
+                status['extension_folder'] = str(UPWORK_EXTENSION_DIR)
+            except Exception as exc:
+                _debug(f"Upwork status failed: {exc}")
+        self.dashboard.set_upwork_status(status)
+        if rerender:
+            self.dashboard.refresh_contents()
+
+    def _start_upwork_bridge(self):
+        """Serve the extension on 127.0.0.1. A busy port is logged, not fatal."""
+        app = self
+
+        class Handlers(upwork_bridge.BridgeHandlers):
+            def token(self):
+                state = upwork_push.load_state()
+                if not state.get('bridge_token'):
+                    upwork_push.ensure_token(state)
+                    upwork_push.save_state(state)
+                return state['bridge_token']
+
+            def ping(self):
+                state = upwork_push.load_state()
+                first = not state.get('extension_seen')
+                last = state.get('extension_seen') or ''
+                now = datetime.now().astimezone()
+                if first or last[:16] != now.isoformat(timespec='minutes')[:16]:
+                    state['extension_seen'] = now.isoformat(timespec='seconds')
+                    upwork_push.save_state(state)
+                if first:
+                    on_main_thread(lambda: app._refresh_upwork_status())
+
+            def queue(self, contract):
+                prefs = load_preferences()
+                name = next((n for n, c in upwork_push.linked_contracts(prefs).items() if c == contract), None)
+                if name is None:
+                    return {'ok': True, 'contract': contract, 'project': None, 'entries': [],
+                            'weeks': [], 'pending_minutes': 0, 'issues': []}
+                plan = app._upwork_plans(fresh=True).get(name)
+                if plan is None:
+                    return {'ok': True, 'contract': contract, 'project': name, 'entries': [],
+                            'weeks': [], 'pending_minutes': 0, 'issues': []}
+                return upwork_push.queue_payload(plan, contract, name)
+
+            def added(self, contract, key):
+                prefs = load_preferences()
+                name = next((n for n, c in upwork_push.linked_contracts(prefs).items() if c == contract), None)
+                plan = app._upwork_plans(fresh=True).get(name) if name else None
+                segment = next((s for s in upwork_push.pending(plan) if s['key'] == key), None) if plan else None
+                if segment is None:
+                    return False
+                state = upwork_push.load_state()
+                upwork_push.record_added(state, contract, name, segment)
+                upwork_push.save_state(state)
+                on_main_thread(lambda: app._refresh_upwork_status())
+                return True
+
+        try:
+            state = upwork_push.load_state()
+            if not state.get('bridge_token'):
+                upwork_push.ensure_token(state)
+                upwork_push.save_state(state)
+            self._upwork_bridge = upwork_bridge.start(Handlers())
+        except OSError as exc:
+            _debug(f"Upwork bridge did not start: {exc}")
+
+    def _dashboard_upwork_push(self, project_id):
+        """Open the work diary in the Upwork browser on the first day with time to add."""
+        from toggl_data import get_projects
+
+        try:
+            info = get_projects().get(str(project_id)) or {}
+            name = info.get('name', '')
+            prefs = load_preferences()
+            contract = upwork_push.linked_contracts(prefs).get(name)
+            if not contract:
+                raise RuntimeError(f"No Upwork contract id configured for {name or project_id}")
+            plan = self._upwork_plans().get(name)
+            waiting = upwork_push.pending(plan) if plan else []
+            day = datetime.fromisoformat(waiting[0]['date']).date() if waiting else datetime.now().date()
+            url = build_work_diary_url(contract, day) + '#ft-push'
+            subprocess.run(["open", "-a", upwork_push.browser_name(prefs), url], check=False)
+        except Exception as exc:
+            _debug(f"Upwork push open failed: {exc}")
+            rumps.alert("Push to Upwork failed", str(exc))
+
+    def _dashboard_upwork_setup_extensions(self):
+        browser = upwork_push.browser_name(load_preferences())
+        url = upwork_push.GECKO_DEBUG_URL if upwork_push.is_gecko(browser) else "chrome://extensions"
+        subprocess.run(["open", "-a", browser, url], check=False)
+
+    def _dashboard_upwork_setup_folder(self):
+        subprocess.run(["open", str(UPWORK_EXTENSION_DIR)], check=False)
+
+    @rumps.timer(60)
+    def check_upwork_reminders(self, _):
+        """Notify while Upwork time is waiting: Friday 4 PM and Sunday 6 PM
+        before the Monday 12:00 UTC lock. Reads the day cache only."""
+        try:
+            prefs = load_preferences()
+            if not upwork_push.is_configured(prefs) or not prefs.get('upwork_reminders_enabled', True):
+                return
+            now = datetime.now().astimezone()
+            state = upwork_push.load_state()
+            plans = self._upwork_plans()
+            due = upwork_push.reminder_due(now, state, plans)
+            if not due:
+                return
+            week_iso, _slot, _minutes = due
+            rumps.notification("Upwork", "Time to add before the weekly lock",
+                               upwork_push.reminder_text(plans, week_iso))
+            upwork_push.mark_reminded(state, week_iso, now)
+            upwork_push.save_state(state)
+        except Exception as exc:
+            _debug(f"Upwork reminder check failed: {exc}")
 
     def _dashboard_settings_gusto_login(self):
         """Open the Gusto window and wait for a passkey login (worker thread)."""
@@ -1044,6 +1236,7 @@ class FreelanceTrackerApp(rumps.App):
                 self.dashboard.set_error_message(None)
                 self.dashboard.set_exportable_projects(self._build_dashboard_projects())
                 self._refresh_gusto_status(rerender=False)
+                self._refresh_upwork_status(rerender=False)
                 self.dashboard.update_data(daily, weekly, monthly)
             else:
                 self._update_fallback_menu(daily, weekly, monthly, next_refresh_calls)

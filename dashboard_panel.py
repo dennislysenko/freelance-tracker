@@ -185,6 +185,12 @@ class ActionMessageHandler(objc.lookUpClass('NSObject')):
                 if callback:
                     callback(project_id, entry_date_iso)
             return
+        if action.startswith("upwork_push:"):
+            project_id = action.split(":", 1)[1]
+            callback = self._callbacks.get("upwork_push")
+            if callback and project_id:
+                callback(project_id)
+            return
         if action.startswith("save_upwork_contract:"):
             parts = action.split(":", 3)
             if len(parts) >= 4:
@@ -323,6 +329,8 @@ class DashboardPanelController:
         # `card` is the result overlay shown after a manual push.
         self._gusto_status = None
         self._gusto_card = None
+        # Upwork push: upwork_push.status_view() + extension folder, or None.
+        self._upwork_status = None
         self._view = "dashboard"  # "dashboard" | "settings" | "assistant"
         # The popover is transient, so leaving to fetch a credential in a
         # browser dismisses it. Remembering the tab and the open integration
@@ -356,6 +364,10 @@ class DashboardPanelController:
     def set_gusto_status(self, status):
         """gusto_sync.status_view() output, or None when the sync is not set up."""
         self._gusto_status = dict(status) if status else None
+
+    def set_upwork_status(self, status):
+        """upwork_push.status_view() output, or None when no project is linked."""
+        self._upwork_status = dict(status) if status else None
 
     def set_gusto_card(self, card):
         """Overlay after a manual push: {"status": running|success|error, title, detail, issues}."""
@@ -835,8 +847,12 @@ class DashboardPanelController:
 
                     if billing_type == 'hourly_with_cap' and project.get('cap_fill_date'):
                         height += 14
+                    if self._gusto_pushed_html(name):
+                        height += 28 if (self._gusto_status or {}).get("held_hours") else 14
                 else:
                     height += 32
+                if self._upwork_line_html(name):
+                    height += 14
 
         projection = monthly.get('projection', {})
         if projection and projection.get('worked_days', 0) > 0:
@@ -1026,6 +1042,8 @@ class DashboardPanelController:
                     {non_billable_html}
                     {carryover_html}
                     {cap_html}
+                    {self._gusto_pushed_html(name)}
+                    {self._upwork_line_html(name)}
                 </div>"""
                 tracked_projects.append((percentage, row_html))
             elif is_billable:
@@ -1036,6 +1054,7 @@ class DashboardPanelController:
                         <span class="money">${p['earnings']:.0f}</span>
                     </div>
                     {non_billable_html}
+                    {self._upwork_line_html(name)}
                 </div>"""
                 untracked_projects.append(row_html)
 
@@ -1174,19 +1193,26 @@ class DashboardPanelController:
                         f'onclick="selectInvoiceProject(this)">'
                         f'<span>{_esc(p["name"])}</span>{invoice_badge}</button>'
                     )
-                upwork_badge = (
-                    '<span class="export-option-meta">Linked</span>'
-                    if upwork_contract_id else
-                    '<span class="export-option-meta muted">Needs contract</span>'
-                )
-                upwork_project_buttons.append(
+                upwork_project = ((self._upwork_status or {}).get("projects") or {}).get(p["name"]) or {}
+                if upwork_contract_id and upwork_project.get("pending_minutes"):
+                    upwork_badge = (f'<span class="export-option-meta warn">'
+                                    f'{_esc(_minutes_label(upwork_project["pending_minutes"]))} to add</span>')
+                elif upwork_contract_id:
+                    upwork_badge = '<span class="export-option-meta">Linked</span>'
+                else:
+                    upwork_badge = '<span class="export-option-meta muted">Needs contract</span>'
+                # Linked projects first: they are the ones that can be pushed.
+                upwork_project_buttons.append((
+                    0 if upwork_contract_id else 1,
+                    p["name"].lower(),
                     f'<button class="export-option invoice-option" '
                     f'data-project-id="{_esc(p["id"])}" '
-                    f'data-project-name="{_esc(p["name"])}"'
-                    f' data-upwork-contract-id="{_esc(upwork_contract_id)}"'
+                    f'data-project-name="{_esc(p["name"])}" '
+                    f'data-upwork-contract-id="{_esc(upwork_contract_id)}" '
                     f'onclick="upworkSelectProject(this)">'
-                    f'<span>{_esc(p["name"])}</span>{upwork_badge}</button>'
-                )
+                    f'<span>{_esc(p["name"])}</span>{upwork_badge}</button>',
+                ))
+            upwork_project_buttons = [html for _rank, _name, html in sorted(upwork_project_buttons)]
             export_items_html = "".join(project_buttons) or '<div class="export-empty">No exportable projects</div>'
             invoice_items_html = "".join(invoice_project_buttons) or '<div class="export-empty">No invoiceable projects</div>'
             upwork_items_html = "".join(upwork_project_buttons) or '<div class="export-empty">No projects available</div>'
@@ -1195,6 +1221,7 @@ class DashboardPanelController:
             invoice_items_html = '<div class="export-empty">No invoiceable projects</div>'
             upwork_items_html = '<div class="export-empty">No projects available</div>'
 
+        upwork_connected_attr = ' data-upwork-connected="1"' if (self._upwork_status or {}).get("connected") else ''
         export_menu_data_attrs = (
             f'data-today="{_today.isoformat()}" '
             f'data-this-week-start="{_this_week_start.isoformat()}" '
@@ -1228,6 +1255,25 @@ class DashboardPanelController:
                 f'<span>Push to Gusto</span>'
                 f'<span class="{meta_cls}">{_esc(gusto_status.get("meta") or "")}</span></button>'
             )
+            if gusto_status.get("held_hours"):
+                gusto_option_html += (
+                    f'<button class="export-option invoice-option" onclick="gustoPushSurplus(event)"{disabled}>'
+                    f'<span>Push surplus to Gusto</span>'
+                    f'<span class="export-option-meta warn">{gusto_status["held_hours"]:g}h over cap</span></button>'
+                )
+
+        upwork_status = self._upwork_status or {}
+        upwork_meta_cls = "export-option-meta" + (" warn" if upwork_status.get("stale") else "")
+        upwork_option_html = (
+            '<button class="export-option invoice-option" onclick="exportChooseWorkflow(\'upwork\')">'
+            '<span>Push to Upwork</span>'
+            + (f'<span class="{upwork_meta_cls}">{_esc(upwork_status.get("meta") or "")}</span>'
+               if upwork_status.get("configured") else '')
+            + '</button>'
+        )
+        if upwork_status.get("stale") and not gusto_badge_html:
+            gusto_badge_html = '<span class="export-badge" title="Hours not pushed"></span>'
+        upwork_setup_html = self._render_upwork_setup_html()
 
         # Settings view: rendered alongside the dashboard so switching is a
         # pure CSS toggle (body[data-view]) and Toggl-data refreshes don't
@@ -1559,6 +1605,10 @@ html, body {{
     font-size: 11px;
     color: #6e7681;
     margin-top: 2px;
+}}
+
+.carryover.warn {{
+    color: #f0883e;
 }}
 
 .billing-period {{
@@ -1993,6 +2043,52 @@ html, body {{
     color-scheme: dark;
 }}
 
+.upwork-steps {{
+    margin: 4px 0 8px 18px;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary, #c9c9ce);
+}}
+.upwork-steps li {{ margin-bottom: 8px; }}
+.upwork-step-btn {{
+    display: inline-block;
+    margin: 4px 6px 0 0;
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 5px;
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.06);
+    color: inherit;
+    cursor: pointer;
+}}
+.upwork-path {{
+    display: block;
+    margin-top: 3px;
+    font-size: 10px;
+    color: #8e8e93;
+    word-break: break-all;
+}}
+.upwork-token {{
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.08);
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+}}
+.upwork-setup-state {{
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: #f0883e;
+}}
+.upwork-setup-state.ok {{ color: #3fb950; }}
+.export-option.muted-link {{
+    font-size: 11px;
+    color: #8e8e93;
+}}
 .upwork-contract-form {{
     gap: 8px;
 }}
@@ -2240,12 +2336,12 @@ html, body {{
                 <div class="action-btn export-toggle">
                     <button class="export-primary" onclick="toggleExportMenu(event)">Export/Invoice{gusto_badge_html}</button>
                 </div>
-                <div class="export-menu" id="exportMenu" {export_menu_data_attrs}>
+                <div class="export-menu" id="exportMenu" {export_menu_data_attrs}{upwork_connected_attr}>
                     <div class="export-stage" id="exportStage0">
                         <div class="export-stage-title">Choose action</div>
                         <button class="export-option" onclick="exportChooseWorkflow('csv')">Export CSV</button>
                         <button class="export-option" onclick="exportChooseWorkflow('invoice')">Create Stripe Invoice</button>
-                        <button class="export-option" onclick="exportChooseWorkflow('upwork')">Open Upwork Diary</button>
+                        {upwork_option_html}
                         {gusto_option_html}
                     </div>
                     <div class="export-stage" id="exportStage1" style="display:none;">
@@ -2300,10 +2396,12 @@ html, body {{
                     <div class="export-stage" id="upworkStage1" style="display:none;">
                         <div class="export-stage-header">
                             <button class="export-back" onclick="upworkBackToActions(event)" aria-label="Back">←</button>
-                            <span class="export-stage-title">Open today&apos;s diary</span>
+                            <span class="export-stage-title">Push to Upwork</span>
                         </div>
                         {upwork_items_html}
+                        <button class="export-option muted-link" onclick="upworkShowSetup(event, '')">Set up the browser extension…</button>
                     </div>
+                    {upwork_setup_html}
                     <div class="export-stage" id="upworkStage2" style="display:none;">
                         <div class="export-stage-header">
                             <button class="export-back" onclick="upworkBackToProjects(event)" aria-label="Back">←</button>
@@ -2490,6 +2588,15 @@ html, body {{
         postAction('gusto_push');
     }}
 
+    function gustoPushSurplus(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        closeExportMenu();
+        postAction('gusto_push_surplus');
+    }}
+
     function toggleExportMenu(event) {{
         if (event) {{
             event.preventDefault();
@@ -2509,7 +2616,7 @@ html, body {{
 
     function exportShowStage0() {{
         setExportMenuWide(false);
-        var ids = ['exportStage0', 'exportStage1', 'exportStage2', 'invoiceStage1', 'invoiceStage2', 'upworkStage1', 'upworkStage2'];
+        var ids = ['exportStage0', 'exportStage1', 'exportStage2', 'invoiceStage1', 'invoiceStage2', 'upworkStage1', 'upworkStage2', 'upworkSetup'];
         for (var i = 0; i < ids.length; i++) {{
             var el = document.getElementById(ids[i]);
             if (el) {{
@@ -2734,6 +2841,8 @@ html, body {{
         if (i2) i2.style.display = 'none';
         if (u1) u1.style.display = '';
         if (u2) u2.style.display = 'none';
+        var us = document.getElementById('upworkSetup');
+        if (us) us.style.display = 'none';
         var form = document.getElementById('exportCustomForm');
         if (form) form.style.display = 'none';
         var invoiceForm = document.getElementById('invoiceCustomForm');
@@ -2766,8 +2875,12 @@ html, body {{
         var today = menu ? menu.getAttribute('data-today') : '';
         if (!pid || !today) return;
         if (contractId) {{
+            if (menu && menu.getAttribute('data-upwork-connected') !== '1') {{
+                upworkShowSetup(null, pid);
+                return;
+            }}
             closeExportMenu();
-            postAction('open_upwork_diary:' + pid + ':' + today);
+            postAction('upwork_push:' + pid);
             return;
         }}
         var stage1 = document.getElementById('upworkStage1');
@@ -2789,6 +2902,38 @@ html, body {{
         if (stage1) stage1.style.display = 'none';
         if (stage2) stage2.style.display = '';
         scheduleExportMenuPosition();
+    }}
+
+    function upworkShowSetup(event, pid) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        setExportMenuWide(true);
+        var u1 = document.getElementById('upworkStage1');
+        var u2 = document.getElementById('upworkStage2');
+        var us = document.getElementById('upworkSetup');
+        if (u1) u1.style.display = 'none';
+        if (u2) u2.style.display = 'none';
+        if (us) {{
+            us.style.display = '';
+            us.setAttribute('data-project-id', pid || '');
+        }}
+        var cont = document.getElementById('upworkSetupContinue');
+        if (cont) cont.style.display = pid ? '' : 'none';
+        scheduleExportMenuPosition();
+    }}
+
+    function upworkSetupContinue(event) {{
+        if (event) {{
+            event.preventDefault();
+            event.stopPropagation();
+        }}
+        var us = document.getElementById('upworkSetup');
+        var pid = us ? us.getAttribute('data-project-id') : '';
+        if (!pid) return;
+        closeExportMenu();
+        postAction('upwork_push:' + pid);
     }}
 
     function submitUpworkContract(event) {{
@@ -3112,6 +3257,77 @@ html, body {{
 
         return html
 
+    def _upwork_line_html(self, project_name):
+        """Sub-line under an Upwork-linked project: time still to add before the lock."""
+        status = self._upwork_status or {}
+        row = (status.get("projects") or {}).get(project_name)
+        if not row:
+            return ""
+        cls = "carryover warn" if row.get("warn") else "carryover"
+        return f'<div class="{cls}">↳ {_esc(row.get("line") or "")}</div>'
+
+    def _render_upwork_setup_html(self):
+        """Export menu stage that walks through installing and pairing the extension."""
+        status = self._upwork_status or {}
+        token = status.get("token") or ""
+        folder = status.get("extension_folder") or ""
+        connected = bool(status.get("connected"))
+        if connected:
+            from datetime import datetime
+
+            seen = status.get("extension_seen") or ""
+            try:
+                seen = datetime.fromisoformat(seen).strftime("%a %b %-d, %-I:%M %p")
+            except ValueError:
+                pass
+            state_html = f'<div class="upwork-setup-state ok">&#10003; Extension connected (last seen {_esc(seen)})</div>'
+        else:
+            state_html = '<div class="upwork-setup-state">Waiting for the extension&hellip;</div>'
+        browser = _esc(status.get("browser") or "Google Chrome")
+        folder_html = f"""<button class="upwork-step-btn" onclick="postAction('upwork_setup_folder')">Show folder</button>
+                                <span class="upwork-path">{_esc(folder)}</span>"""
+        if status.get("gecko"):
+            debug_url = "about:debugging#/runtime/this-firefox"
+            steps_html = f"""<li>In {browser}, open <span class="upwork-path">{debug_url}</span>
+                                <button class="upwork-step-btn" onclick="postAction('upwork_setup_extensions')">Open it</button>
+                                <button class="upwork-step-btn" data-copy-text="{debug_url}" onclick="copyDescription(this)">Copy address</button></li>
+                            <li>Click <b>Load Temporary Add-on&hellip;</b> and choose <b>manifest.json</b> in the extension folder. {browser} removes it when you quit, so load it again after a restart.
+                                {folder_html}</li>
+                            """
+            pin_text = ("In about:addons, open <b>Freelance Tracker &ndash; Upwork fill</b> &rarr; <b>Permissions</b> and turn on both sites. "
+                        "Then click the extension&apos;s icon in the toolbar or Extensions menu,")
+        else:
+            steps_html = f"""<li>Open {browser}&apos;s extensions page (or type chrome://extensions) and turn on <b>Developer mode</b>, top right.
+                                <button class="upwork-step-btn" onclick="postAction('upwork_setup_extensions')">Open extensions page</button></li>
+                            <li>Click <b>Load unpacked</b> and choose the extension folder.
+                                {folder_html}</li>
+                            """
+            pin_text = "Pin the extension (puzzle-piece menu), click its icon,"
+        return f"""
+                    <div class="export-stage" id="upworkSetup" style="display:none;">
+                        <div class="export-stage-header">
+                            <button class="export-back" onclick="upworkBackToProjects(event)" aria-label="Back">←</button>
+                            <span class="export-stage-title">Set up Upwork push</span>
+                        </div>
+                        <ol class="upwork-steps">
+                            {steps_html}                            <li>{pin_text} paste this pairing code and click Connect:
+                                <span class="upwork-token">{_esc(token)}</span>
+                                <button class="upwork-step-btn" data-copy-text="{_esc(token)}" onclick="copyDescription(this)">Copy</button></li>
+                        </ol>
+                        {state_html}
+                        <button class="export-custom-submit" id="upworkSetupContinue" style="display:none;" onclick="upworkSetupContinue(event)">Open the work diary</button>
+                        <div class="export-form-note">The extension fills Upwork&apos;s <b>Add manual time</b> form from your Toggl hours in 10-minute steps. You check each entry and click Save; it never saves for you.</div>
+                    </div>"""
+
+    def _gusto_pushed_html(self, project_name):
+        """Sub-line under the Gusto project's bar: hours in Gusto, as of the last push."""
+        status = self._gusto_status or {}
+        if not status.get("configured") or status.get("project") != project_name:
+            return ""
+        cls = "carryover warn" if status.get("held_hours") else "carryover"
+        held = "".join(f" \u00b7 {_esc(text)}" for text in status.get("held") or [])
+        return f'<div class="{cls}">↳ {_esc(status.get("pushed_line") or "")}{held}</div>'
+
     def _render_gusto_card_html(self):
         """Overlay for a manual Gusto push: in progress, then the result."""
         card = self._gusto_card or {}
@@ -3133,6 +3349,10 @@ html, body {{
                 </div>
             </div>"""
         tone = "success" if status == "success" else "error"
+        surplus_btn = (
+            '<button class="stripe-state-btn" onclick="postAction(\'gusto_push_surplus\')">Push surplus too</button>'
+            if card.get("held") else ""
+        )
         return f"""
         <div class="stripe-state-overlay">
             <div class="stripe-state-card {tone}">
@@ -3140,6 +3360,7 @@ html, body {{
                 <div class="stripe-state-detail">{detail}</div>
                 {issues_html}
                 <div class="stripe-state-actions">
+                    {surplus_btn}
                     <button class="stripe-state-btn secondary" onclick="postAction('gusto_dismiss')">Done</button>
                 </div>
             </div>
@@ -3270,6 +3491,14 @@ def _non_billable_note(p):
         f'<div class="carryover">↳ +{non_billable:.1f}h non-billable, not counted '
         f'({_total_hours(p):.1f}h total)</div>'
     )
+
+
+def _minutes_label(minutes):
+    """130 -> "2h 10m"."""
+    h, m = divmod(int(minutes or 0), 60)
+    if h and m:
+        return f"{h}h {m}m"
+    return f"{h}h" if h else f"{m}m"
 
 
 def _esc(text):

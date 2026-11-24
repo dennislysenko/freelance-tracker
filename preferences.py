@@ -45,6 +45,8 @@ DEFAULT_PREFERENCES = {
     "gusto_project": "",  # Toggl project whose hours go to Gusto
     "gusto_company_slug": "",  # Gusto company in app.gusto.com/<slug>; set by "Log in to Gusto"
     "gusto_sync_start_date": "",  # Optional YYYY-MM-DD: earliest day ever pushed (backfill floor)
+    "upwork_reminders_enabled": True,  # Notify Fri 4 PM / Sun 6 PM while Upwork time is waiting
+    "upwork_browser": "Google Chrome",  # Browser with the Upwork fill extension; Push to Upwork opens it
 }
 
 
@@ -187,6 +189,12 @@ def validate_preferences(prefs):
             _date.fromisoformat(start_date.strip())
         except ValueError:
             errors.append("'gusto_sync_start_date': must be a date like 2026-10-01")
+
+    # Optional fields: Upwork push
+    if 'upwork_reminders_enabled' in prefs and not isinstance(prefs['upwork_reminders_enabled'], bool):
+        errors.append("'upwork_reminders_enabled': must be true or false")
+    if 'upwork_browser' in prefs and not isinstance(prefs['upwork_browser'], str):
+        errors.append("'upwork_browser': must be a string")
 
     # Optional field: days_off_keywords (list of non-empty strings)
     if 'days_off_keywords' in prefs:
