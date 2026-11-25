@@ -42,8 +42,15 @@ entry isn't marked automatically; use **Already added** once it's in Upwork.
 
 Release builds of Firefox-based browsers only run unsigned add-ons
 temporarily: the extension is removed when the browser quits, so load it
-again after a restart. (Keeping it permanently means signing it as an unlisted
-add-on through addons.mozilla.org.)
+again after a restart.
+
+To keep it installed, sign it as an **unlisted** add-on (never published on
+addons.mozilla.org): create API credentials at
+https://addons.mozilla.org/developers/addon/api/key/, store them in the macOS
+Keychain as `amo-jwt-issuer` and `amo-jwt-secret` (see the top of
+`sign_upwork_extension.py`), then run `python sign_upwork_extension.py`
+(`--bump` for later versions). Install the `.xpi` it writes to `dist/` from
+`about:addons` → gear → **Install Add-on From File**.
 
 Freelance Tracker must be running: the extension talks only to it, on
 `http://127.0.0.1:47619`, sending the pairing code with every request.
