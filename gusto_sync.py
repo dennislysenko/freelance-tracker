@@ -634,7 +634,43 @@ def _month_label(month):
     return date.fromisoformat(month + "-01").strftime("%b")
 
 
-def compare_hours(entries, project_id, shifts):
+def _ledger_match(entry_start, entry_stop, record, unmatched):
+    """Shifts the push ledger says this entry became, if Gusto still has them
+    exactly as recorded and Toggl still has the entry as it was pushed.
+
+    Returns (matched shifts, held tail or None), or None when the ledger does
+    not account for the entry (then plain time matching decides). Only what
+    the app itself recorded is excused: a shift edited in Gusto by hand, or an
+    entry changed in Toggl since, falls through and is reported as usual.
+    """
+    parts = [record] + ([record["rest"]] if record.get("rest") else [])
+    try:
+        toggl_stop = _parse(parts[-1]["stop"] if record.get("rest") else
+                            record.get("toggl_stop") or record["stop"])
+        if (abs(entry_start - _parse(record["start"])) > ENTRY_TOLERANCE
+                or abs(entry_stop - toggl_stop) > ENTRY_TOLERANCE):
+            return None
+        found = []
+        for part in parts:
+            shift = next((s for s in unmatched if part.get("shift_id")
+                          and str(s.get("id")) == str(part["shift_id"])), None)
+            if shift is None:
+                return None
+            clock_in, clock_out = _parse(shift["clock_in"]), _parse(shift["clock_out"])
+            if (abs(clock_in - _parse(part["start"])) > ENTRY_TOLERANCE
+                    or abs(clock_out - _parse(part["stop"])) > ENTRY_TOLERANCE):
+                return None
+            found.append(shift)
+    except (KeyError, TypeError, ValueError):
+        return None
+    held = None
+    pushed_stop = _parse(parts[-1]["stop"])
+    if entry_stop - pushed_stop >= ENTRY_TOLERANCE:
+        held = (pushed_stop, entry_stop)
+    return found, held
+
+
+def compare_hours(entries, project_id, shifts, state=None):
     """Toggl entries for the project vs. shifts in Gusto, matched one to one.
 
     Returns hour totals for each side plus whatever is on only one side: Toggl
@@ -642,8 +678,15 @@ def compare_hours(entries, project_id, shifts):
     (added or edited in Gusto by hand). Running timers are left out, and so
     are non-billable entries: they never belong in Gusto, so they only show
     up as `toggl_non_billable_hours`.
+
+    With the push ledger (`state`), an entry is first matched to the Gusto
+    shift ids the app recorded for it. An entry split at the monthly cap then
+    matches its pushed part, and the unpushed tail is listed under
+    `held_over_cap` instead of looking missing.
     """
     unmatched = list(shifts)
+    pushed = (state or {}).get("pushed") or {}
+    held_over_cap = []
     toggl_hours = 0.0
     non_billable_hours = 0.0
     toggl_only = []
@@ -659,6 +702,22 @@ def compare_hours(entries, project_id, shifts):
             non_billable_hours += hours
             continue
         toggl_hours += hours
+        record = pushed.get(str(entry.get("id")))
+        by_ledger = _ledger_match(entry_start, entry_stop, record, unmatched) if record else None
+        if by_ledger is not None:
+            found, held = by_ledger
+            for shift in found:
+                unmatched.remove(shift)
+            if held:
+                held_over_cap.append({
+                    "toggl_id": str(entry.get("id")),
+                    "day": entry_start.date().isoformat(),
+                    "start": held[0].astimezone().isoformat(timespec="minutes"),
+                    "end": held[1].astimezone().isoformat(timespec="minutes"),
+                    "hours": round((held[1] - held[0]).total_seconds() / 3600, 2),
+                    "description": entry.get("description") or "",
+                })
+            continue
         note = (entry.get("description") or "").strip() or DEFAULT_NOTE
         match = next((s for s in unmatched if _same_shift(s, entry_start, entry_stop, note)), None)
         if match is not None:
@@ -678,6 +737,8 @@ def compare_hours(entries, project_id, shifts):
         "toggl_non_billable_hours": round(non_billable_hours, 2),
         "difference_hours": round(toggl_hours - gusto_hours, 2),
         "toggl_only": toggl_only,
+        "held_over_cap": held_over_cap,
+        "held_over_cap_hours": round(sum(h["hours"] for h in held_over_cap), 2),
         "gusto_only": sorted(unmatched, key=lambda s: (s.get("date") or "", s.get("clock_in") or "")),
     }
 

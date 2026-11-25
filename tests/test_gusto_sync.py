@@ -703,3 +703,44 @@ def test_a_filled_cap_with_only_surplus_left_is_up_to_date():
     assert g.held_needs_attention(state["held"]) == []
     # Room left under the cap still alerts.
     assert g.held_needs_attention([{"month": "2026-10", "hours": 1, "room": 0.5}])
+
+
+def test_compare_matches_a_split_entry_through_the_ledger():
+    # 2.5h in Gusto already; the 1h entry crossed the 4h cap and was split.
+    state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 3.5)}}
+    entries = [_entry(2, _local(2026, 10, 7, 9), 60, "b")]
+    session, (state, _) = _run_capped(entries, state)
+    shift = session.added[0]
+    gusto = [{"id": shift["id"], "date": "2026-10-07", "minutes": 30, "notes": ["b"],
+              "clock_in": shift["clock_in"].isoformat(), "clock_out": shift["clock_out"].isoformat()}]
+
+    out = g.compare_hours(entries, PROJECT_ID, gusto, state)
+    assert out["toggl_only"] == [] and out["gusto_only"] == []
+    assert out["held_over_cap_hours"] == 0.5
+    assert out["held_over_cap"][0]["start"] == _local(2026, 10, 7, 9, 30).isoformat(timespec="minutes")
+    assert out["difference_hours"] == 0.5
+
+    # Without the ledger it looks like a mismatch (the old behaviour).
+    plain = g.compare_hours(entries, PROJECT_ID, gusto)
+    assert len(plain["toggl_only"]) == 1 and len(plain["gusto_only"]) == 1
+
+    # A shift edited in Gusto by hand is not excused.
+    edited = [dict(gusto[0], clock_out=_local(2026, 10, 7, 9, 20).isoformat(), minutes=20)]
+    out = g.compare_hours(entries, PROJECT_ID, edited, state)
+    assert len(out["toggl_only"]) == 1 and len(out["gusto_only"]) == 1 and out["held_over_cap"] == []
+
+    # Nor is an entry changed in Toggl after the push.
+    longer = [_entry(2, _local(2026, 10, 7, 9), 75, "b")]
+    out = g.compare_hours(longer, PROJECT_ID, gusto, state)
+    assert len(out["toggl_only"]) == 1 and out["held_over_cap"] == []
+
+
+def test_compare_matches_by_recorded_shift_id_even_if_the_note_differs():
+    start = _local(2026, 10, 7, 14)
+    state = {"pushed": {"1": {"shift_id": "488", "day": "2026-10-07",
+                              "start": start.isoformat(), "stop": (start + timedelta(minutes=30)).isoformat()}}}
+    entries = [_entry(1, start, 30, "design review + code review")]
+    gusto = [{"id": "488", "date": "2026-10-07", "minutes": 30, "notes": ["design review"],
+              "clock_in": start.isoformat(), "clock_out": (start + timedelta(minutes=30)).isoformat()}]
+    out = g.compare_hours(entries, PROJECT_ID, gusto, state)
+    assert out["toggl_only"] == [] and out["gusto_only"] == [] and out["difference_hours"] == 0

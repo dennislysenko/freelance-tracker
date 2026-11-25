@@ -645,7 +645,8 @@ def build_gusto_hours(start: Optional[str] = None, end: Optional[str] = None,
             datetime.combine(start_d, datetime.min.time()).astimezone(),
             datetime.combine(toggl_end, datetime.max.time()).astimezone(),
         ) if start_d <= toggl_end else []
-        payload["comparison"] = gusto_sync.compare_hours(entries, project_id, shifts)
+        payload["comparison"] = gusto_sync.compare_hours(
+            entries, project_id, shifts, gusto_sync.load_state(gusto_sync.STATE_FILE))
         payload["comparison"]["toggl_through"] = toggl_end.isoformat()
         payload["data_as_of"] = _data_as_of(start_d, toggl_end) if start_d <= toggl_end else None
     except (CacheMissError, ValueError) as exc:

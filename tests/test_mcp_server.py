@@ -238,6 +238,7 @@ def gusto_stubbed(stubbed, monkeypatch, tmp_path):
     prefs, entry_dir = stubbed
     prefs.update({"gusto_project": "Acme Corp", "gusto_company_slug": "acme-inc"})
     monkeypatch.setattr(gusto_sync, "LOCK_FILE", tmp_path / "gusto_sync.lock")
+    monkeypatch.setattr(gusto_sync, "STATE_FILE", tmp_path / "gusto_sync_state.json")
     monkeypatch.setattr(S, "get_projects", lambda: {"111": {"name": "Acme Corp"}})
     entries = [
         {"id": 1, "project_id": 111, "description": "design review",
