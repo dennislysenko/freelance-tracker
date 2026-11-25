@@ -139,14 +139,12 @@ def retry_delay(state):
 
 
 def manual_window(now, state, first_day=None):
-    """Dates a "Push to Gusto" click covers: the lookback window up to
-    yesterday, so a mid-week push also sends this week's finished days.
-    Today is left out because it is not over yet, except on the month's
-    deadline day, when today's finished entries are due too."""
+    """Dates a "Push to Gusto" click covers: the lookback window through
+    today. Only finished entries are pushed (a running timer is skipped), so
+    the rest of today goes out with the next push; a click can therefore fill
+    the month's cap with today's hours."""
     start, _ = sync_window(now, state, first_day)
-    today = now.date()
-    end = today if today == last_business_day(today.year, today.month) else today - timedelta(days=1)
-    return start, end  # start > end means nothing to push yet
+    return start, now.date()  # start > end means nothing to push yet
 
 
 def month_end_push_kind(day):
@@ -198,6 +196,16 @@ def is_configured(prefs):
     return bool(prefs.get("gusto_sync_enabled") and (prefs.get("gusto_project") or "").strip())
 
 
+def held_needs_attention(held):
+    """Held rows that still leave room under the cap.
+
+    Once the cap is filled (room 0, which the split at the cap now always
+    reaches) the held hours are just the month's surplus: the month is
+    covered and nothing needs doing, so they no longer alert.
+    """
+    return [row for row in held or [] if (row.get("room") or 0) >= 1 / 60]
+
+
 def is_stale(now, state):
     """Last week not in Gusto yet, or something needs the user.
 
@@ -211,7 +219,7 @@ def is_stale(now, state):
     month_due = (today == last_business_day(today.year, today.month)
                  and state.get("deadline_pushed") != today.isoformat())
     return bool(behind or month_due or state.get("login_required") or state.get("issues")
-                or state.get("last_error") or state.get("held"))
+                or state.get("last_error") or held_needs_attention(state.get("held")))
 
 
 def status_view(prefs, state, now=None, running=False):
@@ -229,6 +237,7 @@ def status_view(prefs, state, now=None, running=False):
     cap = cap_hours(prefs)
     held = state.get("held") or []
     held_hours = round(sum(row.get("hours", 0) for row in held), 2)
+    held_alert = bool(held_needs_attention(held))
 
     if running:
         meta = "Pushing\u2026"
@@ -236,7 +245,7 @@ def status_view(prefs, state, now=None, running=False):
         meta = "Needs your Gusto passkey"
     elif state.get("last_error"):
         meta = "Last push failed"
-    elif held:
+    elif held_alert:
         meta = f"{held_hours:g}h over the {cap:g}h cap held back" if cap else f"{held_hours:g}h held back"
     elif issues:
         meta = f"{len(issues)} need{'s' if len(issues) == 1 else ''} attention"
@@ -246,6 +255,8 @@ def status_view(prefs, state, now=None, running=False):
         meta = f"Month's hours missed the {_hour_label(DEADLINE_HOUR)} cutoff"
     elif is_stale(now, state):
         meta = f"{_short(week_start.isoformat())}\u2013{_short(week_end.isoformat())} not pushed"
+    elif held and cap:
+        meta = f"{cap:g}h cap filled \u00b7 up to date"
     else:
         synced = state.get("synced_through")
         meta = f"Up to date through {_short(synced)}" if synced else "Not pushed yet"
@@ -277,6 +288,7 @@ def status_view(prefs, state, now=None, running=False):
         "cap_hours": cap,
         "held": [held_text(row, cap) for row in held],
         "held_hours": held_hours,
+        "held_alert": held_alert,
         "pushed_line": pushed_line(state, cap, now),
     }
 
@@ -436,11 +448,16 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
     (so later Toggl edits are still flagged) instead of adding it again.
     """
     pushed = state.get("pushed", {})
+    claimed = claimed_shift_ids(state)
     plan = []
     for entry in entries:
         if str(entry.get("project_id")) != str(project_id):
             continue
-        if str(entry.get("id")) in pushed:
+        record = pushed.get(str(entry.get("id")))
+        if record is not None:
+            rest = _remainder_item(entry, record, start, end)
+            if rest:
+                plan.append(rest)
             continue
         if not is_billable(entry):
             continue
@@ -453,7 +470,12 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
         if entry_stop - entry_start < ENTRY_TOLERANCE:
             continue
         note = (entry.get("description") or "").strip() or DEFAULT_NOTE
-        match = next((s for s in existing_shifts if _same_shift(s, entry_start, entry_stop, note)), None)
+        # A shift another entry already owns is not this entry's: two
+        # overlapping entries must not both claim one shift.
+        match = next((s for s in existing_shifts
+                      if str(s.get("id")) not in claimed and _same_shift(s, entry_start, entry_stop, note)), None)
+        if match:
+            claimed.add(str(match.get("id")))
         plan.append({
             "existing_shift_id": match.get("id") if match else None,
             "toggl_id": str(entry.get("id")),
@@ -465,6 +487,42 @@ def plan_pushes(entries, project_id, state, start, end, existing_shifts=()):
         })
     plan.sort(key=lambda item: item["start"])
     return plan
+
+
+def claimed_shift_ids(state):
+    """Gusto shift ids the ledger already gives to some Toggl entry."""
+    ids = set()
+    for record in (state.get("pushed") or {}).values():
+        for rec in (record, record.get("rest") or {}):
+            if rec.get("shift_id"):
+                ids.add(str(rec["shift_id"]))
+    return ids
+
+
+def _remainder_item(entry, record, start, end):
+    """The unpushed tail of an entry that was split at the cap, or None."""
+    if not record.get("partial") or record.get("rest") or not is_billable(entry):
+        return None
+    bounds = entry_bounds(entry)
+    if bounds is None:
+        return None
+    try:
+        rest_start = _parse(record["stop"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    rest_stop = bounds[1]
+    if rest_stop - rest_start < ENTRY_TOLERANCE or not (start <= bounds[0].date() <= end):
+        return None
+    return {
+        "existing_shift_id": None,
+        "toggl_id": str(entry.get("id")),
+        "rest_of": str(entry.get("id")),
+        "day": bounds[0].date().isoformat(),
+        "start": rest_start,
+        "stop": rest_stop,
+        "hours": (rest_stop - rest_start).total_seconds() / 3600,
+        "note": (entry.get("description") or "").strip() or DEFAULT_NOTE,
+    }
 
 
 # --- cap -------------------------------------------------------------------
@@ -492,12 +550,24 @@ def _record_hours(record):
 
 
 def pushed_hours_by_month(state):
-    """Hours the ledger has put in Gusto (pushed or adopted), per "YYYY-MM"."""
+    """Hours the ledger has put in Gusto (pushed or adopted), per "YYYY-MM".
+
+    Each Gusto shift counts once, even if an older ledger recorded two
+    overlapping Toggl entries against the same shift.
+    """
     totals = {}
+    seen = set()
     for record in (state.get("pushed") or {}).values():
-        month = (record.get("day") or "")[:7]
-        if month:
-            totals[month] = totals.get(month, 0.0) + _record_hours(record)
+        for rec in (record, record.get("rest") or {}):
+            month = (rec.get("day") or record.get("day") or "")[:7]
+            if not month or not rec.get("start"):
+                continue
+            shift = rec.get("shift_id")
+            if shift:
+                if str(shift) in seen:
+                    continue
+                seen.add(str(shift))
+            totals[month] = totals.get(month, 0.0) + _record_hours(rec)
     return totals
 
 
@@ -505,12 +575,14 @@ def apply_cap(plan, state, cap, allow_surplus=False):
     """Split a plan into (to_push, held) so no month goes over `cap` hours.
 
     Each month fills in date order: hours already in Gusto count first, then
-    planned entries oldest first. The first entry that would cross the cap
-    and everything after it that month are held, so the surplus is always the
-    month's tail, the part to move to next month. Shifts Gusto already has are
-    never held. With `allow_surplus` (the user's explicit "push surplus")
-    nothing is held; entries past the cap are pushed and marked `over_cap`.
-    Held entries carry `room`: the hours still free under the cap.
+    planned entries oldest first. The entry that crosses the cap is split at
+    the cap (to the whole minute): its first part is pushed as a shorter
+    shift marked `partial`, the rest is held with everything after it that
+    month, so the surplus is always the month's tail. Toggl is not changed.
+    Shifts Gusto already has are never held. With `allow_surplus` (the
+    user's explicit "push surplus") nothing is held; entries past the cap are
+    pushed whole and marked `over_cap`. Held entries carry `room`: the hours
+    still free under the cap.
     """
     if cap is None:
         return list(plan), []
@@ -527,6 +599,16 @@ def apply_cap(plan, state, cap, allow_surplus=False):
             used[month] = used.get(month, 0.0) + item["hours"]
             to_push.append(item)
             continue
+        if month not in full and not allow_surplus:
+            room_minutes = int((cap - used.get(month, 0.0)) * 60 + 1e-6)
+            if room_minutes >= 1:
+                cut = item["start"] + timedelta(minutes=room_minutes)
+                head = dict(item, stop=cut, hours=room_minutes / 60, partial=True,
+                            toggl_stop=item["stop"])
+                used[month] = used.get(month, 0.0) + head["hours"]
+                to_push.append(head)
+                item = dict(item, start=cut, hours=(item["stop"] - cut).total_seconds() / 3600,
+                            split_from=item["toggl_id"])
         full.add(month)
         if allow_surplus:
             to_push.append(dict(item, over_cap=True))
@@ -627,9 +709,12 @@ def find_drift(entries, project_id, state, start, end):
             continue
         try:
             # Compare instants, not strings: a Mac time zone change (travel)
-            # must not flag every pushed entry.
+            # must not flag every pushed entry. A split entry ends in Toggl
+            # where it did when it was split, not where its shift ends.
+            rest = record.get("rest") or {}
+            toggl_stop = rest.get("stop") or record.get("toggl_stop") or record["stop"]
             changed = (abs(bounds[0] - _parse(record["start"])) > ENTRY_TOLERANCE
-                       or abs(bounds[1] - _parse(record["stop"])) > ENTRY_TOLERANCE)
+                       or abs(bounds[1] - _parse(toggl_stop)) > ENTRY_TOLERANCE)
         except (KeyError, TypeError, ValueError):
             changed = True
         if changed:
@@ -763,9 +848,11 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
                         # unusable. Look before recording a refusal, or the
                         # next run would add the same hours again.
                         day = date.fromisoformat(item["day"])
+                        claimed = claimed_shift_ids(state)
                         landed = next(
                             (sh for sh in session.list_shifts(tracker_id, day, day)
-                             if _same_shift(sh, item["start"], item["stop"], item["note"])),
+                             if str(sh.get("id")) not in claimed
+                             and _same_shift(sh, item["start"], item["stop"], item["note"])),
                             None,
                         )
                         if landed is None:
@@ -773,13 +860,21 @@ def run_sync(prefs, state, now=None, dry_run=False, window=None,
                                              "message": f"{day.strftime('%a %b %-d')}: Gusto refused a shift ({exc})"})
                             continue
                         shift_id = landed.get("id")
-                    state["pushed"][item["toggl_id"]] = {
+                    record = {
                         "shift_id": shift_id,
                         "day": item["day"],
                         "start": item["start"].isoformat(timespec="seconds"),
                         "stop": item["stop"].isoformat(timespec="seconds"),
                         "pushed_at": now.isoformat(timespec="seconds"),
                     }
+                    if item.get("rest_of"):
+                        # The held tail of a split entry, pushed later (surplus).
+                        state["pushed"][item["rest_of"]]["rest"] = record
+                    else:
+                        if item.get("partial"):
+                            record["partial"] = True
+                            record["toggl_stop"] = item["toggl_stop"].isoformat(timespec="seconds")
+                        state["pushed"][item["toggl_id"]] = record
                     if adopted:
                         state["pushed"][item["toggl_id"]]["adopted"] = True
                         summary["adopted"] += 1
@@ -858,7 +953,10 @@ def run_locked(prefs, now=None, window=None, session_factory=None, state_path: P
 
 
 def held_text(row, cap=None):
-    """"Nov: 1.25h over the 30h cap held back (0.5h still fits)"."""
+    """"Nov: 1.25h over the 30h cap held back (0.5h still fits)", or once the
+    cap is filled "Nov: 30h cap filled, 0.5h over not pushed"."""
+    if cap and not held_needs_attention([row]):
+        return f"{_month_label(row['month'])}: {cap:g}h cap filled, {row['hours']:g}h over not pushed"
     cap_label = f"the {cap:g}h cap" if cap else "the cap"
     room = f" ({row['room']:g}h still fits)" if row.get("room") else ""
     return (f"{_month_label(row['month'])}: {row['hours']:g}h over {cap_label} "

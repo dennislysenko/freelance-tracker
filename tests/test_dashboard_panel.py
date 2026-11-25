@@ -499,7 +499,7 @@ def test_gusto_result_card():
 def test_gusto_surplus_option_card_button_and_pushed_line():
     controller = _make_controller()
     status = {"configured": True, "stale": True, "running": False, "project": "Acme",
-              "meta": "1.5h over the 30h cap held back", "held_hours": 1.5,
+              "meta": "1.5h over the 30h cap held back", "held_hours": 1.5, "held_alert": True,
               "held": ["Nov: 1.5h over the 30h cap held back (0.5h still fits)"],
               "pushed_line": "Gusto: 29.5h of 30h pushed for Nov · as of Mon Nov 23, 9:00 AM"}
     controller.set_gusto_status(status)
@@ -511,7 +511,7 @@ def test_gusto_surplus_option_card_button_and_pushed_line():
     assert 'class="carryover warn"' in line
     assert controller._gusto_pushed_html("Other") == ""
 
-    controller.set_gusto_status({**status, "held_hours": 0, "held": [], "stale": False})
+    controller.set_gusto_status({**status, "held_hours": 0, "held_alert": False, "held": [], "stale": False})
     assert 'onclick="gustoPushSurplus(event)"' not in _gusto_html(controller)
     assert 'class="carryover"' in controller._gusto_pushed_html("Acme")
 
@@ -614,3 +614,28 @@ def test_upwork_setup_walkthrough_and_project_sub_line():
     controller.set_upwork_status(_upwork_status(pending=0))
     assert 'class="carryover"' in controller._upwork_line_html("Acme")
     assert 'class="export-badge"' not in _gusto_html(controller)
+
+
+def test_cap_reached_label_names_the_time_and_the_overage():
+    from dashboard_panel import _cap_reached_label
+
+    assert _cap_reached_label({"cap_reached": {"at": "2026-11-25T14:00-05:00", "over_hours": 0.25},
+                               "cap_fill_date": "2026-11-24"}) == "cap reached Wed Nov 25, 2:00 PM \u00b7 0.25h over"
+    assert _cap_reached_label({"cap_reached": {"at": "2026-11-25T14:00-05:00", "over_hours": 0}}) == \
+        "cap reached Wed Nov 25, 2:00 PM"
+    assert _cap_reached_label({"cap_fill_date": "2026-11-24"}) == "capped as of Nov 24"
+    assert _cap_reached_label({}) == ""
+
+
+def test_filled_cap_surplus_is_shown_quietly():
+    controller = _make_controller()
+    controller.set_gusto_status({
+        "configured": True, "stale": False, "running": False, "project": "Acme",
+        "meta": "30h cap filled \u00b7 up to date", "held_hours": 0.5, "held_alert": False,
+        "held": ["Nov: 30h cap filled, 0.5h over not pushed"],
+        "pushed_line": "Gusto: 30h of 30h pushed for Nov · as of Wed Nov 25, 3:16 PM"})
+    html = _gusto_html(controller)
+    assert "30h cap filled · up to date" in html
+    assert '<span class="export-option-meta">0.5h over cap</span>' in html
+    assert 'title="Gusto hours not pushed"' not in html
+    assert 'class="carryover warn"' not in controller._gusto_pushed_html("Acme")

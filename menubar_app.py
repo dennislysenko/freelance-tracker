@@ -488,7 +488,7 @@ class FreelanceTrackerApp(rumps.App):
                     else "Month so far submitted (cutoff is tomorrow)",
                     text,
                 )
-            elif not manual and summary.get("held"):
+            elif not manual and gusto_sync.held_needs_attention(summary.get("held")):
                 rumps.notification(
                     "Gusto", f"{prefs.get('gusto_project') or ''}: over the monthly cap",
                     f"{text}. Move the extra hours to next month in Toggl, "

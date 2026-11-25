@@ -239,8 +239,11 @@ Only billable entries are pushed; an entry marked non-billable after it was
 pushed is flagged for you to fix in Gusto.
 
 If the project has a monthly hour cap (say 30h), the app never pushes past it.
-Hours over the cap are held back, and you get an alert saying how much and how
-much still fits. Move the extra to next month in Toggl, or send it anyway with
+A Push to Gusto click includes today's finished entries, and the entry that
+crosses the cap is split: the part up to the cap goes to Gusto, the rest is
+held back (Toggl isn't changed), and you get an alert saying how much. The
+project's monthly row shows when the cap was reached ("cap reached Wed Nov 25,
+2:00 PM · 0.25h over"). Move the extra to next month in Toggl, or send it anyway with
 **Export/Invoice → Push surplus to Gusto**. Under the project's bar the
 dashboard always shows how many hours are in Gusto for the month, as of the
 last push ("Gusto: 14.5h of 30h pushed for Nov · as of Mon Nov 16, 9:00 AM").

@@ -44,6 +44,7 @@ _EARN_PROJECT_KEYS = (
     "rate",
     "rate_source",
     "cap_fill_date",
+    "cap_reached",
 )
 
 # Scalar keys whose values are denominated in dollars (rate $/hr counts — it

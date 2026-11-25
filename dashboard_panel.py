@@ -845,7 +845,7 @@ class DashboardPanelController:
                         if carryover_balance != 0.0:
                             height += 14
 
-                    if billing_type == 'hourly_with_cap' and project.get('cap_fill_date'):
+                    if billing_type == 'hourly_with_cap' and _cap_reached_label(project):
                         height += 14
                     if self._gusto_pushed_html(name):
                         height += 28 if (self._gusto_status or {}).get("held_hours") else 14
@@ -1019,12 +1019,10 @@ class DashboardPanelController:
                     carryover_html = f'<div class="carryover">↳ {sign}{carryover_balance:.1f}h carryover from {_esc(prev_month_label)}</div>'
 
                 cap_html = ""
-                cap_fill_date = p.get('cap_fill_date')
-                if billing_type == 'hourly_with_cap' and cap_fill_date:
-                    from datetime import datetime
-                    fill_dt = datetime.strptime(cap_fill_date, '%Y-%m-%d')
-                    fill_label = fill_dt.strftime('%b %-d')
-                    cap_html = f'<div class="carryover">↳ capped as of {fill_label}</div>'
+                if billing_type == 'hourly_with_cap':
+                    cap_label = _cap_reached_label(p)
+                    if cap_label:
+                        cap_html = f'<div class="carryover">↳ {_esc(cap_label)}</div>'
 
                 # Calendar progress marker already computed above
 
@@ -1259,7 +1257,8 @@ class DashboardPanelController:
                 gusto_option_html += (
                     f'<button class="export-option invoice-option" onclick="gustoPushSurplus(event)"{disabled}>'
                     f'<span>Push surplus to Gusto</span>'
-                    f'<span class="export-option-meta warn">{gusto_status["held_hours"]:g}h over cap</span></button>'
+                    f'<span class="export-option-meta{" warn" if gusto_status.get("held_alert") else ""}">'
+                    f'{gusto_status["held_hours"]:g}h over cap</span></button>'
                 )
 
         upwork_status = self._upwork_status or {}
@@ -3324,7 +3323,7 @@ html, body {{
         status = self._gusto_status or {}
         if not status.get("configured") or status.get("project") != project_name:
             return ""
-        cls = "carryover warn" if status.get("held_hours") else "carryover"
+        cls = "carryover warn" if status.get("held_alert") else "carryover"
         held = "".join(f" \u00b7 {_esc(text)}" for text in status.get("held") or [])
         return f'<div class="{cls}">↳ {_esc(status.get("pushed_line") or "")}{held}</div>'
 
@@ -3491,6 +3490,29 @@ def _non_billable_note(p):
         f'<div class="carryover">↳ +{non_billable:.1f}h non-billable, not counted '
         f'({_total_hours(p):.1f}h total)</div>'
     )
+
+
+def _cap_reached_label(project):
+    """"cap reached Wed Nov 25, 2:00 PM · 0.25h over", or the older
+    whole-day "capped as of Nov 24" when only the fill date is known."""
+    from datetime import datetime
+
+    reached = project.get('cap_reached') or {}
+    if reached.get('at'):
+        try:
+            at = datetime.fromisoformat(reached['at'])
+            text = f"cap reached {at.strftime('%a %b %-d, %-I:%M %p')}"
+            over = reached.get('over_hours') or 0
+            return text + (f" \u00b7 {over:g}h over" if over > 0 else "")
+        except ValueError:
+            pass
+    fill = project.get('cap_fill_date')
+    if fill:
+        try:
+            return f"capped as of {datetime.strptime(fill, '%Y-%m-%d').strftime('%b %-d')}"
+        except ValueError:
+            pass
+    return ""
 
 
 def _minutes_label(minutes):

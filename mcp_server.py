@@ -337,6 +337,7 @@ def build_month_status() -> Dict[str, Any]:
         row["billing_type"] = billing_type or ("hourly" if p.get("billable") else None)
         row["hour_tracking"] = hour_tracking
         row["cap_fill_date"] = p.get("cap_fill_date")
+        row["cap_reached"] = p.get("cap_reached")
         row["target_hours"] = target
 
         if not (p.get("billable") or target or name in projects_config):

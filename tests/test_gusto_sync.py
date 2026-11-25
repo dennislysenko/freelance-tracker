@@ -36,6 +36,8 @@ def _entry(entry_id, start, minutes, desc="work", project_id=PROJECT_ID):
 
 
 class FakeSession:
+    _next_id = 9000
+
     def __init__(self, existing=(), reject_days=(), login_required=False):
         self.existing = list(existing)
         self.reject_days = set(reject_days)
@@ -56,7 +58,9 @@ class FakeSession:
     def add_shift(self, tracker_id, clock_in, clock_out, note, timezone):
         if clock_in.date().isoformat() in self.reject_days:
             raise gusto_client.GustoError("day is locked")
-        shift_id = str(9000 + len(self.added))
+        # Unique across sessions, like Gusto's own ids.
+        FakeSession._next_id += 1
+        shift_id = str(FakeSession._next_id)
         self.added.append({"id": shift_id, "clock_in": clock_in, "clock_out": clock_out,
                            "note": note, "timezone": timezone})
         return shift_id
@@ -114,9 +118,10 @@ def test_first_run_does_not_backfill_beyond_target_week():
     assert start == date(2026, 10, 1)
 
 
-def test_manual_window_ends_yesterday():
+def test_manual_window_runs_through_today():
+    # Today's finished entries go too, so a click can fill the month's cap.
     start, end = g.manual_window(datetime(2026, 10, 8, 15, 0), {"first_day": "2026-10-05"})
-    assert (start, end) == (date(2026, 10, 5), date(2026, 10, 7))
+    assert (start, end) == (date(2026, 10, 5), date(2026, 10, 8))
 
 
 # --- month-end deadline and payday -------------------------------------------
@@ -157,7 +162,7 @@ def test_deadline_and_manual_windows_include_the_cutoff_day():
     state = {"first_day": "2026-10-05"}
     assert g.deadline_window(datetime(2026, 10, 30, 13), state) == (date(2026, 10, 5), date(2026, 10, 30))
     assert g.manual_window(datetime(2026, 10, 30, 11), state)[1] == date(2026, 10, 30)
-    assert g.manual_window(datetime(2026, 10, 29, 11), state)[1] == date(2026, 10, 28)
+    assert g.manual_window(datetime(2026, 10, 29, 11), state)[1] == date(2026, 10, 29)
 
 
 def test_run_on_cutoff_day_marks_month_pushed_and_clears_stale():
@@ -510,9 +515,9 @@ CAPPED_PREFS = {**PREFS, "projects": {"Acme": {"billing_type": "hourly_with_cap"
                                                 "hourly_rate": 100, "cap_hours": 4}}}
 
 
-def _ledger(day, start_hour, hours):
+def _ledger(day, start_hour, hours, shift_id=None):
     start = _local(*day, start_hour)
-    return {"shift_id": "1", "day": start.date().isoformat(),
+    return {"shift_id": shift_id or f"s{day[1]}-{day[2]}-{start_hour}", "day": start.date().isoformat(),
             "start": start.isoformat(timespec="seconds"),
             "stop": (start + timedelta(hours=hours)).isoformat(timespec="seconds"),
             "pushed_at": "2026-10-05T09:00:00"}
@@ -536,22 +541,84 @@ def test_cap_comes_from_the_gusto_projects_capped_definition():
     assert g.cap_hours(fixed) is None
 
 
-def test_hours_past_the_cap_are_held_from_the_first_overflow_on():
-    # 2.5h already in Gusto for October; cap 4h. The 1h on Oct 6 fits (3.5h),
-    # the 1h on Oct 7 would cross it, and the 0.5h on Oct 8 is held too even
-    # though it would fit: the surplus is always the month's tail.
+def test_the_entry_crossing_the_cap_is_split_and_the_tail_held():
+    # 2.5h already in Gusto for October; cap 4h. The 1h on Oct 6 fits (3.5h).
+    # The 1h on Oct 7 crosses it: its first 30 min fill the cap exactly, the
+    # other 30 min are held, and the 0.5h on Oct 8 is held too even though
+    # it would fit: the surplus is always the month's tail.
     state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 2.5)}}
     entries = [_entry(1, _local(2026, 10, 6, 9), 60, "a"),
                _entry(2, _local(2026, 10, 7, 9), 60, "b"),
                _entry(3, _local(2026, 10, 8, 9), 30, "c")]
     session, (state, summary) = _run_capped(entries, state)
 
-    assert [a["note"] for a in session.added] == ["a"]
-    assert summary["held"] == [{"month": "2026-10", "hours": 1.5, "entries": 2, "room": 0.5}]
+    assert [a["note"] for a in session.added] == ["a", "b"]
+    split = session.added[1]
+    assert (split["clock_in"], split["clock_out"]) == (_local(2026, 10, 7, 9), _local(2026, 10, 7, 9, 30))
+    assert summary["held"] == [{"month": "2026-10", "hours": 1.0, "entries": 2, "room": 0.0}]
     assert state["held"] == summary["held"]
-    assert set(state["pushed"]) == {"900", "1"}
-    text = g.describe_result(summary)
-    assert "Oct: 1.5h over the 4h cap held back (0.5h still fits)" in text
+    assert set(state["pushed"]) == {"900", "1", "2"}
+    assert state["pushed"]["2"]["partial"] and state["pushed"]["2"]["toggl_stop"].startswith("2026-10-07T10:00")
+    assert g.pushed_hours_by_month(state)["2026-10"] == 4.0
+    assert "Oct: 4h cap filled, 1h over not pushed" in g.describe_result(summary)
+
+    # The split entry is not "changed in Toggl", and the next run offers only
+    # its held tail (still held: the month is full).
+    assert g.find_drift(entries, PROJECT_ID, state, date(2026, 10, 2), date(2026, 10, 31)) == []
+    session, (state, summary) = _run_capped(entries, state)
+    assert session.added == []
+    assert summary["held"] == [{"month": "2026-10", "hours": 1.0, "entries": 2, "room": 0.0}]
+
+    # Pushing the surplus later sends the tail as its own shift.
+    session, (state, summary) = _run_capped(entries, state, allow_surplus=True)
+    assert [(a["note"], a["clock_in"]) for a in session.added] == [
+        ("b", _local(2026, 10, 7, 9, 30)), ("c", _local(2026, 10, 8, 9))]
+    assert state["pushed"]["2"]["rest"]["stop"].startswith("2026-10-07T10:00")
+    assert g.find_drift(entries, PROJECT_ID, state, date(2026, 10, 2), date(2026, 10, 31)) == []
+    assert g.pushed_hours_by_month(state)["2026-10"] == 5.0
+
+
+def test_split_entry_edited_in_toggl_is_flagged():
+    state = {"pushed": {"900": _ledger((2026, 10, 1), 9, 3.5)}}
+    entries = [_entry(2, _local(2026, 10, 7, 9), 60, "b")]
+    _, (state, _) = _run_capped(entries, state)
+    assert state["pushed"]["2"]["partial"]
+    longer = [_entry(2, _local(2026, 10, 7, 9), 75, "b")]
+    issues = g.find_drift(longer, PROJECT_ID, state, date(2026, 10, 2), date(2026, 10, 31))
+    assert [i["kind"] for i in issues] == ["changed"]
+
+
+class OverlapSession(FakeSession):
+    """Gusto refuses a shift that overlaps one it already has."""
+
+    def list_shifts(self, tracker_id, start, end):
+        return list(self.existing) + [
+            {"id": a["id"], "clock_in": a["clock_in"].isoformat(), "clock_out": a["clock_out"].isoformat()}
+            for a in self.added]
+
+    def add_shift(self, tracker_id, clock_in, clock_out, note, timezone):
+        for a in self.added:
+            if clock_in < a["clock_out"] and a["clock_in"] < clock_out:
+                raise gusto_client.GustoError("overlaps another shift")
+        return super().add_shift(tracker_id, clock_in, clock_out, note, timezone)
+
+
+def test_two_overlapping_entries_never_share_one_gusto_shift():
+    start = _local(2026, 10, 7, 14)
+    entries = [_entry(1, start, 30, "design review"), _entry(2, start, 30, "code review")]
+    session, (state, summary) = _run(entries, session=OverlapSession(),
+                                     window=(date(2026, 10, 5), date(2026, 10, 11)))
+    assert [a["note"] for a in session.added] == ["design review"]
+    assert set(state["pushed"]) == {"1"}
+    assert [i["kind"] for i in summary["issues"]] == ["rejected"]
+
+
+def test_hours_count_each_gusto_shift_once():
+    # An older ledger recorded two overlapping entries against one shift.
+    state = {"pushed": {"1": _ledger((2026, 11, 12), 14, 0.5, shift_id="488"),
+                        "2": _ledger((2026, 11, 12), 14, 0.5, shift_id="488"),
+                        "3": _ledger((2026, 11, 13), 9, 1)}}
+    assert g.pushed_hours_by_month(state) == {"2026-11": 1.5}
 
 
 def test_push_surplus_sends_the_held_hours_and_says_so():
@@ -587,7 +654,7 @@ def test_dry_run_reports_held_hours_without_saving_them():
                                                 dry_run=True)
     assert session.added == [] and summary["held"][0]["hours"] == 1.0
     assert "held" not in new_state
-    assert "Oct: 1h over the 4h cap held back" in g.describe_result(summary)
+    assert "Oct: 4h cap filled, 1h over not pushed" in g.describe_result(summary)
 
 
 def test_status_alerts_on_held_hours_and_always_shows_hours_in_gusto():
@@ -602,3 +669,37 @@ def test_status_alerts_on_held_hours_and_always_shows_hours_in_gusto():
 
     fresh = g.status_view(PREFS, {"pushed": {}}, now=datetime(2026, 10, 12, 10))
     assert fresh["pushed_line"] == "Gusto: 0h pushed for Oct · not pushed yet"
+
+
+# --- cap reached label (toggl_data) --------------------------------------------
+
+
+def test_cap_reached_lands_inside_the_entry_that_crosses_it():
+    import toggl_data
+
+    spans = [(_local(2026, 11, 24, 15, 30), 27.5),   # everything before today
+             (_local(2026, 11, 25, 10, 30), 1.5),
+             (_local(2026, 11, 25, 13, 0), 1.25)]
+    reached = toggl_data._calculate_cap_reached(spans, 30)
+    assert reached == {"at": _local(2026, 11, 25, 14, 0).isoformat(timespec="minutes"),
+                       "over_hours": 0.25}
+    assert toggl_data._calculate_cap_reached(spans[:2], 30) is None
+    exact = toggl_data._calculate_cap_reached(spans[:2] + [(_local(2026, 11, 25, 13, 0), 1.0)], 30)
+    assert exact["over_hours"] == 0
+
+
+def test_a_filled_cap_with_only_surplus_left_is_up_to_date():
+    # Everything up to the cap is in Gusto; only the surplus is held. That is
+    # covered: no orange, no dot, no nagging.
+    state = {"synced_through": "2026-10-11", "last_success": "2026-10-12T09:00:05",
+             "pushed": {"900": _ledger((2026, 10, 1), 9, 4)},
+             "held": [{"month": "2026-10", "hours": 0.5, "entries": 1, "room": 0.0}]}
+    now = datetime(2026, 10, 12, 10)
+    assert not g.is_stale(now, state)
+    view = g.status_view(CAPPED_PREFS, state, now=now)
+    assert not view["stale"] and not view["held_alert"]
+    assert view["meta"] == "4h cap filled \u00b7 up to date"
+    assert view["held"] == ["Oct: 4h cap filled, 0.5h over not pushed"]
+    assert g.held_needs_attention(state["held"]) == []
+    # Room left under the cap still alerts.
+    assert g.held_needs_attention([{"month": "2026-10", "hours": 1, "room": 0.5}])

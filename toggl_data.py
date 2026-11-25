@@ -845,6 +845,39 @@ def _calculate_cap_fill_date(hours_by_day, cap_hours):
     return None
 
 
+def _calculate_cap_reached(spans, cap_hours):
+    """When the cap was reached, to the minute, from (start datetime, hours) spans.
+
+    Returns {"at": ISO local datetime, "over_hours": hours past the cap} once
+    the billable hours reach `cap_hours`, else None. Unlike the cap fill date
+    (whole days, used for export ranges) this lands inside the entry that
+    crosses the cap, so a cap crossed this afternoon says this afternoon.
+    """
+    if not spans or cap_hours <= 0:
+        return None
+    total = sum(hours for _, hours in spans)
+    if total + 1e-9 < cap_hours:
+        return None
+    used = 0.0
+    for start, hours in sorted(spans, key=lambda span: span[0]):
+        if used + hours + 1e-9 >= cap_hours:
+            at = start + timedelta(hours=cap_hours - used)
+            return {"at": at.astimezone().isoformat(timespec="minutes"),
+                    "over_hours": round(total - cap_hours, 2)}
+        used += hours
+    return None
+
+
+def _entry_spans(entries):
+    """(local start, hours) for finished entries."""
+    spans = []
+    for e in entries:
+        if e.get('duration', 0) > 0 and e.get('start'):
+            start = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).astimezone()
+            spans.append((start, e['duration'] / 3600))
+    return spans
+
+
 def compute_lbd_cap_fill_date(project_name, last_billed_date, cap_hours, projects_map):
     """Compute the cap fill date for an hourly_with_cap project in last_billed_date mode.
 
@@ -859,14 +892,21 @@ def compute_lbd_cap_fill_date(project_name, last_billed_date, cap_hours, project
     return _calculate_cap_fill_date(hours_by_day, cap_hours)
 
 
-def _lbd_hours_by_day(project_name, last_billed_date, projects_map):
+def _lbd_entries(project_name, last_billed_date, projects_map):
+    """Finished billable entries on a project since its last billed date."""
+    return [e for e in get_entries_since_date(last_billed_date + timedelta(days=1))
+            if (projects_map.get(str(e.get('project_id')), {}).get('name') == project_name
+                and e.get('duration', 0) > 0 and is_billable_entry(e))]
+
+
+def _lbd_hours_by_day(project_name, last_billed_date, projects_map, entries=None):
     """Billable hours per day logged on a project since its last billed date."""
     hours_by_day = defaultdict(float)
-    for e in get_entries_since_date(last_billed_date + timedelta(days=1)):
-        if (projects_map.get(str(e.get('project_id')), {}).get('name') == project_name
-                and e.get('duration', 0) > 0 and is_billable_entry(e)):
-            entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
-            hours_by_day[entry_date] += e['duration'] / 3600
+    if entries is None:
+        entries = _lbd_entries(project_name, last_billed_date, projects_map)
+    for e in entries:
+        entry_date = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
+        hours_by_day[entry_date] += e['duration'] / 3600
     return hours_by_day
 
 
@@ -966,7 +1006,8 @@ def calculate_period_earnings(period):
                     last_billed = datetime.strptime(defn['last_billed_date'], '%Y-%m-%d').date()
                 except ValueError:
                     continue
-                hours_by_day = _lbd_hours_by_day(proj_name, last_billed, projects_map)
+                lbd_entries = _lbd_entries(proj_name, last_billed, projects_map)
+                hours_by_day = _lbd_hours_by_day(proj_name, last_billed, projects_map, lbd_entries)
                 unbilled_h = sum(hours_by_day.values())
                 worked_days_count = len(hours_by_day)
                 cap_hours = defn.get('cap_hours', 0)
@@ -976,6 +1017,7 @@ def calculate_period_earnings(period):
                     'earnings': min(unbilled_h, cap_hours) * hourly_rate,
                     'rate': hourly_rate,
                     'cap_fill_date': _calculate_cap_fill_date(hours_by_day, cap_hours),
+                    'cap_reached': _calculate_cap_reached(_entry_spans(lbd_entries), cap_hours),
                 }
 
     # Group entries by project. "duration"/"entries" hold billable time only,
@@ -1096,6 +1138,7 @@ def calculate_period_earnings(period):
                     project_entry["total_hours"] = hours + project_entry["non_billable_hours"]
                     earnings = lbd_results[project_name]['earnings']
                     project_entry["cap_fill_date"] = lbd_results[project_name].get('cap_fill_date')
+                    project_entry["cap_reached"] = lbd_results[project_name].get('cap_reached')
                 else:
                     prev_carryover = get_balance(project_name, prev_month_str)
                     # Positive carryover = over-delivered last month → reduces this month's cap
@@ -1108,6 +1151,8 @@ def calculate_period_earnings(period):
                             ed = datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date()
                             cal_hours_by_day[ed] += e['duration'] / 3600
                     project_entry["cap_fill_date"] = _calculate_cap_fill_date(cal_hours_by_day, effective_cap)
+                    project_entry["cap_reached"] = _calculate_cap_reached(
+                        _entry_spans(data['entries']), effective_cap)
 
             else:
                 earnings = hours * effective_rate
@@ -1130,6 +1175,7 @@ def calculate_period_earnings(period):
                     'total_hours': lbd['hours'],
                     'earnings': lbd['earnings'],
                     'cap_fill_date': lbd.get('cap_fill_date'),
+                    'cap_reached': lbd.get('cap_reached'),
                     'billable': True,
                     'rate': lbd['rate'],
                     'rate_source': 'hourly_with_cap',
