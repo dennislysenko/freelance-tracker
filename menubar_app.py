@@ -596,13 +596,21 @@ class FreelanceTrackerApp(rumps.App):
 
             def ping(self):
                 state = upwork_push.load_state()
-                first = not state.get('extension_seen')
+                first = upwork_push.pairing_state(state) != 'paired'
                 last = state.get('extension_seen') or ''
                 now = datetime.now().astimezone()
                 if first or last[:16] != now.isoformat(timespec='minutes')[:16]:
                     state['extension_seen'] = now.isoformat(timespec='seconds')
                     upwork_push.save_state(state)
                 if first:
+                    on_main_thread(lambda: app._refresh_upwork_status())
+
+            def hello(self):
+                state = upwork_push.load_state()
+                was = upwork_push.pairing_state(state)
+                state['extension_unpaired_seen'] = datetime.now().astimezone().isoformat(timespec='seconds')
+                upwork_push.save_state(state)
+                if was != 'unpaired':
                     on_main_thread(lambda: app._refresh_upwork_status())
 
             def queue(self, contract):

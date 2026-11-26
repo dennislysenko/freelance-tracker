@@ -9,6 +9,10 @@ no CORS headers, so they cannot read the answers, and the token stops them from
 writing.
 
     GET  /ping                         -> {"ok": true, "app": ..., "version": 1}
+    GET  /hello  (no pairing code; needs X-FT-Hello: 1)  -> {"ok": true}
+         An unpaired extension says it exists, so the app can ask for the
+         code instead of claiming a stale connection. The custom header makes
+         a web page's request need a CORS preflight, which pages never pass.
     GET  /upwork/queue?contract=<id>   -> upwork_push.queue_payload(...)
     POST /upwork/added {"contract", "key"} -> {"ok": true} | 404
 
@@ -45,6 +49,9 @@ class BridgeHandlers:
 
     def ping(self):
         pass
+
+    def hello(self):
+        """An extension without a (valid) pairing code says it is there."""
 
     def queue(self, contract):  # pragma: no cover - interface
         raise NotImplementedError
@@ -87,7 +94,7 @@ def _make_handler(handlers):
             self.send_response(204)
             self._cors()
             self.send_header("Access-Control-Allow-Methods", "GET, POST")
-            self.send_header("Access-Control-Allow-Headers", "X-FT-Token, Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "X-FT-Token, X-FT-Hello, Content-Type")
             self.send_header("Access-Control-Max-Age", "600")
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -101,6 +108,13 @@ def _make_handler(handlers):
             return False
 
         def do_GET(self):  # noqa: N802 - http.server API
+            if urlparse(self.path).path == "/hello":
+                if self.headers.get("X-FT-Hello") != "1":
+                    self._send(400, {"ok": False, "error": "Missing X-FT-Hello"})
+                    return
+                handlers.hello()
+                self._send(200, {"ok": True})
+                return
             if not self._authorized():
                 return
             url = urlparse(self.path)

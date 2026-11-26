@@ -191,7 +191,9 @@ def main(argv=None):
     out = DIST / f"upwork_fill-{version}.xpi"
     out.write_bytes(amo.call("GET", signed["file"]["url"], raw=True))
     print(f"Signed: {out}")
-    print("Install it from about:addons → gear → Install Add-on From File (remove the temporary one first).")
+    print("Install it from about:addons → gear → Install Add-on From File. Over an installed signed copy")
+    print("it updates in place and keeps the pairing; replace a temporary (about:debugging) copy instead,")
+    print("and then paste the pairing code again.")
     return 0
 
 

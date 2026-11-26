@@ -181,6 +181,8 @@ def generate_settings_css():
         white-space: nowrap;
     }
     .settings-btn:hover { background: rgba(255,255,255,0.1); }
+    .upwork-code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; letter-spacing: 0.5px;
+                   padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.08); }
     .settings-btn.primary {
         background: rgba(88,166,255,0.14);
         color: #58a6ff;
@@ -1218,7 +1220,6 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
 
     upwork_linked = upwork_push.linked_contracts(prefs)
     upwork_state = upwork_push.load_state()
-    upwork_seen = upwork_state.get("extension_seen") or ""
     upwork_reminders = bool(prefs.get("upwork_reminders_enabled", True))
     upwork_browser = prefs.get("upwork_browser") or "Google Chrome"
     upwork_projects_line = (
@@ -1226,10 +1227,20 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
         if upwork_linked else
         '<span class="warn">No project linked yet: add its Upwork contract id under Project Mapping</span>'
     )
-    upwork_ext_line = (
-        f"Browser extension connected (last seen {_esc(upwork_seen[:16].replace('T', ' '))})"
-        if upwork_seen else
-        '<span class="warn">Browser extension not set up: Export/Invoice &rarr; Push to Upwork walks you through it</span>'
+    upwork_pairing = upwork_push.pairing_state(upwork_state)
+    upwork_ext_text = _esc(upwork_push.extension_status_text(upwork_state))
+    upwork_ext_line = (upwork_ext_text if upwork_pairing == "paired" else
+                       f'<span class="warn">{upwork_ext_text}</span>')
+    upwork_token = upwork_state.get("bridge_token") or ""
+    upwork_code_row = (
+        f'''<div class="gusto-row">
+        <span>Pairing code</span>
+        <code class="upwork-code">{_esc(upwork_token)}</code>
+        <button type="button" class="settings-btn" data-copy-text="{_esc(upwork_token)}"
+                onclick="copyDescription(this)">Copy</button>
+    </div>
+    <div class="settings-help">Paste it into the extension: its toolbar icon, or the panel on the
+        Upwork work diary when it isn&rsquo;t paired.</div>''' if upwork_token else ""
     )
     upwork_detail = f"""
     <div class="settings-help">
@@ -1242,6 +1253,7 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
     </div>
     <div class="gusto-status">{upwork_projects_line}</div>
     <div class="gusto-status">{upwork_ext_line}</div>
+    {upwork_code_row}
     <label class="br-toggle mcp-toggle">
         <input type="checkbox" id="set_upwork_reminders_enabled"{' checked' if upwork_reminders else ''}>
         <span>Remind me before the weekly lock</span>
@@ -1265,7 +1277,7 @@ def _render_panel_integrations(prefs, integrations, active_integration=None):
             ("mapping", "Project Mapping", "&#128279;", bool(all_names), mapping_detail),
             ("gusto", "Gusto", "&#128181;", gusto_status["configured"] and bool(gusto_status["company"]),
              gusto_detail),
-            ("upwork", "Upwork", "&#9200;", bool(upwork_linked and upwork_seen), upwork_detail),
+            ("upwork", "Upwork", "&#9200;", bool(upwork_linked and upwork_pairing == "paired"), upwork_detail),
         ]),
         ("Planning", "Feeds the month projection.", [
             ("calendar", "Google Calendar", "&#128197;", bool(calendar_url), calendar_detail),

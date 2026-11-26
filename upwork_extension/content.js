@@ -375,6 +375,10 @@
       .row.next { background: rgba(63,185,80,0.07); box-shadow: inset 3px 0 0 #3fb950; }
       .row.next .time { color: #f0f6fc; }
       .row.later .time, .row.later .time .mins { color: #6e7681; font-weight: 400; }
+      .pair { display: flex; gap: 8px; padding: 4px 6px 2px; }
+      .pair .code { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;
+                    background: rgba(255,255,255,0.04); color: #f0f6fc; font: 14px ui-monospace, Menlo, monospace; }
+      .pair .code:focus { outline: none; border-color: rgba(63,185,80,0.6); }
       .days { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding: 0 2px; }
       .msg { font-size: 14px; margin-top: 8px; padding: 0 6px; }
       .msg.ok { color: #3fb950; }
@@ -408,14 +412,45 @@
     return el("div", { class: "hint", text });
   }
 
+  // Pair right here, without the toolbar popup.
+  function pairForm(text) {
+    const input = el("input", { class: "code", type: "text", placeholder: "Pairing code",
+                                autocomplete: "off", spellcheck: "false" });
+    // The panel re-renders (focus, reloads); keep what was typed.
+    input.value = state.pairDraft || "";
+    input.addEventListener("input", () => { state.pairDraft = input.value; });
+    const connect = el("button", { class: "primary", text: "Connect" });
+    const submit = async () => {
+      const code = input.value.trim();
+      if (!code) return setMessage("Paste the pairing code first.", "err");
+      connect.disabled = true;
+      const res = await send({ type: "pair", code });
+      connect.disabled = false;
+      if (res.ok) {
+        state.pairDraft = "";
+        setMessage("Paired ✓", "ok");
+        loadQueue();
+      } else {
+        setMessage(res.error || "Couldn't pair", "err");
+      }
+    };
+    connect.addEventListener("click", submit);
+    // Keep Upwork's own keyboard shortcuts from seeing the typing.
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") submit();
+    });
+    return [hint(text), el("div", { class: "pair" }, [input, connect])];
+  }
+
   function renderBody() {
     const q = state.queue;
     if (!state.contract) return [hint("Open a contract's work diary to see entries to add.")];
     if (!q) return [hint(state.loading ? "Loading…" : "")];
     if (!q.ok) {
-      if (q.reason === "unpaired") return [hint("Not paired yet: click the Freelance Tracker extension icon and paste the pairing code from the dashboard.")];
+      if (q.reason === "unpaired") return pairForm("Not paired yet. Paste the pairing code from Freelance Tracker (Settings → Integrations → Upwork, or Export/Invoice → Push to Upwork).");
       if (q.reason === "offline") return [hint("Freelance Tracker isn't running on this Mac.")];
-      if (q.reason === "unauthorized") return [hint("Wrong pairing code: click the extension icon and paste the code again.")];
+      if (q.reason === "unauthorized") return pairForm("That pairing code doesn't match. Paste the current one from Freelance Tracker (Settings → Integrations → Upwork).");
       return [hint(`Couldn't load entries: ${q.error || "unknown error"}`)];
     }
     if (!q.project) return [hint("This contract isn't linked to a project in Freelance Tracker.")];

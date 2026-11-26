@@ -2084,6 +2084,7 @@ html, body {{
     color: #f0883e;
 }}
 .upwork-setup-state.ok {{ color: #3fb950; }}
+.upwork-setup-state.warn {{ color: #f0883e; }}
 .export-option.muted-link {{
     font-size: 11px;
     color: #8e8e93;
@@ -3270,16 +3271,12 @@ html, body {{
         status = self._upwork_status or {}
         token = status.get("token") or ""
         folder = status.get("extension_folder") or ""
-        connected = bool(status.get("connected"))
-        if connected:
-            from datetime import datetime
-
-            seen = status.get("extension_seen") or ""
-            try:
-                seen = datetime.fromisoformat(seen).strftime("%a %b %-d, %-I:%M %p")
-            except ValueError:
-                pass
-            state_html = f'<div class="upwork-setup-state ok">&#10003; Extension connected (last seen {_esc(seen)})</div>'
+        pairing = status.get("pairing") or ("paired" if status.get("connected") else "none")
+        ext_text = _esc(status.get("extension_text") or "")
+        if pairing == "paired":
+            state_html = f'<div class="upwork-setup-state ok">&#10003; {ext_text}</div>'
+        elif pairing == "unpaired":
+            state_html = f'<div class="upwork-setup-state warn">{ext_text}</div>'
         else:
             state_html = '<div class="upwork-setup-state">Waiting for the extension&hellip;</div>'
         browser = _esc(status.get("browser") or "Google Chrome")

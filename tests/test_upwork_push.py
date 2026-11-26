@@ -306,3 +306,48 @@ def test_bridge_answers_cors_only_for_extension_origins(bridge):
     # A wrong code is still refused, but the extension can read why.
     status, headers = _raw(base + "/ping", headers={"Origin": ext, "X-FT-Token": "nope"})
     assert status == 401 and headers["Access-Control-Allow-Origin"] == ext
+
+
+def test_pairing_state_notices_a_reinstalled_extension():
+    assert up.pairing_state({}) == "none"
+    paired = {"extension_seen": "2026-03-05T15:24:33-05:00"}
+    assert up.pairing_state(paired) == "paired"
+    assert up.extension_status_text(paired).startswith("Extension paired \u00b7 last seen Thu Mar 5")
+    # A later hello without the code: the pairing was lost.
+    lost = {**paired, "extension_unpaired_seen": "2026-03-06T10:00:00-05:00"}
+    assert up.pairing_state(lost) == "unpaired"
+    status = up.status_view(PREFS, {"added": {}, **lost}, {}, NOW)
+    assert not status["connected"] and status["meta"] == "Pair the extension"
+    assert "not paired" in status["extension_text"]
+    # Pairing again wins.
+    again = {**lost, "extension_seen": "2026-03-06T10:05:00-05:00"}
+    assert up.pairing_state(again) == "paired"
+
+
+class _HelloHandlers(_Handlers):
+    def __init__(self):
+        super().__init__()
+        self.hellos = 0
+
+    def hello(self):
+        self.hellos += 1
+
+
+def test_bridge_hello_needs_its_header_but_no_pairing_code():
+    handlers = _HelloHandlers()
+    server = upwork_bridge.start(handlers, port=0)
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        assert _raw(base + "/hello")[0] == 400
+        status, _ = _raw(base + "/hello", headers={"X-FT-Hello": "1"})
+        assert status == 200 and handlers.hellos == 1
+        # A web page can't send the header without a preflight, and the
+        # preflight is refused for non-extension origins.
+        status, headers = _raw(base + "/hello", "OPTIONS", {"Origin": "https://evil.example"})
+        assert status == 403 and "Access-Control-Allow-Origin" not in headers
+        status, headers = _raw(base + "/hello", "OPTIONS",
+                               {"Origin": "moz-extension://00000000-1111-2222-3333-444444444444"})
+        assert status == 204 and "X-FT-Hello" in headers["Access-Control-Allow-Headers"]
+    finally:
+        server.shutdown()
+        server.server_close()

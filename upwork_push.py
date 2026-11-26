@@ -386,6 +386,40 @@ def queue_payload(result, contract, project_name):
 # --- status and reminders --------------------------------------------------
 
 
+def pairing_state(state):
+    """"paired", "unpaired" or "none".
+
+    "paired" means the extension last reached the app with the right pairing
+    code. An extension without the code (fresh install, reinstalled, storage
+    cleared) says hello without one; if that is newer than the last paired
+    contact, the extension has lost its pairing, so the app must not keep
+    saying "connected".
+    """
+    seen = state.get("extension_seen") or ""
+    unpaired = state.get("extension_unpaired_seen") or ""
+    if unpaired and unpaired > seen:
+        return "unpaired"
+    return "paired" if seen else "none"
+
+
+def extension_status_text(state):
+    """One line for Settings and the setup steps."""
+    pairing = pairing_state(state)
+    if pairing == "unpaired":
+        when = _stamp(state.get("extension_unpaired_seen"))
+        return f"Extension installed but not paired (seen {when}): paste the pairing code into it"
+    if pairing == "paired":
+        return f"Extension paired \u00b7 last seen {_stamp(state.get('extension_seen'))}"
+    return "Extension not set up yet"
+
+
+def _stamp(iso):
+    try:
+        return datetime.fromisoformat(iso).strftime("%a %b %-d, %-I:%M %p")
+    except (TypeError, ValueError):
+        return str(iso or "")
+
+
 def _hours(minutes):
     """130 -> "2h 10m", 60 -> "1h", 20 -> "20m"."""
     h, m = divmod(int(minutes), 60)
@@ -439,8 +473,11 @@ def status_view(prefs, state, results, now=None):
                 break
         projects[name] = {"line": project_line(result), "pending_minutes": waiting,
                           "warn": bool(waiting or result["issues"])}
-    connected = bool(state.get("extension_seen"))
-    if not connected:
+    pairing = pairing_state(state)
+    connected = pairing == "paired"
+    if pairing == "unpaired":
+        meta = "Pair the extension"
+    elif not connected:
         meta = "Set up"
     elif total_pending:
         meta = f"{_hours(total_pending)} to add · locks {first_lock}"
@@ -451,6 +488,8 @@ def status_view(prefs, state, results, now=None):
     return {
         "configured": bool(contracts),
         "connected": connected,
+        "pairing": pairing,
+        "extension_text": extension_status_text(state),
         "extension_seen": state.get("extension_seen") or "",
         "token": state.get("bridge_token") or "",
         "browser": browser_name(prefs),

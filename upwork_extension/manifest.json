@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Freelance Tracker – Upwork fill",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Fills Upwork's Add manual time form from your Freelance Tracker hours. You check it and click Save yourself.",
   "browser_specific_settings": {
     "gecko": {

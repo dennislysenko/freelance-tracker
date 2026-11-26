@@ -599,8 +599,16 @@ def test_upwork_setup_walkthrough_and_project_sub_line():
     assert "Waiting for the extension" in html
     assert 'data-upwork-connected="1"' not in html
 
-    controller.set_upwork_status(_upwork_status(connected=True))
-    assert "Extension connected" in _gusto_html(controller)
+    controller.set_upwork_status({**_upwork_status(connected=True), "pairing": "paired",
+                                  "extension_text": "Extension paired · last seen Fri Mar 6, 10:00 AM"})
+    assert "Extension paired · last seen Fri Mar 6, 10:00 AM" in _gusto_html(controller)
+
+    # A reinstalled extension without its code is not "connected".
+    controller.set_upwork_status({**_upwork_status(connected=False), "pairing": "unpaired",
+                                  "extension_text": "Extension installed but not paired"})
+    html = _gusto_html(controller)
+    assert 'upwork-setup-state warn">Extension installed but not paired' in html
+    assert 'data-upwork-connected="1"' not in html
 
     # Firefox-based browsers (Zen) load it as a temporary add-on instead.
     controller.set_upwork_status({**_upwork_status(connected=False), "browser": "Zen", "gecko": True})

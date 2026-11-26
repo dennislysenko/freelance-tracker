@@ -12,9 +12,16 @@ async function pairingCode() {
   return (pairingCode || "").trim();
 }
 
+// Without a (valid) pairing code, tell the app an extension is here, so it
+// shows "not paired" instead of an old "connected". Carries no data.
+function hello() {
+  fetch(BRIDGE + "/hello", { headers: { "X-FT-Hello": "1" }, cache: "no-store" }).catch(() => {});
+}
+
 async function call(path, { method = "GET", body } = {}) {
   const code = await pairingCode();
   if (!code) {
+    hello();
     return { ok: false, reason: "unpaired", error: "Not paired with Freelance Tracker yet" };
   }
   const headers = { "X-FT-Token": code };
@@ -45,6 +52,7 @@ async function call(path, { method = "GET", body } = {}) {
     data = {};
   }
   if (res.status === 401) {
+    hello();
     return { ok: false, reason: "unauthorized", error: "Wrong pairing code" };
   }
   if (!res.ok) {
@@ -57,6 +65,13 @@ async function handle(msg) {
   switch (msg && msg.type) {
     case "ping":
       return call("/ping");
+    case "pair": {
+      // From the panel on the work diary: save the code, then check it.
+      const code = String(msg.code || "").trim();
+      if (!code) return { ok: false, reason: "unpaired", error: "Paste the pairing code first." };
+      await chrome.storage.local.set({ pairingCode: code });
+      return call("/ping");
+    }
     case "queue":
       return call(`/upwork/queue?contract=${encodeURIComponent(msg.contract || "")}`);
     case "added":
